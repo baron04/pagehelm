@@ -86,7 +86,8 @@ class RemoteSessionChannel(ChannelIngress, ChannelPanel, ChannelServer, ChannelS
                  limits: RemoteSessionLimits | None = None,
                  durable_store: SQLiteSessionStore | None = None,
                  principal_validator: Callable[[PrincipalContext], None] | None = None,
-                 read_only_mode: bool = False):
+                 read_only_mode: bool = False,
+                 reconciler: Callable[..., dict] | None = None):
         self.session_id = session_id
         self.allowed_origins = frozenset(allowed_origins)
         self.principal = principal
@@ -95,7 +96,10 @@ class RemoteSessionChannel(ChannelIngress, ChannelPanel, ChannelServer, ChannelS
             raise TypeError("principal_validator must be callable or None")
         if principal_validator is not None and principal is None:
             raise ValueError("principal_validator requires a principal-bound session")
+        if reconciler is not None and not callable(reconciler):
+            raise TypeError("reconciler must be callable or None")
         self._principal_validator = principal_validator
+        self._reconciler = reconciler
         self.limits = limits or RemoteSessionLimits()
         if not isinstance(self.limits, RemoteSessionLimits):
             raise TypeError("limits must be RemoteSessionLimits or None")
@@ -141,10 +145,15 @@ class RemoteSessionChannel(ChannelIngress, ChannelPanel, ChannelServer, ChannelS
         self._messages: deque[dict] = deque()
         self.turn_events = None
         self._message_digests: dict[str, str] = {}
+        self._pre_cancelled_messages: dict[str, int] = {}
+        self._pre_cancel_max_entries = 64
+        self._pre_cancel_ttl_ms = 120_000
         self._cancelled_message_ids: set[str] = set()
         self._completed_message_ids: set[str] = set()
         self._cancelled_action_ids: set[str] = set()
         self._active_message_id = ""
+        self._turn_proposal_digests: dict[str, str] = {}
+        self._reconciliations: dict[str, dict] = {}
         self._approvals: dict[str, ApprovalRequest] = {}
         self._approval_decisions: dict[str, ApprovalDecision] = {}
         self._pending_approval_id = ""

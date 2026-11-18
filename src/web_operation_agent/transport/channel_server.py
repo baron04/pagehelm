@@ -1,15 +1,20 @@
 """Server-to-browser publication and synchronous rendezvous operations."""
 from __future__ import annotations
 
+import logging
+import sqlite3
 import time
 
 from ..schemas import (ActionEnvelope, ActionResultEnvelope, ApprovalDecision,
                        ApprovalRequest, ClientHello, ObservationEnvelope, TaskEvent)
 from ..schemas.browser import SCOPED_FORM_HANDOFF_CAPABILITY
-from .channel_state import TURN_PAGE_EVENTS
+from ..state.store import DurableStateError
+from .channel_state import TURN_PAGE_EVENTS, _is_transient_sqlite_error
 from .panel_view import action_target
 from .protocol import (RemoteProtocolError, _copy_json, _copy_wire, _event_sequence,
                        _safe_payload)
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ChannelServer:
@@ -85,7 +90,13 @@ class ChannelServer:
         with self._condition:
             self._ensure_open()
             _safe_payload(payload)
-            return self._append_event(kind, _copy_json(payload), turn_id=turn_id)
+            copied = _copy_json(payload)
+            if kind == "progress" and copied.get("state") == "indeterminate" and turn_id:
+                proposal_digest = copied.get("proposal_digest") or self._turn_proposal_digests.get(turn_id, "")
+                if isinstance(proposal_digest, str) and proposal_digest:
+                    copied["proposal_digest"] = proposal_digest
+                    self._turn_proposal_digests[turn_id] = proposal_digest
+            return self._append_event(kind, copied, turn_id=turn_id)
 
     def request_approval(self, request: ApprovalRequest) -> TaskEvent:
         """Publish one user-visible request while retaining no ControlPlan on the wire."""
@@ -235,8 +246,16 @@ class ChannelServer:
                     self._ensure_open()
                     message = _copy_json(self._messages.popleft())
                     if self._durable_store is not None:
-                        self._durable_store.transition(
-                            self._owner, message["message_id"], "running")
+                        try:
+                            self._durable_store.transition(
+                                self._owner, message["message_id"], "running")
+                        except (DurableStateError, sqlite3.Error, OSError) as exc:
+                            if _is_transient_sqlite_error(exc):
+                                _LOGGER.warning(
+                                    "transient durable store error starting message %s (%s)",
+                                    message["message_id"], type(exc).__name__)
+                            else:
+                                raise
                     self._active_message_id = message["message_id"]
                     # The turn runs on the page that sent it.
                     self._activate_lease(

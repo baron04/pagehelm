@@ -113,6 +113,7 @@ class BusinessWriteService:
         except BusinessMutationIndeterminate as exc:
             self.approvals.mutation_indeterminate()
             ledger.append("business_mutation_indeterminate", step=step, tool=name,
+                          proposal_digest=(proposal.content_digest if proposal is not None else ""),
                           reconciliation=exc.reconciliation, side_effect_possible=True)
             return OperationOutcome("indeterminate", proposal, reason="indeterminate_write",
                                     error=exc, asked=asked)

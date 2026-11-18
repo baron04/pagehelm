@@ -6,6 +6,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from web_operation_agent.business.runtime import BusinessToolResult
@@ -113,6 +114,19 @@ class ConversationStateTests(unittest.TestCase):
         self.assertNotIn(
             "prior_business_facts", state.model_context()["prior_turns"][0])
 
+    def test_page_operation_consent_stays_out_of_model_context_and_resets_on_clear(self):
+        state = ConversationState()
+        self.assertFalse(state.page_operation_granted)
+        state.grant_page_operation()
+        self.assertTrue(state.page_operation_granted)
+        self.assertIsNone(state.model_context())
+        state.record(
+            message_id="m1", user_text="Open orders", assistant_text="Opened.",
+            status="finished")
+        self.assertNotIn("page_operation_granted", state.model_context())
+        self.assertEqual(state.clear(), 1)
+        self.assertFalse(state.page_operation_granted)
+
 
 class DurableConversationStateTests(unittest.TestCase):
     def test_restart_restores_bounded_references_without_execution_authority(self):
@@ -156,10 +170,11 @@ class DurableConversationStateTests(unittest.TestCase):
             state = SQLiteConversationState(path, "session-one")
             state.record(message_id="m1", user_text="one", assistant_text="done",
                          status="finished")
-            with sqlite3.connect(path) as database:
+            with closing(sqlite3.connect(path)) as database:
                 database.execute(
                     "UPDATE conversation_contexts SET payload=? WHERE conversation_id=?",
                     ('{"schema_version":1,"prior_turns":"wrong"}', "session-one"))
+                database.commit()
             with self.assertRaisesRegex(ValueError, "turns"):
                 SQLiteConversationState(path, "session-one")
 
@@ -172,13 +187,14 @@ class DurableConversationStateTests(unittest.TestCase):
             current = SQLiteConversationState(path, "current-session")
             current.record(message_id="m2", user_text="new", assistant_text="done",
                            status="finished")
-            with sqlite3.connect(path) as database:
+            with closing(sqlite3.connect(path)) as database:
                 database.execute(
                     "UPDATE conversation_contexts SET updated=1000 "
                     "WHERE conversation_id='old-session'")
                 database.execute(
                     "UPDATE conversation_contexts SET updated=200000000 "
                     "WHERE conversation_id='current-session'")
+                database.commit()
 
             self.assertEqual(prune_sqlite_conversations(
                 path, older_than_ms=100_000_000, now_ms=200_000_000), 1)
@@ -186,6 +202,40 @@ class DurableConversationStateTests(unittest.TestCase):
                 path, "old-session").model_context())
             self.assertEqual(SQLiteConversationState(
                 path, "current-session").turn_count, 1)
+
+    def test_sqlite_persists_page_operation_granted_and_resets_on_clear(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "conversation.sqlite3"
+            state = SQLiteConversationState(path, "op-session")
+            self.assertFalse(state.page_operation_granted)
+            state.grant_page_operation()
+            self.assertTrue(state.page_operation_granted)
+
+            reopened = SQLiteConversationState(path, "op-session")
+            self.assertTrue(reopened.page_operation_granted)
+            self.assertIsNone(reopened.model_context())
+
+            reopened.clear()
+            self.assertFalse(reopened.page_operation_granted)
+            self.assertFalse(
+                SQLiteConversationState(path, "op-session").page_operation_granted)
+
+    def test_sqlite_upgrades_legacy_table_without_page_operation_column(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "legacy.sqlite3"
+            with closing(sqlite3.connect(path)) as db:
+                db.execute(
+                    "CREATE TABLE conversation_contexts ("
+                    "conversation_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated INTEGER NOT NULL)")
+                db.execute(
+                    "INSERT INTO conversation_contexts VALUES (?, ?, ?)",
+                    ("legacy-session", '{"schema_version":1,"prior_turns":[]}', 1000))
+                db.commit()
+            state = SQLiteConversationState(path, "legacy-session")
+            self.assertFalse(state.page_operation_granted)
+            state.page_operation_granted = True
+            self.assertTrue(
+                SQLiteConversationState(path, "legacy-session").page_operation_granted)
 
 
 if __name__ == "__main__":

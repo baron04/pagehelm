@@ -13,18 +13,67 @@ from .protocol import (RemoteProtocolError, RemoteSessionClosed, _MAX_EVENT_BYTE
 #: Events only the page a turn runs on is handed: its commands, and the card asking to work it.
 TURN_PAGE_EVENTS = frozenset({"action", "approval_required"})
 
+_TRANSIENT_SQLITE_PRIMARY_CODES = frozenset({
+    sqlite3.SQLITE_BUSY,
+    sqlite3.SQLITE_LOCKED,
+    sqlite3.SQLITE_IOERR,
+    sqlite3.SQLITE_PROTOCOL,
+    sqlite3.SQLITE_INTERRUPT,
+})
+
+
+def _is_transient_sqlite_error(exc: BaseException) -> bool:
+    """Return whether a storage failure reflects transient contention/I/O vs corruption."""
+    if isinstance(exc, DurableStateError):
+        return False
+    if isinstance(exc, sqlite3.OperationalError):
+        code = getattr(exc, "sqlite_errorcode", None)
+        if code is None:
+            return True
+        return (code & 0xFF) in _TRANSIENT_SQLITE_PRIMARY_CODES
+    if isinstance(exc, sqlite3.DatabaseError):
+        code = getattr(exc, "sqlite_errorcode", None)
+        if code is None:
+            return False
+        return (code & 0xFF) in _TRANSIENT_SQLITE_PRIMARY_CODES
+    return isinstance(exc, (BlockingIOError, InterruptedError, TimeoutError))
+
 
 class ChannelState:
     def _renew_owner(self):
         while not self._heartbeat_stop.wait(self._durable_store.lease_ms / 3000):
             try:
                 self.validate_live()
-            except (RemoteSessionClosed, DurableStateError, OSError, sqlite3.Error):
+            except RemoteProtocolError as exc:
+                if exc.status >= 500:
+                    continue
                 with self._condition:
                     self._closed = True
                     self._close_reason = "owner_fenced"
                     self._condition.notify_all()
                 return
+            except (RemoteSessionClosed, DurableStateError, OSError, sqlite3.Error) as exc:
+                if _is_transient_sqlite_error(exc):
+                    continue
+                with self._condition:
+                    self._closed = True
+                    self._close_reason = "owner_fenced"
+                    self._condition.notify_all()
+                return
+
+    def set_reconciler(self, reconciler) -> None:
+        if reconciler is not None and not callable(reconciler):
+            raise TypeError("reconciler must be callable or None")
+        with self._condition:
+            self._reconciler = reconciler
+
+    def record_turn_proposal(self, turn_id: str, proposal_digest: str) -> None:
+        if not isinstance(turn_id, str) or not turn_id:
+            return
+        if not isinstance(proposal_digest, str) or not proposal_digest:
+            return
+        with self._condition:
+            self._turn_proposal_digests[turn_id] = proposal_digest
 
     @property
     def latest_event_id(self) -> str:
@@ -121,6 +170,12 @@ class ChannelState:
             try:
                 self._durable_store.renew(self._owner)
             except (DurableStateError, sqlite3.Error, OSError) as exc:
+                if _is_transient_sqlite_error(exc):
+                    raise RemoteProtocolError(
+                        "durable session store is temporarily unavailable",
+                        code="gateway_error",
+                        status=503,
+                    ) from exc
                 self._closed = True
                 self._heartbeat_stop.set()
                 raise RemoteSessionClosed("durable session owner was fenced") from exc

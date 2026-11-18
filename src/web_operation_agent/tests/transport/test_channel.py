@@ -765,14 +765,26 @@ class ChannelTests(unittest.TestCase):
         self.assertEqual(
             self.channel.wait_for_result(action.action_id, timeout_s=0), expected)
 
-    def test_cancellation_requires_current_lease_known_message_and_same_session(self):
+    def test_cancellation_requires_current_lease_valid_ids_and_same_session(self):
         message = {"message_id": "message-security", "text": "Open next",
                    "page_url": ORIGIN + "/start"}
         self.channel.accept_message(message, lease_id=self.lease)
-        with self.assertRaisesRegex(RemoteProtocolError, "unknown message"):
+        pre = self.channel.accept_cancellation(
+            CancellationRequest(1, self.grant.session_id, "missing"),
+            lease_id=self.lease)
+        self.assertEqual(pre, {"accepted": True, "duplicate": False, "pre_cancelled": True})
+        self.assertEqual(
             self.channel.accept_cancellation(
                 CancellationRequest(1, self.grant.session_id, "missing"),
-                lease_id=self.lease)
+                lease_id=self.lease),
+            {"accepted": True, "duplicate": True, "pre_cancelled": True},
+        )
+        for bad_id in ("bad id", "x" * 129):
+            with self.assertRaises(RemoteProtocolError) as invalid:
+                self.channel.accept_cancellation(
+                    CancellationRequest(1, self.grant.session_id, bad_id),
+                    lease_id=self.lease)
+            self.assertEqual(invalid.exception.status, 400)
         with self.assertRaisesRegex(RemoteProtocolError, "another session"):
             self.channel.accept_cancellation(
                 CancellationRequest(1, "other-session", "message-security"),
@@ -787,6 +799,123 @@ class ChannelTests(unittest.TestCase):
         self.assertTrue(self.channel.accept_cancellation(
             CancellationRequest(1, self.grant.session_id, "message-security"),
             lease_id=new_lease)["accepted"])
+
+    def test_pre_cancellation_handles_early_stop_race_and_duplicate_message(self):
+        pre = self.channel.accept_cancellation(
+            CancellationRequest(1, self.grant.session_id, "raced-msg"),
+            lease_id=self.lease)
+        self.assertEqual(pre, {"accepted": True, "duplicate": False, "pre_cancelled": True})
+        msg = {"message_id": "raced-msg", "text": "Late arrival", "page_url": ORIGIN + "/start"}
+        reply = self.channel.accept_message(msg, lease_id=self.lease)
+        self.assertEqual(reply, {"accepted": True, "duplicate": False, "cancelled": True})
+        self.assertTrue(self.channel.message_cancelled("raced-msg"))
+        with self.assertRaises(TimeoutError):
+            self.channel.wait_for_message(timeout_s=0.05)
+        states = [event.payload.get("state") for event in
+                  self.channel.events_after("", lease_id=self.lease)
+                  if event.kind == "progress" and event.turn_id == "raced-msg"]
+        self.assertEqual(states, ["cancelled"])
+        self.assertEqual(
+            self.channel.accept_message(msg, lease_id=self.lease),
+            {"accepted": True, "duplicate": True},
+        )
+
+    def test_pre_cancellation_evicts_oldest_when_at_capacity_and_expires_by_ttl(self):
+        with mock.patch("web_operation_agent.transport.channel._now_ms", return_value=1_000):
+            for idx in range(65):
+                reply = self.channel.accept_cancellation(
+                    CancellationRequest(1, self.grant.session_id, f"cap-{idx}"),
+                    lease_id=self.lease)
+                self.assertTrue(reply["pre_cancelled"])
+            # cap-0 was evicted; cap-64 remains pre-cancelled.
+            evicted = self.channel.accept_message(
+                {"message_id": "cap-0", "text": "Run evicted", "page_url": ORIGIN + "/start"},
+                lease_id=self.lease)
+            self.assertEqual(evicted, {"accepted": True, "duplicate": False})
+            self.assertEqual(self.channel.wait_for_message(timeout_s=0)["message_id"], "cap-0")
+            self.channel.complete_message("cap-0")
+            still_cancelled = self.channel.accept_message(
+                {"message_id": "cap-64", "text": "Cancelled", "page_url": ORIGIN + "/start"},
+                lease_id=self.lease)
+            self.assertEqual(still_cancelled, {"accepted": True, "duplicate": False, "cancelled": True})
+
+            self.channel.accept_cancellation(
+                CancellationRequest(1, self.grant.session_id, "ttl-msg"),
+                lease_id=self.lease)
+        # After 120s TTL expires, late message is queued normally.
+        with mock.patch("web_operation_agent.transport.channel._now_ms", return_value=121_000):
+            after_ttl = self.channel.accept_message(
+                {"message_id": "ttl-msg", "text": "After TTL", "page_url": ORIGIN + "/start"},
+                lease_id=self.lease)
+            self.assertEqual(after_ttl, {"accepted": True, "duplicate": False})
+            self.assertEqual(self.channel.wait_for_message(timeout_s=0)["message_id"], "ttl-msg")
+
+    def test_transient_sqlite_errors_do_not_close_healthy_durable_channel(self):
+        import sqlite3
+        import tempfile
+        from pathlib import Path
+        from web_operation_agent.state import SQLiteSessionStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteSessionStore(Path(tmp) / "sessions.sqlite3")
+            registry = RemoteSessionRegistry(durable_store=store)
+            actor = principal(int(time.time() * 1000))
+            grant, channel = registry.create(
+                allowed_origins=[ORIGIN], session_id="sqlite-transient", principal=actor)
+            try:
+                lease = channel.accept_hello(hello(
+                    grant.session_id, application_id="sample",
+                    principal_digest=actor.binding_digest))["lease_id"]
+                with mock.patch.object(
+                        store, "message",
+                        side_effect=sqlite3.OperationalError("database is locked")):
+                    with self.assertRaises(RemoteProtocolError) as caught:
+                        channel.accept_message(
+                            {"message_id": "m-retry", "text": "Retry me",
+                             "page_url": ORIGIN + "/start"},
+                            lease_id=lease)
+                    self.assertEqual(caught.exception.status, 503)
+                    self.assertEqual(caught.exception.code, "gateway_error")
+                channel.validate_live()
+
+                # Succeeds once contention clears.
+                self.assertEqual(
+                    channel.accept_message(
+                        {"message_id": "m-retry", "text": "Retry me",
+                         "page_url": ORIGIN + "/start"},
+                        lease_id=lease),
+                    {"accepted": True, "duplicate": False},
+                )
+                with mock.patch.object(
+                        store, "transition",
+                        side_effect=sqlite3.OperationalError("database is locked")):
+                    channel.accept_cancellation(
+                        CancellationRequest(1, grant.session_id, "m-retry"),
+                        lease_id=lease)
+                    channel.complete_message("m-retry")
+                channel.validate_live()
+
+                # Renew contention returns recoverable 503 without closing session.
+                with mock.patch.object(
+                        store, "renew",
+                        side_effect=sqlite3.OperationalError("database is locked")):
+                    with self.assertRaises(RemoteProtocolError) as renew_err:
+                        channel.accept_message(
+                            {"message_id": "m-next", "text": "Next",
+                             "page_url": ORIGIN + "/start"},
+                            lease_id=lease)
+                    self.assertEqual(renew_err.exception.status, 503)
+                channel.validate_live()
+
+                # Non-transient DatabaseError (corruption) still fails closed.
+                with mock.patch.object(
+                        store, "transition",
+                        side_effect=sqlite3.DatabaseError("database disk image is malformed")):
+                    channel.complete_message("m-next")
+                with self.assertRaises(RemoteSessionClosed):
+                    channel.validate_live()
+            finally:
+                channel.close()
 
     def test_stale_duplicate_and_second_in_flight_fail_closed(self):
         self.assertTrue(self.channel.accept_observation(

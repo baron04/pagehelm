@@ -82,3 +82,122 @@ class MutationOpsTests(unittest.TestCase):
                 reconcile(journal, 'a' * 64, application=adapter,
                           principal=replace(p, actor_id='other-actor'))
             self.assertEqual(adapter.ports.reconciliation.reconcile.call_count, 1)
+
+    def test_online_reconcile_handles_completed_failed_unknown_and_active_lease(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        import time
+        from web_operation_agent.business.operations import online_reconcile
+        from web_operation_agent.composition.ports import MutationReconciliation
+        from web_operation_agent.tests.support.identity import principal
+
+        now = int(time.time() * 1000)
+        p = principal(issued_at=now, expires_at=now + 60_000)
+        identity = {k: v for k, v in p.audit_projection().items()
+                    if k in {"tenant_digest", "workspace_digest", "actor_digest"}}
+
+        def make_adapter(outcome: str, requires_human: bool, reason: str):
+            adapter = SimpleNamespace(
+                descriptor=SimpleNamespace(application_id="sample"),
+                ports=SimpleNamespace(identity=Mock(), reconciliation=Mock()),
+            )
+            adapter.ports.reconciliation.reconcile.return_value = MutationReconciliation(
+                outcome, requires_human, reason)
+            return adapter
+
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = SQLiteMutationJournal(Path(tmp) / "journal.db")
+            for idx, (outcome, req_human, reason) in enumerate((
+                ("completed", False, "record exists"),
+                ("failed", False, "record absent"),
+                ("unknown", True, "ambiguous"),
+            )):
+                digest = f"{idx}" * 64
+                journal.register(
+                    digest, "b" * 64, expires_at=5_000, now_ms=1_000,
+                    reconciliation={"application_id": "sample", "tool": "create_company",
+                                    "args": {"name": f"Co-{idx}"}, "identity": identity})
+                journal.claim(digest, "b" * 64, now_ms=1_001, dispatch_lease_expires_at=2_000)
+                journal.finish(digest, "indeterminate", now_ms=1_002)
+                result = online_reconcile(
+                    journal, digest, application=make_adapter(outcome, req_human, reason),
+                    principal=p, now_ms=1_003)
+                self.assertEqual(result["outcome"], outcome)
+                self.assertEqual(result["dispatches"], 0)
+                if outcome in {"completed", "failed"} and not req_human:
+                    self.assertTrue(result["settled"])
+                    self.assertEqual(journal.get(digest).state, outcome)
+                else:
+                    self.assertFalse(result["settled"])
+                    self.assertEqual(journal.get(digest).state, "indeterminate")
+
+            # Actively dispatching with unexpired lease is never overridden.
+            live = "9" * 64
+            journal.register(
+                live, "b" * 64, expires_at=5_000, now_ms=1_000,
+                reconciliation={"application_id": "sample", "tool": "create_company",
+                                "args": {"name": "Live"}, "identity": identity})
+            journal.claim(live, "b" * 64, now_ms=1_001, dispatch_lease_expires_at=5_000)
+            active_res = online_reconcile(
+                journal, live, application=make_adapter("completed", False, "exists"),
+                principal=p, now_ms=2_000)
+            self.assertFalse(active_res["settled"])
+            self.assertEqual(journal.get(live).state, "dispatching")
+
+            # Once dispatch lease expires, online CAS succeeds.
+            expired_res = online_reconcile(
+                journal, live, application=make_adapter("completed", False, "exists"),
+                principal=p, now_ms=5_000)
+            self.assertTrue(expired_res["settled"])
+            self.assertEqual(journal.get(live).state, "completed")
+
+    def test_lease_expired_cas_allows_cli_and_concurrent_race_wins_once(self):
+        import threading
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "journal.db"
+            journal = SQLiteMutationJournal(path)
+            journal.register("a" * 64, "b" * 64, expires_at=10_000, now_ms=1_000)
+            journal.claim("a" * 64, "b" * 64, now_ms=1_001, dispatch_lease_expires_at=2_000)
+            # Before lease expiry, writer_stopped=False is refused.
+            with self.assertRaises(MutationJournalError):
+                journal.resolve(
+                    "a" * 64, expected_updated_at=1_001, outcome="completed",
+                    operator_digest="d" * 64, evidence_digest="e" * 64,
+                    writer_stopped=False, now_ms=1_500, dry_run=False)
+
+            barrier = threading.Barrier(12)
+            outcomes = []
+            lock = threading.Lock()
+
+            def race():
+                barrier.wait()
+                try:
+                    journal.resolve(
+                        "a" * 64, expected_updated_at=1_001, outcome="completed",
+                        operator_digest="d" * 64, evidence_digest="e" * 64,
+                        writer_stopped=False, now_ms=2_500, dry_run=False)
+                    tag = "resolved"
+                except MutationJournalError:
+                    tag = "refused"
+                with lock:
+                    outcomes.append(tag)
+
+            workers = [threading.Thread(target=race) for _ in range(12)]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join(5)
+            self.assertEqual(outcomes.count("resolved"), 1)
+            self.assertEqual(outcomes.count("refused"), 11)
+            self.assertEqual(journal.get("a" * 64).state, "completed")
+
+            # CLI --lease-expired --apply works on an expired lease row.
+            journal.register("f" * 64, "b" * 64, expires_at=10_000, now_ms=1_000)
+            journal.claim("f" * 64, "b" * 64, now_ms=1_001, dispatch_lease_expires_at=2_000)
+            evidence = Path(tmp) / "evidence.txt"
+            evidence.write_text("Readback verified")
+            main(["--journal", str(path), "resolve", "f" * 64,
+                  "--expected-updated-at", "1001", "--outcome", "failed",
+                  "--operator", "ops", "--evidence", str(evidence),
+                  "--lease-expired", "--apply"])
+            self.assertEqual(journal.get("f" * 64).state, "failed")

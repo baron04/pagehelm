@@ -158,6 +158,10 @@ class ApprovalGate:
             decided_at=decided_at,
             operation_context_digest=(context.binding_digest if context else ""),
         )
+        if kind == "write" and grant.decision == "approved" and request.turn_id:
+            record = getattr(self.channel, "record_turn_proposal", None)
+            if callable(record):
+                record(request.turn_id, plan.content_digest)
         return grant
 
     def approve_plan(self, plan: ControlPlan, *, effect: str, targets: tuple[str, ...],

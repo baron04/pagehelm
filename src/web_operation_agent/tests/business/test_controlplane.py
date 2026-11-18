@@ -4,7 +4,8 @@ import multiprocessing
 import os
 import threading
 import unittest
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
+from web_operation_agent.transport.gateway import _QuietThreadingHTTPServer
 from pathlib import Path
 import socket
 import tempfile
@@ -67,8 +68,23 @@ class _FakeGateway(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            return
+
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+
+    def finish(self):
+        try:
+            super().finish()
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
     def do_POST(self):
         n = int(self.headers.get("content-length") or 0)
@@ -108,7 +124,7 @@ def _free_port() -> int:
 class Installation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.srv = ThreadingHTTPServer(("127.0.0.1", _free_port()), _FakeGateway)
+        cls.srv = _QuietThreadingHTTPServer(("127.0.0.1", _free_port()), _FakeGateway)
         threading.Thread(target=cls.srv.serve_forever,
                          kwargs={"poll_interval": 0.01}, daemon=True).start()
         cls.tmp = tempfile.TemporaryDirectory()
@@ -119,6 +135,7 @@ class Installation(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.srv.shutdown()
+        cls.srv.server_close()
         cls.tmp.cleanup()
 
     def _client(self):

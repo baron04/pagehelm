@@ -7,9 +7,11 @@ over authenticated POST requests.
 """
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import math
+import os
 import re
 import threading
 from collections.abc import Callable, Mapping
@@ -24,12 +26,12 @@ from .channel import SessionGrant
 from .protocol import RemoteProtocolError
 from .registry import RemoteSessionRegistry
 from ..schemas import (ActionResultEnvelope, ApprovalDecision, CancellationRequest, ClientHello,
-                      ObservationEnvelope, SchemaError, canonical_json)
+                      ObservationEnvelope, ReconciliationRequest, SchemaError, canonical_json)
 
 MAX_BODY_BYTES = 1024 * 1024
 SESSION_PATH = re.compile(
     r"^/v1/sessions/([A-Za-z0-9_-]{1,128})/"
-    r"(hello|observations|claims|results|messages|approvals|cancellations|events|timeline|conversation)$"
+    r"(hello|observations|claims|results|messages|approvals|cancellations|reconciliations|events|timeline|conversation)$"
 )
 WEB_RUNTIME = Path(__file__).resolve().parent.parent / "web_runtime"
 #: The one script a host page includes to have the assistant: the boot supervisor, the
@@ -41,6 +43,63 @@ RUNTIME_MODULES = {
     "/v1/runtime/assistant.js": RUNTIME_PATH,
 }
 _SENSITIVE_QUERY_KEY = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{1,63}\Z")
+_STATIC_CACHE_LOCK = threading.Lock()
+_STATIC_CACHE: dict[Path, tuple[tuple[int, int, int], bytes, bytes, str]] = {}
+_STATIC_CACHE_MAX_ENTRIES = 16
+
+
+def _load_static_asset(source: Path) -> tuple[bytes, bytes, str]:
+    """Load, hash, and precompress a static asset, invalidating on stat changes."""
+    st = source.stat()
+    stat_key = (st.st_mtime_ns, st.st_size, getattr(st, "st_ino", 0))
+    with _STATIC_CACHE_LOCK:
+        cached = _STATIC_CACHE.get(source)
+        if cached is not None and cached[0] == stat_key:
+            return cached[1], cached[2], cached[3]
+    with source.open("rb") as fh:
+        actual_stat = os.fstat(fh.fileno())
+        body = fh.read()
+    actual_key = (actual_stat.st_mtime_ns, actual_stat.st_size, getattr(actual_stat, "st_ino", 0))
+    etag = f'"{hashlib.sha256(body).hexdigest()}"'
+    gz_body = gzip.compress(body, compresslevel=6, mtime=0)
+    with _STATIC_CACHE_LOCK:
+        if len(_STATIC_CACHE) >= _STATIC_CACHE_MAX_ENTRIES and source not in _STATIC_CACHE:
+            _STATIC_CACHE.pop(next(iter(_STATIC_CACHE)))
+        _STATIC_CACHE[source] = (actual_key, body, gz_body, etag)
+    return body, gz_body, etag
+
+
+def _accepts_gzip(header: str) -> bool:
+    if not header:
+        return False
+    for part in header.split(","):
+        segments = [seg.strip() for seg in part.split(";")]
+        if segments[0].lower() != "gzip":
+            continue
+        q_zero = False
+        for param in segments[1:]:
+            if param.lower().startswith("q="):
+                try:
+                    q_zero = float(param[2:].strip()) == 0.0
+                except ValueError:
+                    q_zero = False
+        if not q_zero:
+            return True
+    return False
+
+
+def _etag_matches(header: str, etag: str) -> bool:
+    if not header:
+        return False
+    for raw_token in header.split(","):
+        token = raw_token.strip()
+        if not token:
+            continue
+        if token == "*" or token == etag:
+            return True
+        if token.startswith("W/") and token[2:].strip() == etag:
+            return True
+    return False
 
 
 class _QuietThreadingHTTPServer(ThreadingHTTPServer):
@@ -162,6 +221,18 @@ def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float,
             # The product ledger records semantic events explicitly; default access logs do not.
             return
 
+        def handle_one_request(self) -> None:
+            try:
+                super().handle_one_request()
+            except (BrokenPipeError, ConnectionResetError):
+                self.close_connection = True
+
+        def finish(self) -> None:
+            try:
+                super().finish()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+
         def _route(self):
             return SESSION_PATH.fullmatch(urlsplit(self.path).path)
 
@@ -181,8 +252,8 @@ def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float,
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self._cors(session_id)
-            self.end_headers()
             try:
+                self.end_headers()
                 self.wfile.write(body)
             except (BrokenPipeError, ConnectionResetError):
                 # A page reload replaces the lease and closes its pending request. The
@@ -192,21 +263,41 @@ def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float,
 
         def _static(self, source: Path, media_type: str, *, cache: str) -> None:
             try:
-                body = source.read_bytes()
+                body, gz_body, etag = _load_static_asset(source)
             except OSError as exc:
+                with _STATIC_CACHE_LOCK:
+                    _STATIC_CACHE.pop(source, None)
                 self._error(exc)
                 return
+            if _etag_matches(self.headers.get("If-None-Match", ""), etag):
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", cache)
+                self.send_header("Vary", "Accept-Encoding")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                try:
+                    self.end_headers()
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+                return
+            use_gzip = _accepts_gzip(self.headers.get("Accept-Encoding", ""))
+            payload = gz_body if use_gzip else body
             self.send_response(200)
             self.send_header("Content-Type", media_type)
-            self.send_header("Content-Length", str(len(body)))
+            self.send_header("ETag", etag)
+            self.send_header("Vary", "Accept-Encoding")
+            if use_gzip:
+                self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(payload)))
             self.send_header("Cache-Control", cache)
             self.send_header("X-Content-Type-Options", "nosniff")
             # These are public, non-secret assets that a first-party page loads as modules,
             # so they need CORS.  Nothing session-bound is ever served from this path.
             self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
             try:
-                self.wfile.write(body)
+                self.end_headers()
+                self.wfile.write(payload)
             except (BrokenPipeError, ConnectionResetError):
                 return
 
@@ -272,7 +363,10 @@ def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float,
                              "Authorization, Content-Type, Last-Event-ID, X-WOA-Lease")
             self.send_header("Access-Control-Max-Age", "600")
             self.send_header("Content-Length", "0")
-            self.end_headers()
+            try:
+                self.end_headers()
+            except (BrokenPipeError, ConnectionResetError):
+                return
 
         def do_POST(self):
             match = self._route()
@@ -307,6 +401,9 @@ def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float,
                 elif endpoint == "cancellations":
                     reply = channel.accept_cancellation(
                         CancellationRequest.from_json(body), lease_id=lease_id)
+                elif endpoint == "reconciliations":
+                    reply = channel.accept_reconciliation(
+                        ReconciliationRequest.from_json(body), lease_id=lease_id)
                 elif endpoint == "conversation":
                     if body != {"action": "new"}:
                         raise RemoteProtocolError(
@@ -315,6 +412,8 @@ def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float,
                 else:
                     reply = channel.accept_message(body, lease_id=lease_id)
                 self._json(200, reply, session_id=session_id)
+            except (BrokenPipeError, ConnectionResetError):
+                return
             except Exception as exc:  # schema and protocol exceptions become typed HTTP errors
                 self._error(exc, session_id=session_id)
 
@@ -370,6 +469,8 @@ def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float,
                         limit=_bounded_limit(query.get("limit", [""])[0]),
                         wait_s=sse_wait_s if query.get("wait") else 0,
                     ), session_id=session_id)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
                 except Exception as exc:
                     self._error(exc, session_id=session_id)
                 return

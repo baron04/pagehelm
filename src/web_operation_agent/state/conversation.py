@@ -11,6 +11,7 @@ import stat
 import threading
 import time
 from collections import deque
+from contextlib import closing, contextmanager
 
 from ..business.runtime import BusinessToolResult
 from ..privacy import redact_sensitive_assignments, redact_session_handoffs
@@ -66,7 +67,25 @@ class ConversationState:
         self.max_business_bytes = max_business_bytes
         self._turns: deque[dict] = deque()
         self._pending_clarification: dict | None = None
+        self._page_operation_granted: bool = False
         self._lock = threading.RLock()
+
+    @property
+    def page_operation_granted(self) -> bool:
+        """Whether the user has granted page-operation consent for this conversation."""
+        with self._lock:
+            return self._page_operation_granted
+
+    @page_operation_granted.setter
+    def page_operation_granted(self, value: bool) -> None:
+        if not isinstance(value, bool):
+            raise TypeError("page_operation_granted must be boolean")
+        with self._lock:
+            self._page_operation_granted = value
+
+    def grant_page_operation(self) -> None:
+        """Record conversation-level consent for the assistant to work the page."""
+        self.page_operation_granted = True
 
     @property
     def turn_count(self) -> int:
@@ -84,6 +103,7 @@ class ConversationState:
             dropped = len(self._turns)
             self._turns.clear()
             self._pending_clarification = None
+            self._page_operation_granted = False
             return dropped
 
     def last_user_text(self) -> str:
@@ -293,30 +313,58 @@ class SQLiteConversationState(ConversationState):
             database.execute(
                 "CREATE TABLE IF NOT EXISTS conversation_contexts ("
                 "conversation_id TEXT PRIMARY KEY, payload TEXT NOT NULL, "
-                "updated INTEGER NOT NULL)")
+                "updated INTEGER NOT NULL, "
+                "page_operation_granted INTEGER NOT NULL DEFAULT 0)")
+            columns = {row[1] for row in database.execute(
+                "PRAGMA table_info(conversation_contexts)")}
+            if "page_operation_granted" not in columns:
+                database.execute(
+                    "ALTER TABLE conversation_contexts "
+                    "ADD COLUMN page_operation_granted INTEGER NOT NULL DEFAULT 0")
             row = database.execute(
-                "SELECT payload FROM conversation_contexts WHERE conversation_id=?",
+                "SELECT payload, page_operation_granted FROM conversation_contexts "
+                "WHERE conversation_id=?",
                 (conversation_id,)).fetchone()
         if row is not None:
             try:
                 persisted = json.loads(row[0])
             except (TypeError, ValueError) as exc:
                 raise ValueError("persisted conversation state is invalid JSON") from exc
+            if isinstance(row[1], bool) or row[1] not in (0, 1):
+                raise ValueError("persisted page_operation_granted is invalid")
             super().restore(persisted)
+            with self._lock:
+                self._page_operation_granted = bool(row[1])
 
+    @contextmanager
     def _connect(self):
         database = sqlite3.connect(self.path, isolation_level=None, timeout=5)
         database.execute("PRAGMA synchronous=FULL")
-        return database
+        try:
+            yield database
+        finally:
+            database.close()
 
     def _persist(self) -> None:
-        payload = _canonical(self.snapshot()).decode("utf-8")
+        with self._lock:
+            payload = _canonical(self.snapshot()).decode("utf-8")
+            granted = int(self._page_operation_granted)
         with self._connect() as database:
             database.execute("BEGIN IMMEDIATE")
             database.execute(
-                "INSERT OR REPLACE INTO conversation_contexts VALUES (?, ?, ?)",
-                (self.conversation_id, payload, int(time.time() * 1000)))
+                "INSERT OR REPLACE INTO conversation_contexts "
+                "(conversation_id, payload, updated, page_operation_granted) "
+                "VALUES (?, ?, ?, ?)",
+                (self.conversation_id, payload, int(time.time() * 1000), granted))
             database.commit()
+
+    @ConversationState.page_operation_granted.setter
+    def page_operation_granted(self, value: bool) -> None:
+        if not isinstance(value, bool):
+            raise TypeError("page_operation_granted must be boolean")
+        with self._lock:
+            self._page_operation_granted = value
+            self._persist()
 
     def clear(self) -> int:
         dropped = super().clear()
@@ -341,7 +389,7 @@ def prune_sqlite_conversations(path: str | os.PathLike[str], *,
         raise ValueError("conversation retention cutoff must be at least one day old")
     if not os.path.exists(target):
         return 0
-    with sqlite3.connect(target, isolation_level=None, timeout=5) as database:
+    with closing(sqlite3.connect(target, isolation_level=None, timeout=5)) as database:
         database.execute("BEGIN IMMEDIATE")
         removed = database.execute(
             "DELETE FROM conversation_contexts WHERE updated < ?",
