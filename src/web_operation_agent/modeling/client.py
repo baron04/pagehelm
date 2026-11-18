@@ -105,8 +105,8 @@ def _provider_base_url(value: str) -> str:
     return value.rstrip("/")
 
 
-class _ConnectionCache:
-    """A few idle provider connections, per destination, for the next call to reuse.
+class ProviderConnectionPool:
+    """A few idle provider connections, per destination, for callers to reuse.
 
     Idle connections older than `IDLE_S` are closed rather than reused: providers and
     proxies drop idle keep-alive connections on their own schedule. A socket that
@@ -116,7 +116,14 @@ class _ConnectionCache:
     MAX_IDLE = 2
     IDLE_S = 30.0
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_idle: int = MAX_IDLE, idle_s: float = IDLE_S) -> None:
+        if isinstance(max_idle, bool) or not isinstance(max_idle, int) or not 1 <= max_idle <= 1_000:
+            raise ValueError("max_idle must be an integer from 1 to 1000")
+        if (isinstance(idle_s, bool) or not isinstance(idle_s, (int, float))
+                or not math.isfinite(idle_s) or not 0 < idle_s <= 3_600):
+            raise ValueError("idle_s must be a positive finite number up to 3600")
+        self.MAX_IDLE = max_idle
+        self.IDLE_S = float(idle_s)
         self._lock = threading.Lock()
         self._idle: dict[tuple, list[tuple[object, float]]] = {}
 
@@ -163,6 +170,9 @@ class _ConnectionCache:
             connection.close()
 
 
+_ConnectionCache = ProviderConnectionPool
+
+
 class ChatModel(_ConcreteChatProvider):
     """A single OpenAI-compatible chat endpoint with native tool calling."""
 
@@ -172,7 +182,8 @@ class ChatModel(_ConcreteChatProvider):
                  options: dict | None = None,
                  egress_policy: ProviderEgressPolicy | None = None,
                  runtime_guard: ProviderRuntimeGuard | None = None,
-                 shared_quota: SQLiteProviderQuota | None = None):
+                 shared_quota: SQLiteProviderQuota | None = None,
+                 connection_pool: ProviderConnectionPool | None = None):
         env = env if env is not None else load_env()
         raw_base = env.get("AGENT_OPENAI_BASE_URL") or ""
         self._key = env.get("AGENT_OPENAI_API_KEY") or ""
@@ -219,6 +230,14 @@ class ChatModel(_ConcreteChatProvider):
                               if runtime_guard is None else runtime_guard)
         if not isinstance(self.runtime_guard, ProviderRuntimeGuard):
             raise TypeError("runtime_guard must be ProviderRuntimeGuard or None")
+        if connection_pool is not None and not isinstance(connection_pool, ProviderConnectionPool):
+            raise TypeError("connection_pool must be ProviderConnectionPool or None")
+        if connection_pool is not None:
+            self._connections = connection_pool
+            self._owns_connections = False
+            self._transport_retries = 0
+        else:
+            self._owns_connections = True
         if options is not None and not isinstance(options, dict):
             raise ValueError("provider options must be an object or None")
         selected = ({k: v for k, v in options.items()
@@ -720,14 +739,17 @@ class ChatModel(_ConcreteChatProvider):
                 connection.close()
 
     def close_connections(self) -> None:
-        """Close the idle provider connections this model kept for reuse."""
+        """Close the idle provider connections this model owns for reuse."""
+        if not self.__dict__.get("_owns_connections", True):
+            return
         cache = self.__dict__.get("_connections")
         if cache is not None:
             cache.close_all()
 
-    def _connection_cache(self) -> "_ConnectionCache":
+    def _connection_cache(self) -> ProviderConnectionPool:
         cache = self.__dict__.get("_connections")
         if cache is None:
-            cache = self.__dict__.setdefault("_connections", _ConnectionCache())
+            cache = self.__dict__.setdefault("_connections", ProviderConnectionPool())
+            self.__dict__.setdefault("_owns_connections", True)
             self.__dict__.setdefault("_transport_retries", 0)
         return cache

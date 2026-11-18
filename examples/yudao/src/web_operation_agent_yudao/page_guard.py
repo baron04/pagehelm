@@ -132,7 +132,7 @@ class NativePageGuard:
         self.journal = Path(journal) if journal is not None else None
         if self.journal is not None:
             self.journal.parent.mkdir(parents=True, exist_ok=True)
-            with sqlite3.connect(self.journal) as db:
+            with self._journal_db() as db:
                 db.execute("CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, actor TEXT NOT NULL)")
                 db.execute("CREATE TABLE IF NOT EXISTS windows (actor TEXT NOT NULL, owner TEXT NOT NULL, PRIMARY KEY(actor, owner))")
                 # A write whose outcome was never learned stays unknown across a restart.
@@ -147,6 +147,15 @@ class NativePageGuard:
                     if not re.fullmatch(r"[a-f0-9]{64}", actor) or not WINDOW_KEY.fullmatch(owner):
                         raise ValueError("invalid guard journal window")
                     self._actors.setdefault(actor, _Actor()).windows[owner] = self.clock() + _LONGEST_WINDOW_S
+
+    @contextmanager
+    def _journal_db(self):
+        db = sqlite3.connect(self.journal)
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
 
     def _actor(self, actor):
         if not isinstance(actor, str) or not re.fullmatch(r"[a-f0-9]{64}", actor):
@@ -169,7 +178,7 @@ class NativePageGuard:
         expired = [key for key, until in state.windows.items() if until <= now]
         if expired and self.journal is not None:
             try:
-                with sqlite3.connect(self.journal) as db:
+                with self._journal_db() as db:
                     for key in expired:
                         db.execute("DELETE FROM windows WHERE actor=? AND owner=?", (actor, key))
             except Exception:
@@ -399,7 +408,7 @@ class NativePageGuard:
                         raise GuardRefused("permit_in_use")
                     if self.journal is not None:
                         try:
-                            with sqlite3.connect(self.journal) as db:
+                            with self._journal_db() as db:
                                 db.execute("DELETE FROM windows WHERE actor=? AND owner=?", (actor, owner))
                         except Exception:
                             raise GuardRefused("guard_journal_unavailable") from None
@@ -411,7 +420,7 @@ class NativePageGuard:
                     raise GuardRefused("guard_capacity")
                 if self.journal is not None:
                     try:
-                        with sqlite3.connect(self.journal) as db:
+                        with self._journal_db() as db:
                             db.execute("INSERT OR IGNORE INTO windows VALUES (?, ?)", (actor, owner))
                     except Exception:
                         raise GuardRefused("guard_journal_unavailable") from None
@@ -431,7 +440,7 @@ class NativePageGuard:
                 raise GuardRefused("prior_request_uncertain")
             if self.journal is not None:
                 try:
-                    with sqlite3.connect(self.journal) as db:
+                    with self._journal_db() as db:
                         db.execute("DELETE FROM windows WHERE actor=? AND owner=?", (actor, owner))
                 except Exception:
                     raise GuardRefused("guard_journal_unavailable") from None
@@ -565,7 +574,7 @@ class NativePageGuard:
             if not safe and self.journal is not None:
                 request_id = uuid.uuid4().hex
                 try:
-                    with sqlite3.connect(self.journal) as db:
+                    with self._journal_db() as db:
                         db.execute("INSERT INTO requests VALUES (?, ?)", (request_id, actor))
                 except Exception:
                     state.inflight -= 1
@@ -586,7 +595,7 @@ class NativePageGuard:
                     state.uncertain = state.uncertain or not safe
                 elif request_id:
                     try:
-                        with sqlite3.connect(self.journal) as db:
+                        with self._journal_db() as db:
                             db.execute("DELETE FROM requests WHERE id=?", (request_id,))
                     except Exception:
                         state.uncertain = True

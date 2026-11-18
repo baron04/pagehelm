@@ -237,13 +237,20 @@ class NativeSpecialHandler:
         declared = SpecialEffects(self.operation).project_inputs(inputs)
         change = RequestedEffect(declared.entity, declared.action, declared.target_entity, declared.target, canonical(values))
         key = hashlib.sha256(canonical(private).encode()).hexdigest()
+        reconcile_meta = {"entity": private["entity"], "operation": self.operation, "body_digest": key}
+        if self.operation in STATE_PATHS:
+            reconcile_meta["id"] = private["snapshot"]["id"]
+            reconcile_meta["expected"] = private["expected"]
+            reconcile_meta["before"] = {
+                k: private["snapshot"].get(k) for k in private["expected"] if k in private["snapshot"]
+            }
         return BusinessMutationSpec(private, {
             "crm_customer_put_pool": "客户放入公海并清除关联负责人及 OWNER 权限",
             "crm_customer_receive": "领取公海客户给当前账号并建立 OWNER 权限",
             "crm_customer_lock": "变更客户锁定状态", "crm_customer_deal_status": "变更客户成交状态",
             "crm_receivable_plan_create": "新建合同回款计划及负责人权限",
             "oa_announcement_create": "发布 OA 公告并建立原生下属接收关系"}[self.operation], tuple(targets),
-            details=tuple(details), reconcile_key=key, reconciliation={"entity": private["entity"], "operation": self.operation, "body_digest": key},
+            details=tuple(details), reconcile_key=key, reconciliation=reconcile_meta,
             effect_projection=EffectProjection(change, canonical(bindings), canonical(preserved), canonical(derived), tuple(duties),
                 preserves_unmentioned=self.operation in STATE_PATHS))
 

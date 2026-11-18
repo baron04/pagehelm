@@ -534,5 +534,62 @@ class DailyAllowanceContract(unittest.TestCase):
         self.assertIn("暂时没有响应", _provider_failed(ProviderError("x"), True))
 
 
+class SQLiteSpendCapTests(unittest.TestCase):
+    def test_atomic_reservation_refuses_when_daily_or_monthly_cap_exceeded(self):
+        import threading
+        from web_operation_agent.modeling.spend import SQLiteSpendCap
+
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "spend-caps.sqlite3"
+            cap = SQLiteSpendCap(db_path, daily_cap_cny=0.05, monthly_cap_cny=0.10, turn_reserve_cny=0.03)
+            barrier = threading.Barrier(4)
+            outcomes = []
+            lock = threading.Lock()
+
+            def try_reserve(idx: int):
+                barrier.wait()
+                res = cap.reserve(f"turn-{idx}", now=1_760_000_000.0)
+                with lock:
+                    outcomes.append(res)
+
+            threads = [threading.Thread(target=try_reserve, args=(i,)) for i in range(4)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(5)
+            allowed = [r for r in outcomes if r.allowed]
+            refused = [r for r in outcomes if not r.allowed]
+            # 0.03 * 1 <= 0.05 < 0.03 * 2, so exactly one concurrent turn can reserve.
+            self.assertEqual(len(allowed), 1)
+            self.assertEqual(len(refused), 3)
+            self.assertTrue(all(r.reason == "daily_cap_exceeded" for r in refused))
+            cap.release(allowed[0].reservation_id)
+            next_res = cap.reserve("turn-after-release", now=1_760_000_000.0)
+            self.assertTrue(next_res.allowed)
+            cap.release("turn-after-release")
+
+            # Spend reaching monthly cap refuses even on a new day in the same month.
+            cap.record_spend(0.10, now=1_760_000_000.0)
+            next_day = 1_760_000_000.0 + 86_400
+            monthly_refusal = cap.reserve("turn-next-day", now=next_day)
+            self.assertFalse(monthly_refusal.allowed)
+            self.assertEqual(monthly_refusal.reason, "monthly_cap_exceeded")
+
+    def test_spend_meter_syncs_and_enforces_global_cap(self):
+        from web_operation_agent.modeling.spend import SQLiteSpendCap
+
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = Path(directory) / "spend.jsonl"
+            cap = SQLiteSpendCap(Path(directory) / "caps.sqlite3", daily_cap_cny=0.01, monthly_cap_cny=1.0)
+            meter = SpendMeter(ledger=ledger, price=PRICE, global_cap=cap)
+            self.assertTrue(meter.within_allowance())
+            meter.record(provider="p", model="qwen3.8-flash", run_id="r1",
+                         usage={"prompt_tokens": 20_000, "completion_tokens": 0})
+            self.assertFalse(meter.within_allowance())
+            restarted = SQLiteSpendCap(Path(directory) / "caps2.sqlite3", daily_cap_cny=0.01, monthly_cap_cny=1.0)
+            restarted.sync_from_ledger(ledger)
+            self.assertFalse(restarted.allows())
+
+
 if __name__ == "__main__":
     unittest.main()

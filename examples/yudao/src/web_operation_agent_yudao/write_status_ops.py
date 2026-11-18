@@ -189,7 +189,9 @@ class _StatusHandler:
                                             sort_keys=True).encode()).hexdigest()
             return BusinessMutationSpec(payload, summary, (str(record.get("no")),),
                                         details=details, reconcile_key=key,
-                                        reconciliation={"entity": entity, "operation": self.operation, "id": record["id"]},
+                                        reconciliation={"entity": entity, "operation": self.operation,
+                                                        "id": record["id"], "expected": payload["expected"],
+                                                        "before": {"status": record.get("status")}},
                                         effect_projection=effect)
 
         if self.operation == "promotion_coupon_template_status":
@@ -221,7 +223,9 @@ class _StatusHandler:
             key = hashlib.sha256(json.dumps({"op": self.operation, "id": record["id"], "status": target_code}, sort_keys=True).encode()).hexdigest()
             return BusinessMutationSpec(payload, summary, (str(record.get("name")),),
                                         details=details, reconcile_key=key,
-                                        reconciliation={"entity": entity, "operation": self.operation, "id": record["id"]},
+                                        reconciliation={"entity": entity, "operation": self.operation,
+                                                        "id": record["id"], "expected": payload["expected"],
+                                                        "before": {"status": record.get("status")}},
                                         effect_projection=effect)
 
         entity = "promotion/seckill-activity"
@@ -252,7 +256,9 @@ class _StatusHandler:
         key = hashlib.sha256(json.dumps({"op": self.operation, "id": record["id"]}, sort_keys=True).encode()).hexdigest()
         return BusinessMutationSpec(payload, summary, (str(record.get("name")),),
                                     details=details, reconcile_key=key,
-                                    reconciliation={"entity": entity, "operation": self.operation, "id": record["id"]},
+                                    reconciliation={"entity": entity, "operation": self.operation,
+                                                    "id": record["id"], "expected": payload["expected"],
+                                                    "before": {"status": record.get("status")}},
                                     effect_projection=effect)
 
     def dispatch(self, args: dict, *, context=None) -> BusinessToolResult:

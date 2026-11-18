@@ -16,7 +16,7 @@ from web_operation_agent.business.tools.contracts import ToolOperation
 from web_operation_agent.business.forms import ApplicationFormPort, NoApplicationForms
 from web_operation_agent.composition.descriptor import (APPLICATION_ADAPTER_VERSION,
                                                         ApplicationDescriptor)
-from web_operation_agent.composition.ports import (ApplicationPorts, ConservativeMutationReconciler,
+from web_operation_agent.composition.ports import (ApplicationPorts,
                                                    DeclaredDataClassifier, DeclaredRoutePort,
                                                    ResultPostconditionVerifier)
 from web_operation_agent.goal.conventions import load_conventions
@@ -103,7 +103,8 @@ class YudaoApplication:
                  native_tabs: bool = False, native_navigation: bool = False, page_write_guard: str = "",
                  forms: ApplicationFormPort | None = None, native_writes: bool = False,
                  mutation_journal=None, native_write_preparation: bool = False,
-                 writing_gets: frozenset[str] = frozenset()):
+                 writing_gets: frozenset[str] = frozenset(),
+                 write_tracker=None):
         if type(native_write_preparation) is not bool:
             raise TypeError("native_write_preparation must be boolean")
         if native_write_preparation and native_writes:
@@ -183,9 +184,10 @@ class YudaoApplication:
         postconditions = NativePostconditions(mutation_names)
         routes = DeclaredRoutePort(APPLICATION_ID, _PAGE_ROUTES,
                                    session_handoff_query_keys=SESSION_HANDOFF_KEYS)
+        from .reconciliation import YudaoMutationReconciler
         self.identity = YudaoIdentityPort(api_base, self.client, native_writes=native_writes or native_write_preparation)
         self.business_tools = BusinessToolRuntime(
-            (), CombinedTools(reads, registry) if registry else reads, application_id=APPLICATION_ID,
+            (), CombinedTools(reads, registry, write_tracker=write_tracker) if registry else reads, application_id=APPLICATION_ID,
             required_scopes={**{name: "yudao.read" for name in names}, **{name: "yudao.write" for name in mutation_names}}, data_classifier=data,
             operations={**{name: ToolOperation("application", "read") for name in names},
                         **{t.name: t.operation for t in registry.definitions}},
@@ -194,7 +196,13 @@ class YudaoApplication:
             postcondition_verifier=postconditions, route_validator=routes)
         self.ports = ApplicationPorts(
             identity=self.identity, routes=routes, postconditions=postconditions,
-            reconciliation=ConservativeMutationReconciler(mutation_names), data=data,
+            reconciliation=YudaoMutationReconciler(
+                self.client,
+                self.identity,
+                supported_tools=mutation_names,
+                writing_gets=writing_gets,
+                application_id=APPLICATION_ID,
+            ), data=data,
             operations=RegisteredOperations(registry, skills, self.goal_data.invalidate_reads,
                 observed_mutation_operations=frozenset(d.name for d in registry.definitions)),
             goal_scopes=YudaoIdentityPort.required_scopes,

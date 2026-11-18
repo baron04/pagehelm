@@ -607,6 +607,67 @@ class ProviderConcurrency(_ProviderCase):
         self.assertEqual(server.posts, 2)
         self.assertEqual(server.connections, 2)
 
+    def test_multiple_models_sharing_guard_and_pool_enforce_process_concurrency_and_reuse(self):
+        server = _HeldServer()
+        self.addCleanup(server.close)
+        ledger = Path(self.directory.name) / "shared-spend.jsonl"
+        guard = M.ProviderRuntimeGuard(max_concurrent_requests=1)
+        pool = M.ProviderConnectionPool(max_idle=4)
+        self.addCleanup(pool.close_all)
+        env = {"AGENT_OPENAI_BASE_URL": server.url,
+               "AGENT_OPENAI_API_KEY": "key", "AGENT_OPENAI_MODEL": "qwen3.8-flash"}
+        chat_a = M.ChatModel(M.SpendMeter(ledger=ledger), env=env,
+                             runtime_guard=guard, connection_pool=pool)
+        chat_b = M.ChatModel(M.SpendMeter(ledger=ledger), env=env,
+                             runtime_guard=guard, connection_pool=pool)
+
+        # Sequential calls across two ChatModel instances reuse the shared pool connection.
+        server.release_marker("seq-1")
+        self.assertEqual(chat_a.complete_cancellable(
+            [{"role": "user", "content": "seq-1"}], None, "r1", cancelled=lambda: False, timeout_s=5)["content"],
+            "reply-seq-1")
+        # Closing one session's ChatModel does not tear down the shared pool.
+        chat_a.close_connections()
+        server.release_marker("seq-2")
+        self.assertEqual(chat_b.complete_cancellable(
+            [{"role": "user", "content": "seq-2"}], None, "r2", cancelled=lambda: False, timeout_s=5)["content"],
+            "reply-seq-2")
+        self.assertEqual(server.connections, 1)
+
+        # Simultaneous calls across two ChatModel instances sharing one guard serialize at limit=1.
+        results = {}
+        first_arrived = threading.Event()
+        orig_release = server.release_marker
+
+        def call_a():
+            results["A"] = chat_a.complete_cancellable(
+                [{"role": "user", "content": "conc-A"}], None, "rA", cancelled=lambda: False, timeout_s=5)
+
+        def call_b():
+            try:
+                results["B"] = chat_b.complete_cancellable(
+                    [{"role": "user", "content": "conc-B"}], None, "rB", cancelled=lambda: False, timeout_s=0.1)
+            except M.ProviderError as exc:
+                results["B"] = exc
+
+        ta = threading.Thread(target=call_a, daemon=True)
+        ta.start()
+        deadline = time.monotonic() + 5
+        while "conc-A" not in server.received and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertIn("conc-A", server.received)
+        first_arrived.set()
+        tb = threading.Thread(target=call_b, daemon=True)
+        tb.start()
+        tb.join(5)
+        self.assertIsInstance(results["B"], M.ProviderError)
+        self.assertEqual(results["B"].code, "provider_capacity")
+        self.assertFalse(results["B"].dispatched)
+        orig_release("conc-A")
+        ta.join(5)
+        self.assertEqual(results["A"]["content"], "reply-conc-A")
+        pool.close_all()
+
 
 class ProviderTransportTLS(_ProviderCase):
     """Real TLS and CONNECT-proxy transport for the provider client.
