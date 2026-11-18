@@ -464,6 +464,20 @@ class StrictWireParsing(unittest.TestCase):
             with self.subTest(cls=cls.__name__), self.assertRaises(S.SchemaError):
                 cls.from_json(payload)
 
+    def test_reconciliation_request_requires_turn_or_proposal_digest(self):
+        req = S.ReconciliationRequest(
+            schema_version=S.SCHEMA_VERSIONS["ReconciliationRequest"],
+            session_id="session-1",
+            turn_id="turn-1",
+            proposal_digest="a" * 64,
+        )
+        self.assertEqual(S.ReconciliationRequest.from_json(req.to_json()), req)
+        with self.assertRaises(S.SchemaError):
+            S.ReconciliationRequest(
+                schema_version=S.SCHEMA_VERSIONS["ReconciliationRequest"],
+                session_id="session-1",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

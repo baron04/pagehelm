@@ -26,6 +26,12 @@ export interface PanelLimits {
   result_max_chars: number
 }
 
+export interface ReconciliationStatus {
+  outcome: 'completed' | 'failed' | 'unknown'
+  settled: boolean
+  message?: string
+}
+
 export interface TimelineEntry {
   id: string
   sequence: number
@@ -38,6 +44,12 @@ export interface TimelineEntry {
   approval_id?: string
   authored?: 'model' | 'server'
   replayed?: boolean
+  /** Whether a terminal failure may safely be re-submitted as a fresh turn. */
+  retryable?: boolean
+  /** Bound mutation proposal digest for an indeterminate write outcome. */
+  proposal_digest?: string
+  /** Latest read-only reconciliation state for an indeterminate write outcome. */
+  reconciliation?: ReconciliationStatus
   /** Stable ordering within a durable stream, independent of transport incarnation. */
   position?: {stream: string; sequence: number}
   step?: StepFacts

@@ -75,7 +75,7 @@ class NobodyRestatesTheVersionWithoutBeingChecked(unittest.TestCase):
         serves it -- but a comparison run against a different DOM implementation than the
         product's would be measuring two applications, not two engines.
         """
-        lock = json.loads((_ROOT / "evals" / "pageagent" / "package-lock.json").read_text())
+        lock = json.loads((_ROOT / "frontend" / "package-lock.json").read_text())
         entries = [entry for name, entry in lock["packages"].items()
                    if name.endswith("@page-agent/page-controller")]
         self.assertEqual(len(entries), 1)
@@ -87,7 +87,7 @@ class ADeploymentIsCheckedAgainstThePinRatherThanTrusted(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.served = Path(self._tmp.name)
-        self.source = (_ROOT / "evals" / "pageagent" / "node_modules" / "@page-agent"
+        self.source = (_ROOT / "frontend" / "node_modules" / "@page-agent"
                        / "page-controller")
 
     def tearDown(self):
@@ -95,7 +95,7 @@ class ADeploymentIsCheckedAgainstThePinRatherThanTrusted(unittest.TestCase):
 
     def _install(self) -> None:
         if not self.source.is_dir():
-            self.skipTest("needs the pinned npm package; run npm ci in evals/pageagent")
+            self.skipTest("needs the pinned npm package; run npm ci in frontend")
         for name, entry in PINNED_PAGE_CONTROLLER["served_files"].items():
             origin = self.source / entry["tarball_path"].split("package/", 1)[1]
             shutil.copyfile(origin, self.served / name)

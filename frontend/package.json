@@ -27,6 +27,7 @@
     "react-dom": "19.3.0"
   },
   "devDependencies": {
+    "@page-agent/page-controller": "1.12.4",
     "@playwright/test": "1.63.0",
     "@storybook/react": "10.6.0",
     "@storybook/react-vite": "10.6.0",

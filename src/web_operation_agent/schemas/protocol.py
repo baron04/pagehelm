@@ -527,6 +527,51 @@ class CancellationRequest:
         return digest(self.to_json())
 
 
+@dataclass(frozen=True)
+class ReconciliationRequest:
+    """Authenticated request to read-only reconcile one indeterminate write turn."""
+
+    schema_version: int
+    session_id: str
+    turn_id: str = ""
+    proposal_digest: str = ""
+
+    def __post_init__(self) -> None:
+        _schema_version(self.schema_version, "ReconciliationRequest")
+        _str(self.session_id, "session_id")
+        _str(self.turn_id, "turn_id", allow_empty=True)
+        _require(len(self.turn_id) <= 200, "turn_id exceeds 200 characters")
+        _str(self.proposal_digest, "proposal_digest", allow_empty=True)
+        if self.proposal_digest:
+            _sha256(self.proposal_digest, "proposal_digest")
+        _require(bool(self.turn_id or self.proposal_digest),
+                 "reconciliation requires turn_id or proposal_digest")
+
+    def to_json(self) -> dict:
+        return {
+            "schema_version": self.schema_version,
+            "session_id": self.session_id,
+            **({"turn_id": self.turn_id} if self.turn_id else {}),
+            **({"proposal_digest": self.proposal_digest} if self.proposal_digest else {}),
+        }
+
+    @staticmethod
+    def from_json(d: dict) -> "ReconciliationRequest":
+        allowed = {"schema_version", "session_id", "turn_id", "proposal_digest"}
+        required = {"schema_version", "session_id"}
+        d = _strict_object(d, "ReconciliationRequest", allowed=allowed, required=required)
+        return ReconciliationRequest(
+            schema_version=d["schema_version"],
+            session_id=d["session_id"],
+            turn_id=d.get("turn_id", ""),
+            proposal_digest=d.get("proposal_digest", ""),
+        )
+
+    @property
+    def content_digest(self) -> str:
+        return digest(self.to_json())
+
+
 TASK_EVENT_KINDS = frozenset({
     "session_started", "progress", "action", "approval_required", "terminal",
 })

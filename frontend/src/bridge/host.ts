@@ -8,7 +8,8 @@
  * `state() ?? status()` probe does not survive into this contract.
  */
 import type {
-  AnswerTarget, ApprovalRequest, PanelConfiguration, PanelState, TimelineEntry, TimelinePage,
+  AnswerTarget, ApprovalRequest, PanelConfiguration, PanelState, ReconciliationStatus, TimelineEntry,
+  TimelinePage,
 } from '../contract/panel'
 
 export interface ConnectionState {
@@ -75,6 +76,8 @@ export interface PanelHost {
   openAnswerTarget?(target: AnswerTarget): boolean
   /** Report a view-only visibility change to the host, which may clear page markers. */
   panelVisibility?(open: boolean): void
+  /** Trigger a read-only reconciliation check for an indeterminate write turn. */
+  reconcile?(turnId: string, proposalDigest?: string): Promise<ReconciliationStatus> | void
 }
 
 const REQUIRED_METHODS = [

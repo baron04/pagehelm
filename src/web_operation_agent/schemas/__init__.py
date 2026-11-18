@@ -18,7 +18,7 @@ from .browser import (BROWSER_ACTIONS, INTERNAL_BROWSER_ACTIONS,
 from .protocol import (ACTION_RESULT_ERRORS, ACTION_RESULT_STATUSES, APPROVAL_KINDS,
                        TASK_EVENT_KINDS, ActionEnvelope, ActionResultEnvelope,
                        ApprovalDecision, ApprovalRequest, CancellationRequest, ClientHello,
-                       ObservationEnvelope, TaskEvent)
+                       ObservationEnvelope, ReconciliationRequest, TaskEvent)
 from .control import ControlPlan, ControlTicket
 
 __all__ = [name for name in globals() if not name.startswith("_")]

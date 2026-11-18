@@ -92,6 +92,42 @@ def _clip(value: Any, limit: int) -> str:
     return text[:limit]
 
 
+_HEX_SHA256_LEN = 64
+
+
+def _is_hex_sha256(value: object) -> bool:
+    return (isinstance(value, str) and len(value) == _HEX_SHA256_LEN
+            and all(ch in "0123456789abcdef" for ch in value))
+
+
+def _reconciliation_projection(payload: dict, limits: dict[str, int]) -> dict | None:
+    raw = payload.get("reconciliation")
+    if not isinstance(raw, dict):
+        return None
+    outcome = raw.get("outcome")
+    settled = raw.get("settled")
+    if outcome not in {"completed", "failed", "unknown"} or type(settled) is not bool:
+        return None
+    entry: dict[str, Any] = {"outcome": outcome, "settled": settled}
+    message = raw.get("message")
+    if isinstance(message, str) and message.strip():
+        entry["message"] = _clip(message, limits["notice_max_chars"])
+    return entry
+
+
+def _terminal_extras(payload: dict, limits: dict[str, int]) -> dict[str, Any]:
+    extras: dict[str, Any] = {}
+    if payload.get("retryable") is True:
+        extras["retryable"] = True
+    proposal_digest = payload.get("proposal_digest")
+    if _is_hex_sha256(proposal_digest):
+        extras["proposal_digest"] = proposal_digest
+    reconciliation = _reconciliation_projection(payload, limits)
+    if reconciliation is not None:
+        extras["reconciliation"] = reconciliation
+    return extras
+
+
 def _answer_targets(payload: dict, answer: str) -> list[dict]:
     """Project only bounded relative links from a completed server answer."""
     raw = payload.get("answer_targets")
@@ -403,10 +439,12 @@ def project_event(event: TaskEvent, *, at: int, target: dict | None = None) -> d
     node = payload.get("step")
     node = node if state == "step" and isinstance(node, dict) and node else None
     targets = _answer_targets(payload, text) if mapping["terminal"] and state == "finished" else []
+    terminal_extras = _terminal_extras(payload, limits) if mapping["terminal"] else {}
     return {**base, "kind": "result" if mapping["terminal"] else "progress",
             "tone": mapping["tone"], "text": text,
             "panel_state": mapping["panel_state"],
             **({"answer_targets": targets} if targets else {}),
+            **terminal_extras,
             **({"step": node} if node else {}),
             **({"transient": True} if node and node.get("stage") in _TRANSIENT_STAGES else {})}
 
@@ -440,9 +478,11 @@ def project_history_record(record: dict, *, index: int) -> dict | None:
     if not text:
         return None
     targets = _answer_targets(payload, text) if mapping["terminal"] and state == "finished" else []
+    terminal_extras = _terminal_extras(payload, limits) if mapping["terminal"] else {}
     return {**base, "kind": "result" if mapping["terminal"] else "progress",
             "tone": mapping["tone"], "text": text, "panel_state": mapping["panel_state"],
-            **({"answer_targets": targets} if targets else {})}
+            **({"answer_targets": targets} if targets else {}),
+            **terminal_extras}
 
 
 def collapse_timeline(entries: list[dict]) -> list[dict]:

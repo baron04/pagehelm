@@ -137,7 +137,7 @@ export function createDevHost(): DevHost {
       [300, 'progress', '正在理解你的需求'],
       [500, 'progress', '正在思考', {stage: 'thinking'}],
       [700, 'progress', '正在选择操作方式',
-       {stage: 'tool', tool: 'load_skill', arguments: 'skill_id=odoo.sales.query'}],
+       {stage: 'tool', tool: 'load_skill', arguments: 'skill_id=crm.sales.query'}],
       [400, 'action', '重新检查当前页面'],
       [600, 'progress', '正在思考（第 2 步）', {stage: 'thinking'}],
       [800, 'progress', '正在读取业务数据',
@@ -196,7 +196,7 @@ export function createDevHost(): DevHost {
       [300, 'progress', '正在理解你的需求'],
       [500, 'progress', '正在思考', {stage: 'thinking'}],
       [600, 'progress', '正在选择操作方式',
-       {stage: 'tool', tool: 'load_skill', arguments: 'skill_id=odoo.sales.confirm'}],
+       {stage: 'tool', tool: 'load_skill', arguments: 'skill_id=crm.sales.confirm'}],
       [400, 'action', '重新检查当前页面'],
       [700, 'progress', '正在读取业务数据',
        {stage: 'tool', tool: 'query_quotations', arguments: 'name=S00002 · state=draft'}],
@@ -212,7 +212,7 @@ export function createDevHost(): DevHost {
     ask({
       schema_version: 1,
       approval_id: `approval-${sequence}`,
-      effect: '在 Odoo 中确认 1 张报价单',
+      effect: '在系统中确认 1 张报价单',
       targets: ['报价单：S00002', '客户：Acme Corporation', '金额：1,231.00'],
       // Two minutes, like the real one, so the countdown is worth looking at.
       expires_at: Date.now() + 120_000,
@@ -388,6 +388,9 @@ export function createDevHost(): DevHost {
     reload() {
       commit({notice: null, connection: {...state.connection, state: 'ready', online: true}})
     },
+    async reconcile(_turnId, _proposalDigest) {
+      return {outcome: 'unknown', settled: false}
+    },
     scenario(name) {
       // The composer cannot start a turn over one in flight; a scenario button can, so it
       // ends that turn first, the way a replacing message does, rather than letting two
@@ -447,7 +450,7 @@ export function createDevHost(): DevHost {
           nextTurn()
           push(entry('goal', '给 S00007 开一张客户发票'))
           push(entry('result',
-            '这次写入已经发出，但没有拿到可信回执。不会自动重试。请到 Odoo 里核对这条记录后再决定下一步。',
+            '这次写入已经发出，但没有拿到可信回执。不会自动重试。请到业务系统里核对这条记录后再决定下一步。',
             {tone: 'warning', panel_state: 'indeterminate', authored: 'server'}))
           commit({connection: {...state.connection, busy: false, state: 'indeterminate'}})
           return

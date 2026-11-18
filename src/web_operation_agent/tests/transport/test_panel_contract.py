@@ -115,6 +115,24 @@ class PanelContractTests(unittest.TestCase):
         self.assertEqual(entry["tone"], "warning")
         self.assertIn("1. London", entry["text"])
 
+    def test_retry_suffixes_are_stripped_and_terminal_extras_project_safely(self):
+        contract = panel_contract()
+        for text in [contract["label_keys"]["historyLoadFailed"], *contract["notices"].values()]:
+            self.assertFalse(text.endswith(("请重试。", "可以重试。")), text)
+        failed = project_event(_event("progress", {
+            "state": "task_failed", "message": "失败", "retryable": True,
+        }), at=1)
+        self.assertTrue(failed["retryable"])
+        indeterminate = project_event(_event("progress", {
+            "state": "indeterminate", "message": "结果不明",
+            "proposal_digest": "a" * 64,
+            "reconciliation": {"outcome": "completed", "settled": True, "message": "ok"},
+        }), at=2)
+        self.assertEqual(indeterminate["proposal_digest"], "a" * 64)
+        self.assertEqual(indeterminate["reconciliation"], {
+            "outcome": "completed", "settled": True, "message": "ok",
+        })
+
     def test_panel_capacity_accepts_the_largest_supported_product_answer(self):
         from web_operation_agent.execution.product import AgentTurnConfig
         config = AgentTurnConfig(supported_scope="read", ledger_path=Path("unused.jsonl"),

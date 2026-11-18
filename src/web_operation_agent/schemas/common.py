@@ -25,6 +25,7 @@ SCHEMA_VERSIONS = {
     "ApprovalRequest": 1,
     "ApprovalDecision": 1,
     "CancellationRequest": 1,
+    "ReconciliationRequest": 1,
     "ControlPlan": 1,
 }
 
