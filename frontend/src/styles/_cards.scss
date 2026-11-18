@@ -88,6 +88,44 @@
   color: var(--woa-danger);
   background: var(--woa-danger-soft);
 }
+.woa-outcome__reconcile {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--woa-radius-control);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--woa-font-size-meta);
+  line-height: var(--woa-line-height);
+  background: var(--woa-surface-muted);
+  color: var(--woa-ink);
+}
+.woa-outcome__reconcile > svg {
+  flex: none;
+}
+.woa-outcome__reconcile[data-outcome="completed"] {
+  background: var(--woa-success-soft);
+  color: var(--woa-success);
+}
+.woa-outcome__reconcile[data-outcome="unknown"] {
+  background: var(--woa-warning-soft);
+  color: var(--woa-warning);
+}
+.woa-outcome__reconcile-msg {
+  flex-basis: 100%;
+  color: var(--woa-ink-muted);
+}
+.woa-outcome__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.woa-outcome__reconcile-btn {
+  height: 30px;
+  padding: 0 12px;
+  font-size: var(--woa-font-size-meta);
+}
 
 /* ─────────────────────────────────────────────── approval */
 /* A confirmation is the one moment a write can happen, so it keeps a frame nothing in an

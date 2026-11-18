@@ -1,9 +1,9 @@
 import {memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react'
 import {
   AlertTriangle, ArrowDown, ArrowUpRight, ChevronDown, CircleAlert, CircleCheck, CircleSlash, CircleX,
-  FileText, PanelTop,
+  FileText, PanelTop, RefreshCw, RotateCcw,
 } from 'lucide-react'
-import type {AnswerTarget, Labels, PanelLimits, TimelineEntry} from '../contract/panel'
+import type {AnswerTarget, Labels, PanelLimits, ReconciliationStatus, TimelineEntry} from '../contract/panel'
 import type {PanelSnapshot} from '../bridge/host'
 import {plainText} from '../markdown/plain'
 import {formatFullTime, formatTime} from '../state/clock'
@@ -13,8 +13,8 @@ import {guarded} from './ErrorBoundary'
 import {Skeleton} from './Skeleton'
 import {iconProps} from './icon'
 
-/** Inside this many pixels of the floor counts as "at the newest line". */
-const NEAR_BOTTOM = 28
+/** Scroll back within this many pixels of the floor re-engages auto-follow. */
+const REATTACH_BOTTOM = 4
 /** A modest reading scroll does not need a floating recovery control. */
 const JUMP_REVEAL_DISTANCE = 160
 /** How long after a gesture a scroll still counts as that person's own doing. */
@@ -311,14 +311,21 @@ function Starting({labels}: {labels: Labels}): React.JSX.Element {
   )
 }
 
-function Outcome({entry, labels, limits, live, allowedOrigins, onOpenTarget}: {
+function Outcome({entry, labels, limits, live, allowedOrigins, onOpenTarget, onReconcile}: {
   entry: TimelineEntry
   labels: Labels
   limits: PanelLimits
   live: boolean
   allowedOrigins: readonly string[]
   onOpenTarget?: ((target: AnswerTarget) => boolean) | undefined
+  onReconcile?: ((turnId: string, proposalDigest?: string) => Promise<ReconciliationStatus> | void) | undefined
 }): React.JSX.Element {
+  const [reconciling, setReconciling] = useState(false)
+  const [localReconciliation, setLocalReconciliation] = useState<ReconciliationStatus | null>(null)
+  useEffect(() => {
+    if (entry.reconciliation) setLocalReconciliation(null)
+  }, [entry.reconciliation])
+
   // Only the two outcomes a person has to act on get a card of their own. Everything else
   // is prose, because giving every ending a card flattens the two that matter.
   const kind = entry.panel_state === 'indeterminate' ? 'indeterminate'
@@ -363,6 +370,28 @@ function Outcome({entry, labels, limits, live, allowedOrigins, onOpenTarget}: {
     )
   }
   const Icon = kind === 'indeterminate' ? AlertTriangle : CircleAlert
+  const reconciliation = kind === 'indeterminate' ? (localReconciliation ?? entry.reconciliation ?? null) : null
+  const statusLabel = reconciliation
+    ? reconciliation.outcome === 'completed'
+      ? labels.reconcileCompleted
+      : reconciliation.outcome === 'failed'
+        ? labels.reconcileNotApplied
+        : labels.reconcileUnknown
+    : null
+  const handleReconcile = async () => {
+    if (!onReconcile || reconciling) return
+    setReconciling(true)
+    try {
+      const result = await onReconcile(entry.turn_id, entry.proposal_digest)
+      if (result && typeof result === 'object' && 'outcome' in result) {
+        setLocalReconciliation(result)
+      }
+    } catch {
+      setLocalReconciliation({outcome: 'unknown', settled: false})
+    } finally {
+      setReconciling(false)
+    }
+  }
   return (
     <section className="woa-outcome" data-entry-id={entry.id} data-kind={kind}>
       <h3><Icon {...iconProps(14)} />
@@ -370,6 +399,28 @@ function Outcome({entry, labels, limits, live, allowedOrigins, onOpenTarget}: {
       <Answer text={entry.text.slice(0, limits.result_max_chars)}
               authored={entry.authored ?? 'server'} live={false}
               labels={labels} allowedOrigins={allowedOrigins} />
+      {kind === 'indeterminate' && reconciliation && statusLabel && (
+        <p className="woa-outcome__reconcile" data-outcome={reconciliation.outcome} role="status">
+          {reconciliation.outcome === 'completed'
+            ? <CircleCheck {...iconProps(14)} />
+            : reconciliation.outcome === 'failed'
+              ? <CircleSlash {...iconProps(14)} />
+              : <AlertTriangle {...iconProps(14)} />}
+          <span>{statusLabel}</span>
+          {reconciliation.message && (
+            <span className="woa-outcome__reconcile-msg">{reconciliation.message}</span>
+          )}
+        </p>
+      )}
+      {kind === 'indeterminate' && onReconcile && !reconciliation?.settled && (
+        <div className="woa-outcome__actions">
+          <button type="button" className="woa-btn woa-btn--ghost woa-outcome__reconcile-btn"
+                  disabled={reconciling} onClick={() => { void handleReconcile() }}>
+            <RefreshCw {...iconProps(14)} />
+            <span>{reconciling ? labels.reconciling : labels.reconcileStatus}</span>
+          </button>
+        </div>
+      )}
     </section>
   )
 }
@@ -382,6 +433,8 @@ export interface ThreadProps {
   onOpenTarget?: (target: AnswerTarget) => boolean
   onLoadOlder: () => void
   onRetry: () => void
+  onRetryTurn?: ((text: string) => void) | undefined
+  onReconcile?: ((turnId: string, proposalDigest?: string) => Promise<ReconciliationStatus> | void) | undefined
   children?: React.ReactNode
   /** Rendered as the last thing in the conversation: a confirmation belongs where the
       work it is about is, and inside the one box that scrolls. */
@@ -403,6 +456,7 @@ export function Thread(props: ThreadProps): React.JSX.Element {
   // counted as unseen behind a button nobody asked for.
   const follow = useRef(true)
   const gesture = useRef(0)
+  const lastScrollTop = useRef(0)
   const [detached, setDetached] = useState(false)
   // Whether anything sits scrolled up under the title bar, which then draws its rule.
   const [scrolled, setScrolled] = useState(false)
@@ -478,7 +532,12 @@ export function Thread(props: ThreadProps): React.JSX.Element {
   const pin = useCallback(() => {
     const root = scroller.current
     if (!root) return
-    root.scrollTo({top: root.scrollHeight, behavior: 'auto'})
+    if (typeof root.scrollTo === 'function') {
+      root.scrollTo({top: root.scrollHeight, behavior: 'auto'})
+    } else {
+      root.scrollTop = root.scrollHeight
+    }
+    lastScrollTop.current = root.scrollTop
     setDetached(false)
     setUnseen(0)
     follow.current = true
@@ -487,35 +546,47 @@ export function Thread(props: ThreadProps): React.JSX.Element {
   const jumpToLatest = useCallback(() => {
     const root = scroller.current
     if (!root) return
-    // Keep automatic following paused until the smooth scroll reaches the tail;
-    // a resize during the animation must not snap the reader there immediately.
-    follow.current = false
     const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-    root.scrollTo({top: root.scrollHeight, behavior: reducedMotion ? 'auto' : 'smooth'})
+    follow.current = true
+    setDetached(false)
+    setUnseen(0)
+    if (typeof root.scrollTo === 'function') {
+      root.scrollTo({top: root.scrollHeight, behavior: reducedMotion ? 'auto' : 'smooth'})
+    } else {
+      root.scrollTop = root.scrollHeight
+    }
+    lastScrollTop.current = root.scrollTop
   }, [])
 
   // One scroll listener decides both things: whether to keep following, and whether the
-  // reader is far enough away to be offered a way back. Only a deliberate gesture can
-  // turn following off -- a programmatic scroll always lands at the bottom, so it cannot.
+  // reader is far enough away to be offered a way back. Any upward scroll immediately
+  // detaches, and following re-engages only within REATTACH_BOTTOM (4px), via jumpLatest,
+  // or when submitting a new message.
   useEffect(() => {
     const root = scroller.current
     if (!root) return
+    lastScrollTop.current = root.scrollTop
     const note = () => { gesture.current = Date.now() }
     const onScroll = guarded('thread scroll', () => {
-      const distance = root.scrollHeight - root.scrollTop - root.clientHeight
-      const near = distance <= NEAR_BOTTOM
+      const currentTop = root.scrollTop
+      const delta = currentTop - lastScrollTop.current
+      lastScrollTop.current = currentTop
+      const distance = root.scrollHeight - currentTop - root.clientHeight
       // The person can keep scrolling while the request is in flight. Capture the actual
       // resting position, even when a slow history response outlives the gesture window.
       // The anchor retires after the newly prepended list has finished reflowing.
       if (anchor.current) captureAnchor()
-      if (near) {
+      const gestured = Date.now() - gesture.current < GESTURE_WINDOW_MS
+      if (delta < 0 && (gestured || distance > 0)) {
+        follow.current = false
+      } else if (distance <= REATTACH_BOTTOM) {
         follow.current = true
         setUnseen(0)
-      } else if (Date.now() - gesture.current < GESTURE_WINDOW_MS) {
+      } else if (gestured) {
         follow.current = false
       }
-      setDetached(distance > JUMP_REVEAL_DISTANCE)
-      setScrolled(root.scrollTop > 0)
+      setDetached(!follow.current && distance > JUMP_REVEAL_DISTANCE)
+      setScrolled(currentTop > 0)
     })
     root.addEventListener('scroll', onScroll, {passive: true})
     root.addEventListener('wheel', note, {passive: true})
@@ -614,7 +685,13 @@ export function Thread(props: ThreadProps): React.JSX.Element {
       )}
       {loading ? <Skeleton /> : historyUnavailable ? null : empty ? props.children : (
         <ol className="woa-turns">
-          {turns.map(turn => (
+          {turns.map(turn => {
+            const retryableFailure = !turn.running && Boolean(turn.goal?.text) && (
+              turn.outcome
+                ? (turn.outcome.panel_state === 'error' && Boolean(turn.outcome.retryable))
+                : turn.steps.some(step => step.panel_state === 'error' && Boolean(step.retryable))
+            )
+            return (
             <li className="woa-turn" key={turn.id || 'session'} data-turn-id={turn.id}
                 data-settled={turn.running ? undefined : 'true'}>
               {turn.goal && <p className="woa-user" data-entry-id={turn.goal.id}>{turn.goal.text}</p>}
@@ -632,11 +709,23 @@ export function Thread(props: ThreadProps): React.JSX.Element {
                 {turn.outcome?.text && (
                   <Outcome entry={turn.outcome} labels={labels} limits={limits}
                            live={!turn.outcome.replayed && !settledAtMount.current?.has(turn.outcome.id)}
-                           allowedOrigins={allowedOrigins} onOpenTarget={props.onOpenTarget} />
+                           allowedOrigins={allowedOrigins} onOpenTarget={props.onOpenTarget}
+                           onReconcile={props.onReconcile} />
+                )}
+                {retryableFailure && props.onRetryTurn && turn.goal?.text && (
+                  <div className="woa-turn__actions">
+                    <button type="button" className="woa-btn woa-btn--ghost woa-turn__retry"
+                            disabled={snapshot.connection.busy || snapshot.closed}
+                            onClick={() => props.onRetryTurn?.(turn.goal!.text)}>
+                      <RotateCcw {...iconProps(14)} />
+                      <span>{labels.retryTurn}</span>
+                    </button>
+                  </div>
                 )}
               </div>
             </li>
-          ))}
+            )
+          })}
         </ol>
       )}
       {snapshot.optimistic && (

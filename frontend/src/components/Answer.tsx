@@ -1,62 +1,11 @@
 import {memo, useMemo, useState} from 'react'
-import type {Block, Inline} from '../markdown/parse'
+import type {Block} from '../markdown/parse'
 import {countCharacters, parseMarkdown} from '../markdown/parse'
 import type {Labels} from '../contract/panel'
 import {useReveal} from '../state/typewriter'
 import {CopyButton} from './CopyButton'
-
-/** A budget that walks the tree once per render, revealing a prefix of the visible text. */
-class Budget {
-  private left: number
-
-  constructor(limit: number) {
-    this.left = limit
-  }
-
-  take(text: string): string {
-    if (this.left <= 0) return ''
-    const slice = text.slice(0, this.left)
-    this.left -= slice.length
-    return slice
-  }
-
-  get exhausted(): boolean {
-    return this.left <= 0
-  }
-}
-
-function renderInline(nodes: Inline[], budget: Budget, allow: (href: string) => boolean): React.ReactNode[] {
-  const out: React.ReactNode[] = []
-  nodes.forEach((node, index) => {
-    if (budget.exhausted) return
-    switch (node.type) {
-      case 'text':
-        out.push(budget.take(node.value))
-        break
-      case 'code':
-        out.push(<code key={index} className="woa-md__code">{budget.take(node.value)}</code>)
-        break
-      case 'strong':
-        out.push(<strong key={index}>{renderInline(node.children, budget, allow)}</strong>)
-        break
-      case 'em':
-        out.push(<em key={index}>{renderInline(node.children, budget, allow)}</em>)
-        break
-      case 'link':
-        // Model output is untrusted. A link only becomes clickable when it points at an
-        // origin this session is already bound to; anything else renders as plain text.
-        out.push(allow(node.href)
-          ? (
-            <a key={index} href={node.href} rel="noreferrer noopener" target="_blank">
-              {renderInline(node.children, budget, allow)}
-            </a>
-          )
-          : <span key={index} className="woa-md__inert">{renderInline(node.children, budget, allow)}</span>)
-        break
-    }
-  })
-  return out
-}
+import {DataTable} from './DataTable'
+import {Budget, renderInline} from './inline'
 
 function CodeBlock({block, labels}: {block: Extract<Block, {type: 'code'}>; labels: Labels}): React.JSX.Element {
   const lines = block.value.split('\n')
@@ -81,6 +30,10 @@ function CodeBlock({block, labels}: {block: Extract<Block, {type: 'code'}>; labe
 
 function renderBlock(block: Block, key: number, budget: Budget, labels: Labels,
                      allow: (href: string) => boolean): React.ReactNode {
+  // Tables render immediately and bypass typewriter animation even in live mode.
+  if (block.type === 'table') {
+    return <DataTable key={key} block={block} labels={labels} allow={allow} />
+  }
   if (budget.exhausted) return null
   switch (block.type) {
     case 'paragraph':
@@ -108,30 +61,13 @@ function renderBlock(block: Block, key: number, budget: Budget, labels: Labels,
     case 'code':
       return budget.take(block.value).length
         ? <CodeBlock key={key} block={block} labels={labels} /> : null
-    case 'table':
-      return (
-        <div key={key} className="woa-md__tablewrap">
-          <table>
-            <thead>
-              <tr>{block.head.map((cell, index) => (
-                <th key={index} data-align={block.align[index] ?? 'left'}>
-                  {renderInline(cell, budget, allow)}
-                </th>
-              ))}</tr>
-            </thead>
-            <tbody>
-              {block.rows.map((row, rowIndex) => (
-                <tr key={rowIndex}>{row.map((cell, index) => (
-                  <td key={index} data-align={block.align[index] ?? 'left'}>
-                    {renderInline(cell, budget, allow)}
-                  </td>
-                ))}</tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )
   }
+}
+
+function countRevealCharacters(blocks: Block[]): number {
+  return blocks.reduce((total, block) => (
+    block.type === 'table' ? total : total + countCharacters([block])
+  ), 0)
 }
 
 export interface AnswerProps {
@@ -147,7 +83,7 @@ export const Answer = memo(function Answer(props: AnswerProps): React.JSX.Elemen
   const {text, authored, live, labels, allowedOrigins} = props
   // Parsed once per distinct text, never per frame: the reveal moves a number, not a parser.
   const blocks = useMemo(() => parseMarkdown(text), [text])
-  const total = useMemo(() => countCharacters(blocks), [blocks])
+  const total = useMemo(() => countRevealCharacters(blocks), [blocks])
   const reveal = useReveal(total, live && authored === 'model')
   const allow = useMemo(() => (href: string) => {
     try {

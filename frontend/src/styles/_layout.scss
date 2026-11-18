@@ -406,8 +406,9 @@
   color: var(--woa-ink-faint);
   flex: none;
 }
-.woa-icon-button:hover {
-  background: var(--woa-surface-muted);
+.woa-icon-button:hover,
+.woa-icon-button:focus-visible {
+  background: var(--woa-control-hover);
   color: var(--woa-ink);
 }
 .woa-icon-button {
@@ -419,6 +420,11 @@
 }
 .woa-titlebar .woa-icon-button {
   color: var(--woa-ink-muted);
+}
+.woa-titlebar .woa-icon-button:hover,
+.woa-titlebar .woa-icon-button:focus-visible {
+  background: var(--woa-control-hover);
+  color: var(--woa-ink);
 }
 
 /* A control that is only a glyph says what it does when pointed at or reached by keyboard.

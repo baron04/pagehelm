@@ -163,6 +163,13 @@ export function PanelWindow({host, allowedOrigins}: {
     call(() => host.submit(text))
   }, [call, host])
 
+  const reconcile = useMemo(
+    () => (typeof host.reconcile === 'function'
+      ? (turnId: string, proposalDigest?: string) => host.reconcile!(turnId, proposalDigest)
+      : undefined),
+    [host],
+  )
+
   // The shortcut works wherever focus is. On the host page it reaches the document; inside
   // the panel it never gets there -- the panel seals its events at its own boundary -- so
   // the window and the launcher answer it themselves.
@@ -287,6 +294,7 @@ export function PanelWindow({host, allowedOrigins}: {
                 allowedOrigins={allowedOrigins}
                 onOpenTarget={target => host.openAnswerTarget?.(target) ?? false}
                 onLoadOlder={loadOlder} onRetry={retrySubmit}
+                onRetryTurn={submit} onReconcile={reconcile}
                 footer={pending && approvalLive && (
                   <ApprovalCard approval={pending} labels={labels} limits={limits}
                                 visibility={visibility} busy={deciding}
