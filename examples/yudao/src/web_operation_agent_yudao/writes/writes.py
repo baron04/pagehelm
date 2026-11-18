@@ -1,8 +1,6 @@
 """Reviewed native writes under the same actor, with explicit compound effects."""
 from __future__ import annotations
 
-from web_operation_agent.execution.events import turn_interval
-
 import hashlib
 import json
 import time
@@ -13,7 +11,16 @@ from web_operation_agent.business.errors import (BusinessMutationIndeterminate,
 from web_operation_agent.business.tools.contracts import (BusinessMutationSpec,
     BusinessToolResult, MutationPostcondition, ToolOperation)
 from web_operation_agent.business.tools.registry import ToolDefinition, ToolRegistry
-from web_operation_agent.schemas.approval_details import ApprovalDetail
+from web_operation_agent.business.write_pipeline import (
+    ProposalDiff,
+    body_detail,
+    change_detail,
+    create_detail,
+    derived_detail,
+    execute_verified_handler_write,
+    preserved_detail,
+    side_effect_detail,
+)
 from .write_definitions import (object_schema as _object, text as _text,
                                 RECORD_OPERATIONS, record_entries)
 from .write_inputs import encode, recheck_choices, epoch
@@ -97,7 +104,7 @@ class NativeWriteHandler:
                                   "field": field, "display": name})
             values[field] = ids
             if names:
-                details.append(ApprovalDetail("side_effect", label,
+                details.append(side_effect_detail(label,
                     "、".join(names) + "；下次联系时间改为 " + args["nextTime"]))
         return values, relations, details
 
@@ -118,7 +125,7 @@ class NativeWriteHandler:
             bound = resolve_relation(self.client, relation, supplied[relation.input])
             body[relation.field] = bound["id"]
             relations.append(bound)
-            encoded_details.append(ApprovalDetail("change", relation.field, supplied[relation.input]))
+            encoded_details.append(create_detail(relation.field, supplied[relation.input]))
         aliases = {r.field: r.input for r in contract.relations}
         if update:
             record = self._target(contract.entity, args["target"], name_field=contract.name_field)
@@ -130,11 +137,14 @@ class NativeWriteHandler:
             for key, value in body.items():
                 # Keep application codes in private args; show selected labels and
                 # original local dates in the approval alongside current values.
-                details.append(ApprovalDetail("change", key,
-                    f"{record.get(key, '')} → {converted.get(key, supplied.get(aliases.get(key, key)))}"))
+                details.append(change_detail(
+                    key,
+                    str(record.get(key, "")),
+                    str(converted.get(key, supplied.get(aliases.get(key, key)))),
+                ))
             for key in contract.required:
                 if key not in body:
-                    details.append(ApprovalDetail("preserved", key, str(record[key])))
+                    details.append(preserved_detail(key, str(record[key])))
             body = {"id": record["id"], **{k: record[k] for k in contract.required}, **body}
             targets = [f"{record[contract.name_field]}（{contract.label} #{record['id']}）"]
         else:
@@ -144,15 +154,15 @@ class NativeWriteHandler:
                 if args.get("owner", "").strip() not in {"", *names}:
                     raise BusinessToolRequestError("creation only supports the current account as owner; this request requires a different operation")
                 body["ownerUserId"] = int(actor["id"])
-                details.extend((ApprovalDetail("derived", "负责人", f"当前账号：{actor.get('nickname') or actor.get('username') or actor['id']}"),
-                    ApprovalDetail("side_effect", "数据权限", f"为当前账号建立{contract.label} OWNER 权限")))
+                details.extend((derived_detail("负责人", f"当前账号：{actor.get('nickname') or actor.get('username') or actor['id']}"),
+                    side_effect_detail("数据权限", f"为当前账号建立{contract.label} OWNER 权限")))
             elif contract.owner_type:
-                details.append(ApprovalDetail("side_effect", "数据权限", "为指定负责人建立线索 OWNER 权限；当前账号须能回读全部效果。"))
+                details.append(side_effect_detail("数据权限", "为指定负责人建立线索 OWNER 权限；当前账号须能回读全部效果。"))
             if contract.prefix == "crm_contact":
                 customer = self._target("crm/customer", args["customer"])
                 body["customerId"] = customer["id"]
                 relations.append({"entity": "crm/customer", "id": customer["id"], "name": customer["name"]})
-                details.append(ApprovalDetail("derived", "所属客户", f"{customer['name']}（CRM 客户 #{customer['id']}）"))
+                details.append(derived_detail("所属客户", f"{customer['name']}（CRM 客户 #{customer['id']}）"))
             targets = [body[contract.name_field]]
         return contract.entity, ("修改" if update else "新建") + contract.label + "资料", body, before, targets, details, choices, relations, snapshot
 
@@ -179,10 +189,10 @@ class NativeWriteHandler:
             related_values, relations, related_details = self._prepare_relations(args, actor)
             body.update(related_values)
             details.extend(related_details)
-            details.append(ApprovalDetail("change", "跟进方式", args["type"]))
+            details.append(create_detail("跟进方式", args["type"]))
             zone = getattr(self.goal_data, "time_zone", "Asia/Shanghai")
             zone = zone() if callable(zone) else zone
-            details.append(ApprovalDetail("change", "nextTime", f"{args['nextTime']} ({zone})"))
+            details.append(create_detail("nextTime", f"{args['nextTime']} ({zone})"))
             # The deployment's Jackson serializer uses epoch milliseconds despite
             # OpenAPI describing date-time strings. Never send a formatted string:
             # the native deserializer silently turns that into epoch zero.
@@ -190,13 +200,13 @@ class NativeWriteHandler:
             choices.append({"field": "type", "type": "crm_follow_up_type", "label": args["type"], "code": body["type"]})
             effect = "新增 CRM 跟进记录并更新主对象跟进信息"
             targets = [f"{record['name']}（{entity} #{record['id']}）"]
-            details.append(ApprovalDetail("side_effect", "主对象跟进信息",
+            details.append(side_effect_detail("主对象跟进信息",
                 follow_up.approval_text()))
         else:
             raise BusinessToolRequestError("native operation is not installed")
         for key, value in body.items():
             if key not in {"id", "ownerUserId", "customerId", "bizId", "bizType"} and not any(d.label == key for d in details):
-                details.append(ApprovalDetail("body" if key == "content" else "change", key, str(value)))
+                details.append(body_detail(key, str(value)) if key == "content" else create_detail(key, str(value)))
         private = {"body": body, "before": before, "entity": entity,
                    "actor": str(actor["id"]), "operation": self.operation,
                    "choices": choices, "relations": relations}
@@ -210,124 +220,134 @@ class NativeWriteHandler:
             reconcile_meta["expected"] = {k: v for k, v in body.items() if k != "id"}
             if before:
                 reconcile_meta["before"] = {k: before[k] for k in reconcile_meta["expected"] if k in before}
-        return BusinessMutationSpec(private, effect, tuple(targets), reconcile_key=key,
-            details=tuple(details), reconciliation=reconcile_meta,
+        diff = ProposalDiff.from_details(targets, details)
+        return BusinessMutationSpec(private, effect, diff.targets, reconcile_key=key,
+            details=diff.details(), reconciliation=reconcile_meta,
             effect_projection=prepared_effect(self.operation, args, body, actor=actor,
                 choices=choices, relations=relations, snapshot=snapshot, goal_data=self.goal_data))
 
     def dispatch(self, args, *, context=None):
-        actor = self._actor(context)
-        if str(actor["id"]) != args["actor"] or args["operation"] != self.operation:
-            raise BusinessToolIdentityError("prepared native operation has a different actor")
         body, entity = args["body"], args["entity"]
-        preserved = {}
-        recheck_choices(self.client, args["choices"])
-        for relation in args["relations"]:
-            if "list_path" in relation:
-                recheck_relation(self.client, relation)
-                continue
-            current = self.client.get(relation["entity"] + "/get", id=relation["id"])
-            if not isinstance(current, dict) or current.get("name") != relation["name"] or current.get("id") != relation["id"]:
-                raise BusinessMutationRefusedError("related record changed after approval; prepare again", reason="precondition_changed")
-            if relation.get("field") in {"contactIds", "businessIds"}:
-                self._require_related_write(relation["entity"], relation["id"], actor)
-        if self.operation == "crm_follow_up_create":
-            follow_up = follow_up_target(entity)
-            current = self.client.get(entity + "/get", id=body["bizId"])
-            follow_up.require_readable(current)
-            self._require_follow_up_target_write(body["bizType"], body["bizId"])
-            if current.get("id") != body["bizId"] or body["bizType"] != follow_up.biz_type:
-                raise BusinessMutationRefusedError("follow-up target changed after approval", reason="precondition_changed")
-            choices = [row for row in self.client.get("system/dict-data/simple-list") or []
-                if row.get("dictType") == "crm_follow_up_type" and row.get("label") == args["follow_up_type"]]
-            if len(choices) != 1 or str(choices[0].get("value")) != str(body["type"]):
-                raise BusinessMutationRefusedError("follow-up dictionary changed after approval; prepare again",
-                                                   reason="precondition_changed")
-        if args["before"]:
-            current = self.client.get(entity + "/get", id=body["id"])
-            if not isinstance(current, dict) or any(current.get(k) != v for k, v in args["before"].items()):
-                raise BusinessMutationRefusedError("current record changed after approval; prepare again",
-                                                   reason="precondition_changed")
-            # Read immediately before dispatch. Concurrent unrelated changes that
-            # happened during approval are preserved rather than written back.
-            preserved = {key: current[key] for key in RECORD_OPERATIONS[self.operation].preserved - set(body)
-                         if key in current}
-        path = (entity + ("/update" if self.operation.endswith("update") else "/create")
-                if self.operation in RECORD_OPERATIONS else "crm/follow-up-record/create")
-        started_ms = int(time.time() * 1000)
-        uncertain_dispatch = False
-        try:
-            result_id = self.client.write_once("PUT" if self.operation.endswith("update") else "POST", path,
-                                               body=body, operation=self.operation)
-        except BusinessMutationIndeterminate:
+        is_update = self.operation.endswith("update")
+
+        def verify_actor():
+            actor = self._actor(context)
+            if str(actor["id"]) != args["actor"] or args["operation"] != self.operation:
+                raise BusinessToolIdentityError("prepared native operation has a different actor")
+            return actor
+
+        def pre_dispatch_reread(actor):
+            preserved = {}
+            recheck_choices(self.client, args["choices"])
+            for relation in args["relations"]:
+                if "list_path" in relation:
+                    recheck_relation(self.client, relation)
+                    continue
+                current = self.client.get(relation["entity"] + "/get", id=relation["id"])
+                if not isinstance(current, dict) or current.get("name") != relation["name"] or current.get("id") != relation["id"]:
+                    raise BusinessMutationRefusedError("related record changed after approval; prepare again", reason="precondition_changed")
+                if relation.get("field") in {"contactIds", "businessIds"}:
+                    self._require_related_write(relation["entity"], relation["id"], actor)
+            if self.operation == "crm_follow_up_create":
+                follow_up = follow_up_target(entity)
+                current = self.client.get(entity + "/get", id=body["bizId"])
+                follow_up.require_readable(current)
+                self._require_follow_up_target_write(body["bizType"], body["bizId"])
+                if current.get("id") != body["bizId"] or body["bizType"] != follow_up.biz_type:
+                    raise BusinessMutationRefusedError("follow-up target changed after approval", reason="precondition_changed")
+                choices = [row for row in self.client.get("system/dict-data/simple-list") or []
+                    if row.get("dictType") == "crm_follow_up_type" and row.get("label") == args["follow_up_type"]]
+                if len(choices) != 1 or str(choices[0].get("value")) != str(body["type"]):
+                    raise BusinessMutationRefusedError("follow-up dictionary changed after approval; prepare again",
+                                                       reason="precondition_changed")
+            if args["before"]:
+                current = self.client.get(entity + "/get", id=body["id"])
+                if not isinstance(current, dict) or any(current.get(k) != v for k, v in args["before"].items()):
+                    raise BusinessMutationRefusedError("current record changed after approval; prepare again",
+                                                       reason="precondition_changed")
+                # Read immediately before dispatch. Concurrent unrelated changes that
+                # happened during approval are preserved rather than written back.
+                preserved = {key: current[key] for key in RECORD_OPERATIONS[self.operation].preserved - set(body)
+                             if key in current}
+            path = (entity + ("/update" if is_update else "/create")
+                    if self.operation in RECORD_OPERATIONS else "crm/follow-up-record/create")
+            return {"preserved": preserved, "path": path,
+                    "method": "PUT" if is_update else "POST", "started_ms": 0}
+
+        def dispatch_once(_actor, reread_state):
+            reread_state["started_ms"] = int(time.time() * 1000)
+            return self.client.write_once(reread_state["method"], reread_state["path"],
+                                          body=body, operation=self.operation)
+
+        def verify_readback(actor, reread_state, dispatch_result, _uncertain):
+            record_id = body.get("id") if is_update else dispatch_result
+            read_path = "crm/follow-up-record/page" if self.operation == "crm_follow_up_create" else entity + "/get"
+            actual = self._follow_up_readback(body, record_id) if self.operation == "crm_follow_up_create" else self.client.get(read_path, id=record_id)
+            if (not isinstance(actual, dict) or str(actual.get("id")) != str(record_id)
+                    or any((not isinstance(actual.get(k), list) or len(actual[k]) != len(v)
+                            or set(actual[k]) != set(v)) if k in {"contactIds", "businessIds"}
+                           else actual.get(k) != v for k, v in body.items())):
+                raise BusinessMutationIndeterminate("native record does not confirm all approved fields", phase="postcondition",
+                                                    reconciliation={"id": record_id, "entity": read_path})
+            effects = [{"effect": "record", "verified": True, "id": record_id}]
+            preserved = reread_state["preserved"]
+            if preserved and any(key not in actual or actual[key] != value for key, value in preserved.items()):
+                raise BusinessMutationIndeterminate("native update acknowledged; unrelated business values are not preserved",
+                    phase="postcondition", reconciliation={"id": record_id, "effects": effects,
+                        "unverified_effect": "unrelated_field_preservation"})
+            if self.operation in RECORD_OPERATIONS and is_update:
+                effects.append({"effect": "unrelated_field_preservation", "verified": True, "id": record_id})
+            contract = RECORD_OPERATIONS.get(self.operation)
+            if contract is not None and contract.owner_type and self.operation.endswith("create"):
+                grants = self.client.get("crm/permission/list", bizType=contract.owner_type, bizId=record_id)
+                owner_verified = isinstance(grants, list) and any(
+                    str(g.get("userId")) == str(body["ownerUserId"]) and g.get("level") == 1 for g in grants)
+                effects.append({"effect": "owner_permission", "verified": owner_verified, "id": record_id})
+                if not owner_verified:
+                    raise BusinessMutationIndeterminate("customer exists; OWNER permission is not verified",
+                        phase="postcondition", reconciliation={"effects": effects})
+            if self.operation == "crm_follow_up_create":
+                follow_up = follow_up_target(entity)
+                main = self.client.get(entity + "/get", id=body["bizId"])
+                verified = follow_up.verified(main, body, reread_state["started_ms"], int(time.time() * 1000))
+                effects.append({"effect": "main_follow_up", "verified": verified, "id": body["bizId"]})
+                if not verified:
+                    raise BusinessMutationIndeterminate("follow-up record exists; main object is not verified",
+                        phase="postcondition", reconciliation={"effects": effects})
+                linked = [r for r in args["relations"] if r.get("field") in {"contactIds", "businessIds"}]
+                if linked:
+                    related_verified = True
+                    for relation in linked:
+                        related = self.client.get(relation["entity"] + "/get", id=relation["id"])
+                        related_verified = related_verified and isinstance(related, dict) and (
+                            related.get("id") == relation["id"] and
+                            related.get("contactNextTime") == body["nextTime"])
+                    effects.append({"effect": "related_follow_up", "verified": related_verified})
+                    if not related_verified:
+                        raise BusinessMutationIndeterminate("follow-up exists; related next-contact times are not verified",
+                            phase="postcondition", reconciliation={"effects": effects})
+            name = actual.get(contract.name_field if contract else "name")
+            reference = f"{name}（ID={record_id}）" if name else ""
+            return BusinessToolResult({"verified": True, "record_id": str(record_id), "entity": entity,
+                "reference": reference,
+                "effects": effects}, {"verified": True, "operation": self.operation, "effects": effects})
+
+        return execute_verified_handler_write(
+            verify_actor=verify_actor,
+            pre_dispatch_reread=pre_dispatch_reread,
+            dispatch_once=dispatch_once,
+            verify_readback=verify_readback,
+            invalidate_reads=lambda: self.goal_data.invalidate_reads(
+                frozenset({entity, *(r["entity"] for r in args["relations"])})
+            ),
             # An update already has an exact record ID. Its full actor readback
-            # below may prove all approved effects despite a lost/error response.
+            # may prove all approved effects despite a lost/error response.
             # A create without an acknowledged ID cannot be attributed safely.
-            if not self.operation.endswith("update"):
-                raise
-            result_id = body["id"]
-            uncertain_dispatch = True
-        record_id = body.get("id") if self.operation.endswith("update") else result_id
-        with turn_interval("verification"):
-            try:
-                read_path = "crm/follow-up-record/page" if self.operation == "crm_follow_up_create" else entity + "/get"
-                actual = self._follow_up_readback(body, record_id) if self.operation == "crm_follow_up_create" else self.client.get(read_path, id=record_id)
-                if (not isinstance(actual, dict) or str(actual.get("id")) != str(record_id)
-                        or any((not isinstance(actual.get(k), list) or len(actual[k]) != len(v)
-                                or set(actual[k]) != set(v)) if k in {"contactIds", "businessIds"}
-                               else actual.get(k) != v for k, v in body.items())):
-                    raise BusinessMutationIndeterminate("native record does not confirm all approved fields", phase="postcondition",
-                                                        reconciliation={"id": record_id, "entity": read_path})
-                effects = [{"effect": "record", "verified": True, "id": record_id}]
-                if preserved and any(key not in actual or actual[key] != value for key, value in preserved.items()):
-                    raise BusinessMutationIndeterminate("native update acknowledged; unrelated business values are not preserved",
-                        phase="postcondition", reconciliation={"id": record_id, "effects": effects,
-                            "unverified_effect": "unrelated_field_preservation"})
-                if self.operation in RECORD_OPERATIONS and self.operation.endswith("update"):
-                    effects.append({"effect": "unrelated_field_preservation", "verified": True, "id": record_id})
-                contract = RECORD_OPERATIONS.get(self.operation)
-                if contract is not None and contract.owner_type and self.operation.endswith("create"):
-                    grants = self.client.get("crm/permission/list", bizType=contract.owner_type, bizId=record_id)
-                    owner_verified = isinstance(grants, list) and any(
-                        str(g.get("userId")) == str(body["ownerUserId"]) and g.get("level") == 1 for g in grants)
-                    effects.append({"effect": "owner_permission", "verified": owner_verified, "id": record_id})
-                    if not owner_verified:
-                        raise BusinessMutationIndeterminate("customer exists; OWNER permission is not verified",
-                            phase="postcondition", reconciliation={"effects": effects})
-                if self.operation == "crm_follow_up_create":
-                    main = self.client.get(entity + "/get", id=body["bizId"])
-                    verified = follow_up.verified(main, body, started_ms, int(time.time() * 1000))
-                    effects.append({"effect": "main_follow_up", "verified": verified, "id": body["bizId"]})
-                    if not verified:
-                        raise BusinessMutationIndeterminate("follow-up record exists; main object is not verified",
-                            phase="postcondition", reconciliation={"effects": effects})
-                    linked = [r for r in args["relations"] if r.get("field") in {"contactIds", "businessIds"}]
-                    if linked:
-                        related_verified = True
-                        for relation in linked:
-                            related = self.client.get(relation["entity"] + "/get", id=relation["id"])
-                            related_verified = related_verified and isinstance(related, dict) and (
-                                related.get("id") == relation["id"] and
-                                related.get("contactNextTime") == body["nextTime"])
-                        effects.append({"effect": "related_follow_up", "verified": related_verified})
-                        if not related_verified:
-                            raise BusinessMutationIndeterminate("follow-up exists; related next-contact times are not verified",
-                                phase="postcondition", reconciliation={"effects": effects})
-            except BusinessMutationIndeterminate:
-                raise
-            except Exception as exc:
-                raise BusinessMutationIndeterminate("native write acknowledged; actor readback failed", phase="postcondition",
-                                                    reconciliation={"id": record_id}) from exc
-        self.goal_data.invalidate_reads(frozenset({entity, *(r["entity"] for r in args["relations"])}))
-        if uncertain_dispatch:
-            from web_operation_agent.business.dispatch_evidence import verified_after_readback
-            verified_after_readback()
-        contract = RECORD_OPERATIONS.get(self.operation)
-        name = actual.get(contract.name_field if contract else "name")
-        reference = f"{name}（ID={record_id}）" if name else ""
-        return BusinessToolResult({"verified": True, "record_id": str(record_id), "entity": entity,
-            "reference": reference,
-            "effects": effects}, {"verified": True, "operation": self.operation, "effects": effects})
+            allow_readback_recovery=is_update,
+            use_verification_interval=True,
+            readback_failure_message="native write acknowledged; actor readback failed",
+            readback_reconciliation=lambda _rs, dr: {"id": body.get("id") if is_update else dr},
+        )
 
     def _follow_up_readback(self, body, record_id):
         # Use the native UI's actor-scoped list contract. Its /get endpoint tests

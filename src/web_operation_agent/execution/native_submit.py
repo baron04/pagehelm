@@ -25,8 +25,13 @@ from urllib.parse import urlsplit
 from .model_loop_contracts import LoopToolResult
 from .submit_contract import (ContractRefused, FormData, SubmitCard, SubmitPermit, build_card,
                               diff_models, digest, is_empty, same_value, strip_volatile, terminal_state)
+from ..business.write_pipeline import (
+    WritePipeline,
+    check_append_preservation,
+    verify_value_sources,
+)
 from ..privacy import redact_sensitive_assignments, redact_session_handoffs
-from .value_source import Entry, SourceLedger, append_overwrites_existing, check_entries, note_receipt
+from .value_source import Entry, SourceLedger, note_receipt
 
 #: The control the model names; the program decides everything else.
 REQUEST_SUBMIT_TOOL = {"type": "function", "function": {
@@ -591,11 +596,10 @@ class NativeSubmitMixin:
                     label = loaded.label(prop)
                     if label:
                         existing_fields[label] = val
-        verdicts = check_entries(ledger, words, existing=existing_fields or None)
+        verdicts, missing = verify_value_sources(ledger, words, existing=existing_fields or None)
         s.ledger.append("native_submit_value_sources", step=s.step,
                         checks=[{"field": v.entry.field, "ok": v.ok, "source": v.source,
                                  "reason": v.reason, **({"value": v.entry.value} if not v.ok else {})} for v in verdicts])
-        missing = [v for v in verdicts if not v.ok]
         if missing:
             # An unsourced value is refused before the card: the model must ask the
             # person instead of presenting invented values for approval.
@@ -686,17 +690,14 @@ class NativeSubmitMixin:
     def _check_append_overwrite(prompt: str, before: dict | None, current: FormData) -> None:
         if not isinstance(before, dict):
             return
-        overwritten: list[str] = []
-        for prop, new_val in current.model.items():
-            if not isinstance(new_val, str):
-                continue
-            old_val = before.get(prop)
-            label = current.label(prop) or prop
-            if (append_overwrites_existing(prompt, label, old_val, new_val)
-                    or append_overwrites_existing(prompt, prop, old_val, new_val)):
-                overwritten.append(label)
+        checks = (
+            ((current.label(prop) or prop, prop), before.get(prop), new_val)
+            for prop, new_val in current.model.items()
+            if isinstance(new_val, str)
+        )
+        overwritten = check_append_preservation(prompt, checks)
         if overwritten:
-            raise ContractRefused("append_overwrite", "、".join(dict.fromkeys(overwritten)))
+            raise ContractRefused("append_overwrite", "、".join(overwritten))
 
     @staticmethod
     def _requested_fields(form: FormData, ledger: SourceLedger) -> frozenset:
@@ -750,6 +751,13 @@ class NativeSubmitMixin:
         return self._approve_and_press(s, element, turn, card, prefixes, baseline,
                                        kind="row", record_id=record_id, row_check=str(row.get("check") or ""))
 
+    def _submit_pipeline(self) -> WritePipeline:
+        pipeline = getattr(self, "_native_submit_pipeline", None)
+        if pipeline is None:
+            pipeline = WritePipeline()
+            self._native_submit_pipeline = pipeline
+        return pipeline
+
     # -- approval, press, readback -----------------------------------------------------
     def _approve_and_press(self, s, element, turn, card: SubmitCard, prefixes, baseline, *,
                            kind, check="", record_id="", loaded=None, row_check="") -> LoopToolResult:
@@ -770,65 +778,92 @@ class NativeSubmitMixin:
         s.write_intent = True
         turn["submit_started"] = True
         identity = context.audit_projection() if context is not None else {}
-        approval = s.approvals.approve_mutation(proposal, step=step, tool=proposal.tool,
-                                                context=context, identity=identity)
-        if not approval.approved:
+
+        def on_not_approved(approval) -> LoopToolResult:
             s.terminal_reason, s.detail = approval.reason, approval.detail[:200]
             turn["final"] = {"approval_denied": "你没有批准，助手未提交这项修改。",
                              "approval_expired": "批准卡片已过期，助手未提交这项修改。",
                              "user_cancelled": "助手操作已停止，未提交这项修改。"}.get(approval.reason, "助手未提交这项修改。")
             return LoopToolResult(turn["final"], kind="write", state="refused",
                                   terminal_reason=s.terminal_reason)
-        # What was approved must still be what is on the page and in the record.
-        try:
+
+        def pre_dispatch_reread():
             if kind == "form":
                 fresh, fresh_raw = self._read_form(s, element)
                 if fresh_raw.get("check") != check or fresh.digest != card.form.digest:
-                    return self._stopped(s, turn, "form_changed", "批准之后表单里的数据又变了")
+                    raise ContractRefused("form_changed", "批准之后表单里的数据又变了")
             else:
                 row = self._read(s, element, "row")
                 if str(row.get("record_id") or "") != record_id or str(row.get("check") or "") != row_check:
-                    return self._stopped(s, turn, "row_changed", "批准之后这一行不再是原来的记录")
+                    raise ContractRefused("row_changed", "批准之后这一行不再是原来的记录")
             now = port.read_record(prefixes, card.record_id) if card.mode != "create" else None
             if card.mode != "create":
                 if now is None:
-                    return self._stopped(s, turn, "record_unreadable", "没能重新读取目标记录")
+                    raise ContractRefused("record_unreadable", "没能重新读取目标记录")
                 if not same_value(strip_volatile(now, conventions.volatile_keys),
                                   strip_volatile(baseline, conventions.volatile_keys),
                                   zone=conventions.epoch_zone):
-                    return self._stopped(s, turn, "record_changed", "批准之后这条记录被别人改过")
-        except ContractRefused as exc:
-            return self._stopped(s, turn, exc.code, exc.detail or "核对没有通过")
-        s.ledger.append("native_submit_reread", step=step, form_digest=card.form.digest if card.form else "",
-                        prefixes=list(prefixes), documented_writes=sorted(f"{m} {p}" for m, p in port.catalog(prefixes))[:12],
-                        record_digest=digest(now) if now is not None else "",
-                        dispatched=False, side_effect_possible=False)
-        self._private_submit_record(s, "before_click", record=now)
-        permit = SubmitPermit(
-            actor="", card=card, prefixes=prefixes, catalog=port.catalog(prefixes),
-            conventions=conventions, baseline=baseline,
-            reread=(lambda: port.read_record(prefixes, card.record_id)) if card.mode != "create" else None,
-            reread_observer=lambda record: self._private_submit_record(s, "before_release", record=record))
-        s.ledger.append("native_submit_approved", step=step, approval_id=approval.approval_id,
-                        permit=permit.permit_id, dispatched=False,
-                        side_effect_possible=False)
-        label = element.name.strip()
-        press = ({"ref": element.ref, "kind": "form", "check": check, "label": label} if kind == "form"
-                 else {"ref": element.ref, "kind": "row", "record_id": record_id, "label": label, "row_check": row_check})
-        broken, confirmed = "", ""
-        try:
-            clicked = self._press(s, permit, press)
-            if not clicked:
+                    raise ContractRefused("record_changed", "批准之后这条记录被别人改过")
+            return now
+
+        def on_reread_drift(exc: Exception) -> LoopToolResult:
+            if isinstance(exc, ContractRefused):
+                return self._stopped(s, turn, exc.code, exc.detail or "核对没有通过")
+            return self._stopped(s, turn, "record_unreadable", "核对没有通过")
+
+        state_holder: dict = {}
+
+        def dispatch_once(approval, now):
+            s.ledger.append("native_submit_reread", step=step, form_digest=card.form.digest if card.form else "",
+                            prefixes=list(prefixes), documented_writes=sorted(f"{m} {p}" for m, p in port.catalog(prefixes))[:12],
+                            record_digest=digest(now) if now is not None else "",
+                            dispatched=False, side_effect_possible=False)
+            self._private_submit_record(s, "before_click", record=now)
+            permit = SubmitPermit(
+                actor="", card=card, prefixes=prefixes, catalog=port.catalog(prefixes),
+                conventions=conventions, baseline=baseline,
+                reread=(lambda: port.read_record(prefixes, card.record_id)) if card.mode != "create" else None,
+                reread_observer=lambda record: self._private_submit_record(s, "before_release", record=record))
+            s.ledger.append("native_submit_approved", step=step, approval_id=approval.approval_id,
+                            permit=permit.permit_id, dispatched=False,
+                            side_effect_possible=False)
+            state_holder["permit"] = permit
+            label = element.name.strip()
+            press = ({"ref": element.ref, "kind": "form", "check": check, "label": label} if kind == "form"
+                     else {"ref": element.ref, "kind": "row", "record_id": record_id, "label": label, "row_check": row_check})
+            broken, confirmed = "", ""
+            try:
+                clicked = self._press(s, permit, press)
+                if not clicked:
+                    return False, ("permit_unavailable", None)
+                confirmed = self._handle_confirmation(s, permit, card)
+            except Exception as exc:  # noqa: BLE001 -- after a click nothing can be assumed not to have been sent
+                broken = type(exc).__name__
+                s.ledger.append("native_submit_exception", step=step, permit=permit.permit_id, error_type=broken,
+                                dispatched=True, side_effect_possible=True)
+            return bool(broken), confirmed
+
+        def settle_and_readback(_approval, uncertain: bool, confirmed):
+            permit = state_holder["permit"]
+            if isinstance(confirmed, tuple) and confirmed[0] == "permit_unavailable":
                 return self._stopped(s, turn, "permit_unavailable", "这次提交的许可没能建立（上一次请求结果未确认，或另一个许可仍在使用）")
-            confirmed = self._handle_confirmation(s, permit, card)
-        except Exception as exc:  # noqa: BLE001 -- after a click nothing can be assumed not to have been sent
-            broken = type(exc).__name__
-            s.ledger.append("native_submit_exception", step=step, permit=permit.permit_id, error_type=broken,
-                            dispatched=True, side_effect_possible=True)
-        if confirmed == "refused":
-            return self._finish_submit(s, turn, permit, card, prefixes, baseline, readback=None,
-                                       extra="应用弹出的确认框里有卡上没有的后果，已取消，没有执行。")
-        return self._finish_submit(s, turn, permit, card, prefixes, baseline, uncertain=bool(broken))
+            if confirmed == "refused":
+                return self._finish_submit(s, turn, permit, card, prefixes, baseline, readback=None,
+                                           extra="应用弹出的确认框里有卡上没有的后果，已取消，没有执行。")
+            return self._finish_submit(s, turn, permit, card, prefixes, baseline, uncertain=uncertain)
+
+        return self._submit_pipeline().run_submit_pipeline(
+            proposal=proposal,
+            approvals=s.approvals,
+            step=step,
+            context=context,
+            identity=identity,
+            on_not_approved=on_not_approved,
+            pre_dispatch_reread=pre_dispatch_reread,
+            on_reread_drift=on_reread_drift,
+            dispatch_once=dispatch_once,
+            settle_and_readback=settle_and_readback,
+        )
 
     def _stopped(self, s, turn, code, detail) -> LoopToolResult:
         s.ledger.append("native_submit_not_sent", step=s.step, code=code, detail=detail,
