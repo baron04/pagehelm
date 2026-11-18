@@ -53,9 +53,54 @@ from .product import AgentTurnError, AgentTurnErrorCode, AgentTurnExecution, pag
 from ..answer.answering import render_structured_query_answer
 from .read_summary import SummaryResult, render_summary
 from . import answer_check, loop_guard
-from .answer_check import history_messages
-from .loop_guard import (_ACTION_WORDS, _NOT_EXECUTED, _NOT_EXECUTED_EN,
-                         _TRANSIENT_FAILURES)
+from .answer_check import (
+    MODEL_DELIVERY_REJECTED_SPEC,
+    UNTRACED_NUMBERS_SPEC,
+    history_messages,
+)
+from .checks import ProgramCheckSpec, record_check_fired
+from .loop_guard import (
+    FAILED_READ_REPEATED_SPEC,
+    SAME_STEP_STALLED_SPEC,
+    _ACTION_WORDS,
+    _NOT_EXECUTED,
+    _NOT_EXECUTED_EN,
+    _TRANSIENT_FAILURES,
+)
+
+COMPLETION_REVIEW_SPEC = ProgramCheckSpec(
+    name="completion_review",
+    checks_what="independent completion verification confirms the final answer satisfies the full request when required",
+    retry_guidance="return disputed verification problems with current observation once for target or answer correction",
+    terminal_delivery="block completion as agent_refused when verification is unavailable or remains disputed on the second attempt",
+)
+
+SLIM_VERIFY_SPEC = ProgramCheckSpec(
+    name="slim_verify",
+    checks_what="independent review confirms unsaid page-entered values match the user's request",
+    retry_guidance="return disputed review points as non-binding second-reading guidance with current observation",
+    terminal_delivery="block completion as agent_refused when independent verification is unavailable",
+)
+
+MODEL_ANSWER_NOT_DELIVERED_SPEC = ProgramCheckSpec(
+    name="model_answer_not_delivered",
+    checks_what="assistant replies use tool calls or finish rather than undelivered plain intermediate text",
+    retry_guidance="redact plain intermediate text from decision history and instruct the model to continue with tools or finish",
+    terminal_delivery="block as agent_refused after repeated plain-text replies without returning unchecked draft text to the user",
+)
+
+CORE_CHECK_SPECS: dict[str, ProgramCheckSpec] = {
+    spec.name: spec
+    for spec in (
+        UNTRACED_NUMBERS_SPEC,
+        MODEL_DELIVERY_REJECTED_SPEC,
+        COMPLETION_REVIEW_SPEC,
+        SLIM_VERIFY_SPEC,
+        FAILED_READ_REPEATED_SPEC,
+        SAME_STEP_STALLED_SPEC,
+        MODEL_ANSWER_NOT_DELIVERED_SPEC,
+    )
+}
 
 
 _SKILL_CHARS, _WRITE_CORRECTIONS = 8000, 3
@@ -1522,11 +1567,29 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                 # remain in force; ordinary data answers need no extra review here.
                 nudges += 1
                 if nudges > 2:
+                    record_check_fired(
+                        s.ledger,
+                        s=s,
+                        trace=trace,
+                        check=MODEL_ANSWER_NOT_DELIVERED_SPEC.name,
+                        outcome="blocked",
+                        attempt=nudges,
+                        answer_preserved=False,
+                    )
                     s.terminal_reason = "agent_refused"
                     s.detail = "answer protocol unresolved"
                     harness.set_stop_reason(s, "answer_protocol_unresolved", trace=trace)
                     return ("模型未返回可核验的最终答复，本次没有完成。" if getattr(s, "chinese", True)
                             else "The model did not return a verifiable final answer. This turn is incomplete.")
+                record_check_fired(
+                    s.ledger,
+                    s=s,
+                    trace=trace,
+                    check=MODEL_ANSWER_NOT_DELIVERED_SPEC.name,
+                    outcome="returned",
+                    attempt=1,
+                    answer_preserved=False,
+                )
                 self._messages.append({"role": "user", "content":
                     "刚才的普通中间输出没有发送给用户。请用工具继续；全部完成或确实做不到时调用 finish，"
                     "把完整正文写入 finish.answer。" + (
@@ -1724,6 +1787,15 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                     s.ledger.append("failed_read_repeated", tool=name, error_code=failed_before,
                                     repeats=repeats[call_key])
                     if repeats[call_key] >= 2:
+                        record_check_fired(
+                            s.ledger,
+                            s=s,
+                            trace=trace,
+                            check=FAILED_READ_REPEATED_SPEC.name,
+                            outcome="blocked",
+                            attempt=1,
+                            answer_preserved=False,
+                        )
                         s.terminal_reason, s.detail = "agent_refused", "a failed read was repeated unchanged"
                         harness.set_stop_reason(s, "failed_read_repeated", trace=trace)
                         return self._repeat_fallback(s, prompt, turn, name, failed_before)
@@ -1738,6 +1810,15 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                     # The same step from a page that shows the same: it led nowhere the first time.
                     turn["stalled"] += 1
                     if turn["stalled"] > 3:
+                        record_check_fired(
+                            s.ledger,
+                            s=s,
+                            trace=trace,
+                            check=SAME_STEP_STALLED_SPEC.name,
+                            outcome="blocked",
+                            attempt=turn["stalled"],
+                            answer_preserved=False,
+                        )
                         s.terminal_reason, s.detail = "agent_refused", "the same page step was repeated without effect"
                         harness.set_stop_reason(s, "same_step_stalled", trace=trace)
                         return "同一步重复了几次都没有效果，本次没有完成。"
@@ -1795,6 +1876,15 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                         turn["numbers_sent_back"] = True
                         turn["pending_numeric_finish"] = (dict(finish), tuple(untraced))
                         s.ledger.append("untraced_numbers", numbers=list(untraced), sent_back=True)
+                        record_check_fired(
+                            s.ledger,
+                            s=s,
+                            trace=trace,
+                            check=UNTRACED_NUMBERS_SPEC.name,
+                            outcome="returned",
+                            attempt=1,
+                            answer_preserved=False,
+                        )
                         self._messages.append({"role": "user", "content":
                             "以下值在本轮读取中找不到：" + "、".join(untraced)
                             + "；请改用读到的值。编号必须逐字保留；其它数值可说明计算依据或无法核实，然后重新调用 finish。"})
@@ -1812,12 +1902,30 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                 count = turn["completion_reviews"] = turn.get("completion_reviews", 0) + 1
                 s.ledger.append("completion_review", state=review.state, attempt=count)
                 if review.state == "unavailable" or review.state == "disputed" and count >= 2:
+                    record_check_fired(
+                        s.ledger,
+                        s=s,
+                        trace=trace,
+                        check=COMPLETION_REVIEW_SPEC.name,
+                        outcome="blocked",
+                        attempt=count,
+                        answer_preserved=False,
+                    )
                     s.terminal_reason, s.detail = "agent_refused", "completion verification unresolved"
                     harness.set_stop_reason(s, "completion_review_unresolved", trace=trace)
                     return ("尚未核对到用户要求的完整结果，请核对当前记录后重新发起。"
                             if getattr(s, "chinese", True) else
                             "The complete requested result could not be verified. Check the current record and try again.")
                 if review.state == "disputed":
+                    record_check_fired(
+                        s.ledger,
+                        s=s,
+                        trace=trace,
+                        check=COMPLETION_REVIEW_SPEC.name,
+                        outcome="returned",
+                        attempt=count,
+                        answer_preserved=False,
+                    )
                     self._messages.append({"role": "user", "_observation": True, "content":
                         "尚未完成原请求：" + "；".join(review.problems)
                         + "。请核对完整原话和当前真实页面，修正目标后再结束；已执行的写入不能重发。\n"
@@ -1831,10 +1939,28 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                     s.terminal_reason, s.detail = "agent_refused", "completion verification unavailable"
                     harness.set_stop_reason(s, "completion_verification_unavailable", trace=trace)
                     s.ledger.append("model_loop_verification_unavailable")
+                    record_check_fired(
+                        s.ledger,
+                        s=s,
+                        trace=trace,
+                        check=SLIM_VERIFY_SPEC.name,
+                        outcome="blocked",
+                        attempt=1,
+                        answer_preserved=False,
+                    )
                     return "结果复核未能完成，请核对当前页面；已执行的操作不会重发。"
                 problems = verification.problems
                 if verification.state == "disputed":
                     s.ledger.append("slim_verify_sent_back", problems=len(problems))
+                    record_check_fired(
+                        s.ledger,
+                        s=s,
+                        trace=trace,
+                        check=SLIM_VERIFY_SPEC.name,
+                        outcome="returned",
+                        attempt=1,
+                        answer_preserved=False,
+                    )
                     # A second reading, not a ruling: it has been wrong about a right
                     # answer, and a model told "failed" gives the right answer up.
                     self._messages.append({"role": "user", "_observation": True, "content":

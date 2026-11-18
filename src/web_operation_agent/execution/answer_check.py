@@ -6,9 +6,25 @@ import re
 
 from ..answer.answering import render_structured_query_answer
 from ..modeling.provider import ProviderError
+from .checks import ProgramCheckSpec, record_check_fired
 from .loop_guard import _NOT_EXECUTED, _NOT_EXECUTED_EN
 from .model_loop_contracts import DeliveryFeedback, VerificationResult
 from .read_summary import SummaryResult, render_summary
+
+
+UNTRACED_NUMBERS_SPEC = ProgramCheckSpec(
+    name="untraced_numbers",
+    checks_what="stated numeric values in a done finish payload trace to turn prompt or tool sources",
+    retry_guidance="return untraced values to the model once to replace with observed values or explain derivation",
+    terminal_delivery="mark affected deliverable items undelivered/cannot or append an untraced-numbers note while preserving model prose",
+)
+
+MODEL_DELIVERY_REJECTED_SPEC = ProgramCheckSpec(
+    name="model_delivery_rejected",
+    checks_what="finish delivery payload satisfies schema, source-citation, and application delivery feedback rules",
+    retry_guidance="return delivery feedback once per check/item position for model correction",
+    terminal_delivery="mark failed items undelivered, force status=cannot, and append program check note to preserved model answer",
+)
 
 
 def history_messages(context) -> list[dict]:
@@ -70,6 +86,15 @@ def delivery_correction(executor, s, turn, args, feedback, *, terminal: bool = F
             returned=True,
             terminal=False,
         )
+        record_check_fired(
+            s.ledger,
+            s=s,
+            trace=getattr(executor, "_trace", None),
+            check=MODEL_DELIVERY_REJECTED_SPEC.name,
+            outcome="returned",
+            attempt=1,
+            answer_preserved=False,
+        )
         return None
     raw_items = args.get("items", ())
     items = (
@@ -97,6 +122,15 @@ def delivery_correction(executor, s, turn, args, feedback, *, terminal: bool = F
         returned=False,
         terminal=True,
         answer_kept=bool(original),
+    )
+    record_check_fired(
+        s.ledger,
+        s=s,
+        trace=getattr(executor, "_trace", None),
+        check=MODEL_DELIVERY_REJECTED_SPEC.name,
+        outcome="annotated",
+        attempt=1 + int(returned_before),
+        answer_preserved=bool(original),
     )
     return {
         **{key: value for key, value in args.items() if key != "read_answer"},
@@ -173,6 +207,15 @@ def finalize_untraced(executor, s, turn, finish, untraced):
         deliverable=list(deliverable),
         narrative=list(narrative),
         **({"undelivered_indices": failed_indices} if failed_indices else {}),
+    )
+    record_check_fired(
+        s.ledger,
+        s=s,
+        trace=getattr(executor, "_trace", None),
+        check=UNTRACED_NUMBERS_SPEC.name,
+        outcome="annotated",
+        attempt=2 if turn.get("numbers_sent_back") else 1,
+        answer_preserved=bool(str(finish.get("answer") or "").strip()),
     )
     max_chars = getattr(getattr(executor, "config", None), "max_user_answer_chars", 4000)
     if deliverable:
