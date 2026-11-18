@@ -25,6 +25,30 @@ SCHEMA_VERSION = 1
 _RECORD = re.compile(r"(\d{4,})\.json")
 
 
+def render_expanded_table_text(table: dict) -> str:
+    """Render full structured table rows into markdown without 8000-char transcription truncation."""
+    if not isinstance(table, dict):
+        return ""
+    columns = [str(c) for c in (table.get("columns") or ())]
+    rows = table.get("rows") or ()
+    if not columns:
+        return ""
+    def _cell(val) -> str:
+        return " ".join(str("" if val is None else val).replace("|", "\\|").split())
+    lines: list[str] = []
+    title = " ".join(str(table.get("title") or "").split())
+    if title:
+        lines.append(f"### {title}")
+    lines.append("| " + " | ".join(_cell(col) for col in columns) + " |")
+    lines.append("| " + " | ".join("---" for _ in columns) + " |")
+    for row in rows:
+        if not isinstance(row, (list, tuple)):
+            continue
+        cells = [_cell(row[i] if i < len(row) else "") for i in range(len(columns))]
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
 class TurnTrace:
     """One turn's model requests; `write` puts them in the turn's directory."""
 
@@ -85,17 +109,41 @@ class TurnTrace:
 
     def record_delivery(self, *, reference: str, projection: dict, rendered_text: str,
                         presented_records: int, presentation_complete: bool,
-                        source_reference: str = "") -> None:
+                        source_reference: str = "",
+                        structured_table: dict | None = None) -> None:
         """Private server facts, never model assertions or ordinary audit payloads.
 
         A selected result may later fail completion review. Consumers must bind this
         receipt to the settled answer as well as the actor and turn before scoring it.
         """
+        full_rendered = rendered_text
+        table_meta: dict | None = None
+        if isinstance(structured_table, dict) and structured_table.get("columns"):
+            cols = [str(c)[:80] for c in structured_table.get("columns") or ()]
+            raw_rows = structured_table.get("rows")
+            row_count = len(raw_rows) if isinstance(raw_rows, (list, tuple)) else int(
+                structured_table.get("row_count", presented_records) or 0
+            )
+            total_rows = int(structured_table.get("total_rows", row_count) or row_count)
+            table_meta = {
+                "columns": cols,
+                "row_count": row_count,
+                "total_rows": max(row_count, total_rows),
+            }
+            title = " ".join(str(structured_table.get("title") or "").split())[:120]
+            if title:
+                table_meta["title"] = title
+            if isinstance(raw_rows, (list, tuple)):
+                expanded = render_expanded_table_text(structured_table)
+                if expanded and (not full_rendered or len(expanded) > len(full_rendered)):
+                    full_rendered = expanded
         delivery = {"reference": reference, "projection": projection,
-            "rendered_text": rendered_text, "presented_records": presented_records,
+            "rendered_text": full_rendered, "presented_records": presented_records,
             "presentation_complete": presentation_complete}
         if source_reference:
             delivery["source_reference"] = source_reference
+        if table_meta is not None:
+            delivery["structured_table"] = table_meta
         self._deliveries.append(delivery)
         self._deliveries[:] = self._deliveries[-4:]
 

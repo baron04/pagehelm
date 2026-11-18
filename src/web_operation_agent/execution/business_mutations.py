@@ -128,7 +128,9 @@ def execute_business_mutation(session, turn: "_Turn", call: dict, name: str, arg
     session.evidence.discard_runtime()
     if not hasattr(session, "_mutation_receipts"):
         session._mutation_receipts = []
+    details = [f"{d.label}：{d.text}"[:200] for d in proposal.details if d.kind in ("change", "body")][:12]
     session._mutation_receipts.append({"effect": proposal.effect, "targets": list(proposal.targets),
+                                      **({"details": details} if details else {}),
                                       "result_digest": tool_result.content_digest, "verified": True})
     session._answer_action_receipt = {
         "kind": "mutation", "effect": proposal.effect,

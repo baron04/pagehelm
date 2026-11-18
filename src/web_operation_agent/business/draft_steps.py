@@ -146,7 +146,7 @@ class DraftStepAdmission:
                 or permit.binding_digest != intent.binding_digest
                 or self._issued.get(intent.binding_digest) != permit
                 or receipt.ok or receipt.error_code != "option_unavailable" or not receipt.no_effect
-                or intent.action != "select" or context.binding_digest != intent.operation_binding
+                or intent.action not in {"select", "fill"} or context.binding_digest != intent.operation_binding
                 or receipt.action != intent.action or receipt.observation is None
                 or not receipt.write_guard_held):
             raise ActionAdmissionRefused("unverified")

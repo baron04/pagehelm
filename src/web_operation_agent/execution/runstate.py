@@ -151,10 +151,15 @@ class RunResult:
     refused_operation: str | None = None
     #: Content-free per-turn request timing and accounting, when measured by the host.
     model_receipt: dict | None = None
+    #: Structured clarification quick-options for `needs_input` turns (UX-02).
+    input_options: list | None = None
+    #: Structured form-handoff outcome payload for terminal progress events (UX-05).
+    handoff_payload: dict | None = None
 
     def to_json(self) -> dict:
         optional = {"verified_answer", "clarification", "provider_error_code",
-                    "refusal_subject", "refused_operation", "operation_control", "model_receipt"}
+                    "refusal_subject", "refused_operation", "operation_control", "model_receipt",
+                    "input_options", "handoff_payload"}
         value = {k: getattr(self, k) for k in self.__dataclass_fields__
                  if k not in optional or getattr(self, k) is not None}
         if self.clarification is not None:

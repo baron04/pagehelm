@@ -67,6 +67,7 @@ MESSAGES = {
     "append_overwrite": "用户要求追加或补充内容，但当前填写覆盖了原有内容（{detail}）。"
                         "请保留该字段原有内容并在其后追加本次内容后再提交。",
     "conventions_undeclared": "当前集成没有声明应用的记录约定，不能由助手提交。",
+    "form_closed_or_readonly": "当前表单或弹窗已关闭或为只读状态，没有提交；请先确认页面状态。",
 }
 
 
@@ -430,6 +431,8 @@ class NativeSubmitMixin:
     def _read(self, s, element, kind, **extra):
         receipt = self._dispatch(s, "form_model", {"ref": element.ref, "kind": kind, **extra})
         if receipt is None or not receipt.ok or not isinstance(receipt.form_data, dict):
+            if receipt is not None and receipt.error_code == "form_closed_or_readonly":
+                raise ContractRefused("form_closed_or_readonly", "当前表单或弹窗已关闭或为只读状态")
             why = re.search(r"\(([a-z_]+)\)", getattr(receipt, "error_detail", "") or "")
             raise ContractRefused("form_data_unreadable", why.group(1) if why else "")
         return receipt.form_data
@@ -458,7 +461,7 @@ class NativeSubmitMixin:
             refused = self._not_sent(s, exc.code, exc.detail)
             if exc.code in {"dangerous_unconfirmed", "record_changed", "record_unreadable",
                             "validation", "no_change", "opening_changes", "credential_field",
-                            "value_not_from_user", "append_overwrite"}:
+                            "value_not_from_user", "append_overwrite", "form_closed_or_readonly"}:
                 turn["submit_handoff_blocked"] = exc.code
                 return refused
             return self._submit_handoff(s, element, turn, refused, form=form)
@@ -780,6 +783,49 @@ class NativeSubmitMixin:
         identity = context.audit_projection() if context is not None else {}
 
         def on_not_approved(approval) -> LoopToolResult:
+            if approval.reason == "prefill_selected":
+                default_handoff = getattr(self, "_default_handoff", None)
+                marked = default_handoff(s, turn) if callable(default_handoff) else ""
+                if not marked:
+                    marked = element.name.strip()[:200]
+                    if hasattr(self, "_page_fingerprint") and getattr(s, "obs", None) is not None:
+                        turn["handoff"] = (self._page_fingerprint(s.obs), marked)
+                from .loop_guard import build_handoff_payload
+                outcomes = dict(turn.get("form_field_outcomes") or {})
+                if not outcomes.get("applied_fields") and card.form is not None:
+                    outcomes["applied_fields"] = {
+                        card.form.label(c.field): str(c.new)
+                        for c in card.changes
+                        if c.new not in (None, "")
+                    }
+                if hasattr(s, "handoff_payload"):
+                    s.handoff_payload = build_handoff_payload(
+                        outcomes,
+                        observation=getattr(s, "obs", None),
+                        fallback_entered=turn.get("touched", ()),
+                    )
+                s.ledger.append(
+                    "native_submit_prefill_selected",
+                    step=step,
+                    target=card.target,
+                    marked=marked,
+                    dispatched=False,
+                    side_effect_possible=False,
+                )
+                s.terminal_reason = "agent_finished"
+                turn["final"] = (
+                    f"已按你的选择只填到表单并保留提交，提交按钮「{marked}」已交接给你；请核对后自己点击提交。"
+                    if marked
+                    else "已按你的选择只填到表单并保留提交，请核对当前表单后自己提交。"
+                )
+                return LoopToolResult(
+                    turn["final"],
+                    kind="write",
+                    state="completed",
+                    dispatch="not_dispatched",
+                    marked=marked,
+                    terminal_reason=s.terminal_reason,
+                )
             s.terminal_reason, s.detail = approval.reason, approval.detail[:200]
             turn["final"] = {"approval_denied": "你没有批准，助手未提交这项修改。",
                              "approval_expired": "批准卡片已过期，助手未提交这项修改。",
@@ -852,6 +898,13 @@ class NativeSubmitMixin:
                                            extra="应用弹出的确认框里有卡上没有的后果，已取消，没有执行。")
             return self._finish_submit(s, turn, permit, card, prefixes, baseline, uncertain=uncertain)
 
+        offer_prefill = (
+            kind == "form"
+            and card.form is not None
+            and card.mode in {"create", "update"}
+            and not turn.get("submit_handoff_blocked")
+            and bool(getattr(self, "_offer_prefill_for_form", lambda *_: True)(s, turn, card))
+        )
         return self._submit_pipeline().run_submit_pipeline(
             proposal=proposal,
             approvals=s.approvals,
@@ -863,6 +916,7 @@ class NativeSubmitMixin:
             on_reread_drift=on_reread_drift,
             dispatch_once=dispatch_once,
             settle_and_readback=settle_and_readback,
+            offer_prefill=offer_prefill,
         )
 
     def _stopped(self, s, turn, code, detail) -> LoopToolResult:
@@ -956,8 +1010,12 @@ class NativeSubmitMixin:
         blocked = [r for r in permit.blocked() if r.decision != "duplicate"]
         if state == "completed":
             turn["written"].append(label)
+            details = [f"{d.label}：{d.text}"[:200] for d in card.details() if d.kind in ("change", "body")][:12]
+            if not details and baseline is not None and self._last_readback is not None:
+                details = _readback_changes(baseline, self._last_readback, zone=conventions.epoch_zone)
             s.mutation_outcomes.append({"position": len(s.mutation_outcomes), "effect": card.effect(),
                                         "targets": [card.target], "verified": True,
+                                        **({"details": details} if details else {}),
                                         "receipt": {"reference": permit.created_id() or card.record_id}})
             text = "已执行并核对（用户已批准，应用回读确认）：" + label
             if notes:

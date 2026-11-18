@@ -138,6 +138,13 @@ class AgentTurnExecutor:
             {"state": "step", "message": text, "step": step_facts(facts)},
             turn_id=turn_id)
 
+    def publish_read_page(self, turn_id: str, page: int | None = None) -> None:
+        """Publish a paged-read step notification (`read_page`) onto the turn timeline."""
+        facts: dict = {"stage": "read_page"}
+        if isinstance(page, int) and not isinstance(page, bool) and page >= 1:
+            facts["page"] = page
+        self._publish_step(facts, turn_id)
+
     def run_once(self, message: dict | None = None) -> AgentTurnExecution:
         if message is None:
             raise AgentTurnError(
@@ -276,6 +283,7 @@ class AgentTurnExecutor:
         def approve_business_mutation(
                 proposal, *, context: OperationContext | None = None,
                 offer_prefill: bool = False):
+            self._publish_step({"stage": "awaiting_approval"}, turn_message.message_id)
             try:
                 return approval_gate.decide_plan(
                     proposal,
@@ -302,6 +310,7 @@ class AgentTurnExecutor:
             # leave to work the page lets the assistant do.
             targets = (("会打开页面、点击、填写和选择",) if chinese
                        else ("Opens pages, clicks, fills and chooses",))
+            self._publish_step({"stage": "awaiting_approval"}, turn_message.message_id)
             try:
                 return approval_gate.decide_plan(
                     plan, effect=effect, targets=targets,
@@ -549,12 +558,17 @@ class AgentTurnExecutor:
                 session.latest_business_tool_result.content_digest
                 if session.latest_business_tool_result is not None else ""),
         )
+        progress_payload = {
+            "state": status.value,
+            "terminal_reason": agent.terminal_reason,
+            "message": user_answer,
+        }
+        if status is AgentTurnStatus.NEEDS_INPUT and getattr(agent, "input_options", None):
+            progress_payload["input_options"] = list(agent.input_options)
+        if status in {AgentTurnStatus.FINISHED, AgentTurnStatus.NEEDS_INPUT} and getattr(agent, "handoff_payload", None):
+            progress_payload["handoff"] = agent.handoff_payload
         try:
-            self.channel.publish("progress", {
-                "state": status.value,
-                "terminal_reason": agent.terminal_reason,
-                "message": user_answer,
-            }, turn_id=turn_message.message_id)
+            self.channel.publish("progress", progress_payload, turn_id=turn_message.message_id)
         except Exception as exc:
             # The browser or event transport may disappear after a write or after the
             # Agent has already finished. Delivery loss cannot erase the execution or

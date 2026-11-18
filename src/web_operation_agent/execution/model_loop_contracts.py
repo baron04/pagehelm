@@ -189,6 +189,71 @@ class AnswerTarget:
             raise ValueError("invalid answer navigation target")
 
 
+def normalize_table_payload(raw: object) -> dict | None:
+    """Validate and normalize a bounded structured table payload (`columns`, `rows`, `total_rows`, optional `title`)."""
+    if not isinstance(raw, dict):
+        raise ValueError("structured table must be an object")
+    raw_cols = raw.get("columns")
+    raw_rows = raw.get("rows")
+    if not isinstance(raw_cols, (list, tuple)) or not 1 <= len(raw_cols) <= 24:
+        raise ValueError("structured table columns must have 1..24 headers")
+    columns = [" ".join(str(col).split())[:80] for col in raw_cols]
+    if any(not col for col in columns):
+        raise ValueError("structured table column headers must be non-empty")
+    if not isinstance(raw_rows, (list, tuple)) or len(raw_rows) > 2000:
+        raise ValueError("structured table rows must be a bounded sequence")
+    width = len(columns)
+    rows: list[list[str]] = []
+    for row in raw_rows:
+        if not isinstance(row, (list, tuple)):
+            raise ValueError("each structured table row must be a list or tuple")
+        cells = [
+            " ".join(str("" if idx >= len(row) or row[idx] is None else row[idx]).split())[:300]
+            for idx in range(width)
+        ]
+        rows.append(cells)
+    total_raw = raw.get("total_rows", len(rows))
+    if type(total_raw) is not int or total_raw < len(rows):
+        raise ValueError("structured table total_rows must be an integer >= len(rows)")
+    out: dict = {"columns": columns, "rows": rows, "total_rows": total_raw}
+    title = " ".join(str(raw.get("title") or "").split())[:120]
+    if title:
+        out["title"] = title
+    return out
+
+
+def normalize_input_options(raw: object) -> tuple[dict[str, str], ...]:
+    """Validate and normalize 2..4 structured clarification options `{id?, label, prompt?}`."""
+    if not isinstance(raw, (list, tuple)) or not 2 <= len(raw) <= 4:
+        raise ValueError("input_options must contain 2..4 options")
+    options: list[dict[str, str]] = []
+    for idx, item in enumerate(raw, start=1):
+        if isinstance(item, str):
+            label = " ".join(item.split())
+            if not 1 <= len(label) <= 200:
+                raise ValueError("input_option label must be 1..200 chars")
+            options.append({"id": f"opt-{idx}", "label": label})
+            continue
+        if not isinstance(item, dict) or set(item) - {"id", "label", "prompt"}:
+            raise ValueError("each input_option must be an object with {id?, label, prompt?}")
+        label = " ".join(str(item.get("label") or "").split())
+        if not 1 <= len(label) <= 200:
+            raise ValueError("input_option label must be 1..200 chars")
+        opt_id = " ".join(str(item.get("id") or f"opt-{idx}").split())
+        if not 1 <= len(opt_id) <= 60:
+            raise ValueError("input_option id must be 1..60 chars")
+        entry: dict[str, str] = {"id": opt_id, "label": label}
+        if "prompt" in item and item["prompt"] is not None:
+            if not isinstance(item["prompt"], str):
+                raise ValueError("input_option prompt must be a string")
+            prompt = item["prompt"].strip()
+            if not 1 <= len(prompt) <= 2000:
+                raise ValueError("input_option prompt must be 1..2000 chars")
+            entry["prompt"] = prompt
+        options.append(entry)
+    return tuple(options)
+
+
 @dataclass(frozen=True, slots=True)
 class LoopToolResult:
     feedback: str
@@ -215,6 +280,10 @@ class LoopToolResult:
     #: A server-authored explanation if the loop has stopped a page procedure
     #: as agent_refused. This field neither stops execution nor changes its reason.
     terminal_answer: str = ""
+    #: Optional bounded structured table payload returned by a read procedure (ARC-06).
+    structured_table: dict | None = None
+    #: Optional 2..4 structured clarification choices for `needs_input` (UX-02).
+    input_options: tuple[dict[str, str], ...] = ()
 
     def __post_init__(self):
         if (not isinstance(self.feedback, str) or len(self.feedback) > 32000
@@ -249,8 +318,14 @@ class LoopToolResult:
                 or self.terminal_answer and (self.kind != "page"
                     or self.state not in {"refused", "needs_input", "unavailable", "unverified"}
                     or self.terminal_reason not in {"", "agent_refused"} or self.write_outcome is not None
-                    or self.completion_command or self.review_completion)):
+                    or self.completion_command or self.review_completion)
+                or self.structured_table is not None and (self.kind != "read" or self.state != "completed")
+                or self.input_options and self.state != "needs_input"):
             raise ValueError("invalid model-loop result")
+        if self.structured_table is not None:
+            object.__setattr__(self, "structured_table", normalize_table_payload(self.structured_table))
+        if self.input_options:
+            object.__setattr__(self, "input_options", normalize_input_options(self.input_options))
 
 
 @dataclass(frozen=True, slots=True)

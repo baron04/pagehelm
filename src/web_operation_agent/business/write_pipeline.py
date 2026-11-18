@@ -576,17 +576,20 @@ class WritePipeline:
         on_reread_drift: Callable[[Exception], Any],
         dispatch_once: Callable[[Any, Any], tuple[bool, Any]],
         settle_and_readback: Callable[[Any, bool, Any], Any],
+        offer_prefill: bool = False,
     ):
         """Execute stages (a)-(f) for the native form/row submit route."""
         # Stage (a): validate structured details
         normalize_approval_details(proposal.details)
         # Stage (b): fresh single-use approval card request
+        approve_kwargs = {"offer_prefill": True} if offer_prefill else {}
         approval = approvals.approve_mutation(
             proposal,
             step=step,
             tool=proposal.tool,
             context=context,
             identity=identity,
+            **approve_kwargs,
         )
         if not approval.approved:
             return on_not_approved(approval)
