@@ -417,19 +417,27 @@ class _ContactsToolExecutor:
 
     def execute_mutation(self, name: str, args: dict, *,
                          context=None) -> BusinessToolResult:
+        from web_operation_agent.business.write_pipeline import execute_verified_handler_write
+
         if not self.allow_mutations or name != CREATE_CONTACT:
             raise BusinessToolError("this composition has no such write")
         proposed = self._normalise(args)
-        # Again, immediately before dispatch. The proposal may have waited on a person.
-        if self._existing(proposed["name"]):
-            raise BusinessToolError("a contact with that name already exists")
-        created = self._post("/api/contacts", proposed).get("contact")
-        if not isinstance(created, dict) or not created.get("id"):
-            raise BusinessMutationIndeterminate(
-                "the contacts API accepted the create but returned no record",
-                phase="acknowledgement")
-        record_id = str(created["id"])
-        with turn_interval("verification"):
+
+        def pre_dispatch_reread(_actor):
+            # Again, immediately before dispatch. The proposal may have waited on a person.
+            if self._existing(proposed["name"]):
+                raise BusinessToolError("a contact with that name already exists")
+            return proposed
+
+        def dispatch_once(_actor, _reread_state):
+            created = self._post("/api/contacts", proposed).get("contact")
+            if not isinstance(created, dict) or not created.get("id"):
+                raise BusinessMutationIndeterminate(
+                    "the contacts API accepted the create but returned no record",
+                    phase="acknowledgement")
+            return str(created["id"])
+
+        def verify_readback(_actor, _reread_state, record_id, _uncertain):
             try:
                 readback = [row for row in self._existing(proposed["name"])
                             if row["id"] == record_id]
@@ -443,18 +451,27 @@ class _ContactsToolExecutor:
                 raise BusinessMutationIndeterminate(
                     "the contact was created but the same-actor readback did not match",
                     phase="readback", record_id=record_id)
-        ui_path = f"/contacts/{record_id}"
-        return BusinessToolResult(
-            content={
-                "created": True, "readback_verified": True,
-                "contact": {**readback[0]},
-                "scope": self._scope(context),
-            },
-            audit={
-                "application": "minimal-contacts", "operation": name,
-                "records_created": 1, "readback_verified": True,
-            },
-            allowed_routes=(ui_path,),
+            ui_path = f"/contacts/{record_id}"
+            return BusinessToolResult(
+                content={
+                    "created": True, "readback_verified": True,
+                    "contact": {**readback[0]},
+                    "scope": self._scope(context),
+                },
+                audit={
+                    "application": "minimal-contacts", "operation": name,
+                    "records_created": 1, "readback_verified": True,
+                },
+                allowed_routes=(ui_path,),
+            )
+
+        return execute_verified_handler_write(
+            verify_actor=lambda: None,
+            pre_dispatch_reread=pre_dispatch_reread,
+            dispatch_once=dispatch_once,
+            verify_readback=verify_readback,
+            allow_readback_recovery=False,
+            use_verification_interval=True,
         )
 
 

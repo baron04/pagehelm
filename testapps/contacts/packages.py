@@ -24,8 +24,8 @@ from web_operation_agent.business.errors import (
 )
 from web_operation_agent.business.tools.contracts import ToolOperation
 from web_operation_agent.business.tools.registry import ToolDefinition, ToolRegistry
+from web_operation_agent.business.write_pipeline import ProposalDiff, create_detail
 from web_operation_agent.composition.business_operations import RegisteredOperations
-from web_operation_agent.schemas.approval_details import ApprovalDetail
 from web_operation_agent.skills import SkillArtifact, SkillRegistry
 
 
@@ -35,9 +35,13 @@ class ContactCreation:
 
     def prepare(self, args, *, context=None):
         spec = self.executor.prepare_mutation("create_contact", args, context=context)
+        diff = ProposalDiff.from_details(
+            spec.targets,
+            tuple(create_detail(name, value) for name, value in spec.args.items()),
+        )
         return replace(
             spec,
-            details=tuple(ApprovalDetail("change", name, value) for name, value in spec.args.items()),
+            details=diff.details(),
             effect_projection=EffectProjection(self.project_inputs(spec.args), required_receipts=("record",)),
         )
 

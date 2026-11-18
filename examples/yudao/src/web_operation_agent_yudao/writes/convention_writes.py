@@ -36,6 +36,7 @@ from web_operation_agent.business.errors import (
     BusinessToolRequestError,
     BusinessToolUnavailableError,
 )
+from web_operation_agent.business.write_pipeline import DEFAULT_SECRET_FIELD_PATTERN
 from web_operation_agent.execution.submit_contract import scalar_text
 
 from ..reads.client import YudaoReadRefused
@@ -45,10 +46,7 @@ from .write_definitions import RECORD_CONTRACTS
 _CACHE_LOCK = RLock()
 _COMPILED_SPECS_CACHE: OrderedDict[tuple[int, int, int], tuple] = OrderedDict()
 
-_SECRET = re.compile(
-    r"(?i)secret|password|passwd|pwd|private_?key|api[_-]?key|aes_?key|token|authorization|"
-    r"credential|^config$|config$|sign_?key|mch_?key|密码|密钥|令牌"
-)
+_SECRET = DEFAULT_SECRET_FIELD_PATTERN
 _VOLATILE = frozenset({"updateTime", "updater", "updaterName", "modifyTime", "version", "createTime"})
 _NAME_CANDIDATES = (
     "name", "title", "no", "postName", "companyName", "nickname",

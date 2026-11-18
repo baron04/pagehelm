@@ -29,6 +29,13 @@ from typing import Callable
 from urllib.parse import parse_qsl
 
 from ..business.tools.contracts import BusinessMutationProposal
+from ..business.write_pipeline import (
+    ProposalDiff,
+    create_detail,
+    derived_detail,
+    normalize_approval_details,
+    target_rule_detail,
+)
 from ..schemas.approval_details import ApprovalDetail
 
 MAX_MODEL_BYTES = 200_000
@@ -357,30 +364,30 @@ class SubmitCard:
         return shown, f"{_show(change.before)} → {after}"
 
     def details(self) -> tuple[ApprovalDetail, ...]:
-        out = [ApprovalDetail("target_rule", "目标", self.target[:300]),
-               ApprovalDetail("target_rule", "页面", self.page[:300] or "当前页面"),
-               ApprovalDetail("target_rule", "将要点的按钮", self.button[:200] or "（提交）")]
+        out = [target_rule_detail("目标", self.target[:300]),
+               target_rule_detail("页面", self.page[:300] or "当前页面"),
+               target_rule_detail("将要点的按钮", self.button[:200] or "（提交）")]
         if self.action_request is not None:
-            out.append(ApprovalDetail("target_rule", "动作接口", f"{self.action_request.method} {self.action_request.path}"))
+            out.append(target_rule_detail("动作接口", f"{self.action_request.method} {self.action_request.path}"))
         form = self.form
         for change in self.changes[:MAX_CHANGES]:
             label, text = self._line(change, form)
-            out.append(ApprovalDetail("change", label[:200] or "字段", text[:2000]))
+            out.append(create_detail(label[:200] or "字段", text[:2000]))
         for change in self.other[:MAX_CHANGES]:
             label, text = self._line(change, form)
-            out.append(ApprovalDetail("derived", ("默认或联动：" + label)[:200], text[:2000]))
+            out.append(derived_detail(("默认或联动：" + label)[:200], text[:2000]))
         for change in self.unrequested[:MAX_CHANGES]:
             label, text = self._line(change, form)
-            out.append(ApprovalDetail("derived", ("用户没有要求：" + label)[:200], text[:2000]))
+            out.append(derived_detail(("用户没有要求：" + label)[:200], text[:2000]))
         for change in self.restored:
             label, _ = self._line(change, form)
-            out.append(ApprovalDetail("derived", ("页面打开时：" + label)[:200],
+            out.append(derived_detail(("页面打开时：" + label)[:200],
                 f"改成了 {_show(change.before)}，已还原为 {_show(change.after)}"))
         for label, value, source in self.value_sources:
             if not source:
-                out.append(ApprovalDetail("derived", ("值来源：" + label)[:200],
+                out.append(derived_detail(("值来源：" + label)[:200],
                     f"{_show(value)}：没在你的话里找到这个值"))
-        return tuple(out)
+        return normalize_approval_details(out)
 
     def effect(self) -> str:
         count = len(self.changes) + len(self.other) + len(self.unrequested)
@@ -396,10 +403,11 @@ class SubmitCard:
                 "loaded_digest": self.loaded.digest if self.loaded else "",
                 "fields": sorted(self.changed_fields),
                 "action_digest": digest([self.action_request.method, self.action_request.path, self.action_request.body]) if self.action_request else ""}
+        diff = ProposalDiff.from_details((self.target[:300] or "当前表单",), self.details())
         return BusinessMutationProposal(
-            tool=tool, args=args, effect=self.effect(), targets=(self.target[:300] or "当前表单",),
+            tool=tool, args=args, effect=self.effect(), targets=diff.targets,
             nonce=secrets.token_hex(16), operation_context_digest=context_digest,
-            details=self.details())
+            details=diff.details())
 
 
 def build_card(*, loaded: FormData | None, form: FormData | None, page: str, button: str,

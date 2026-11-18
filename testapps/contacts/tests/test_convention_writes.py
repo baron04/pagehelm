@@ -353,6 +353,85 @@ class ContactsConventionWriteTests(unittest.TestCase):
         check_bool(False, "不允许开启该配置")
         check_bool(False, "将默认状态改为否")
 
+    def test_indeterminate_dispatch_and_readback_never_retry_on_contacts_routes(self):
+        from web_operation_agent.business.errors import BusinessMutationIndeterminate
+
+        # 1. Convention update indeterminate dispatch stops as indeterminate_write with 1 dispatch
+        executor, channel, _chat, _gp, _audit = self._executor([
+            _tool_reply((
+                "propose_operation",
+                {
+                    "operation": "update_record",
+                    "inputs": {
+                        "entity": "contacts",
+                        "target": "Ada Lovelace",
+                        "changes": [{"field": "email", "value": "ada.indet@example.test"}],
+                    },
+                },
+            )),
+        ])
+        conv_handler = executor.application.ports.operations.tools.get("update_record").handler
+        orig_dispatch_update = conv_handler.port.dispatch_update
+        dispatch_calls = {"n": 0}
+
+        def failing_dispatch(spec, record_id, payload):
+            dispatch_calls["n"] += 1
+            raise BusinessMutationIndeterminate("synthetic timeout", phase="dispatch")
+
+        conv_handler.port.dispatch_update = failing_dispatch
+        try:
+            with patch("web_operation_agent.goal.executor.RemoteBrowserClient", _RemoteBrowser):
+                result = executor.execute({
+                    "message_id": "m6",
+                    "text": "Change Ada Lovelace's email to ada.indet@example.test.",
+                    "page_url": self.app.origin + "/contacts",
+                })
+        finally:
+            conv_handler.port.dispatch_update = orig_dispatch_update
+        self.assertEqual(result.terminal_reason, "indeterminate_write")
+        self.assertEqual(len(channel.approvals), 1)
+        self.assertEqual(dispatch_calls["n"], 1)
+
+        # 2. Skill create_contact through write_pipeline readback mismatch never retries
+        executor2, channel2, _chat2, _gp2, _audit2 = self._executor([
+            _tool_reply((
+                "propose_operation",
+                {
+                    "operation": "create_contact",
+                    "inputs": {
+                        "name": "Linus Torvalds",
+                        "email": "linus@example.test",
+                    },
+                },
+            )),
+        ])
+        create_handler = executor2.application.ports.operations.tools.get("create_contact").handler
+        orig_post = create_handler.executor._post
+        post_calls = {"n": 0}
+
+        def post_with_readback_mismatch(path, payload):
+            post_calls["n"] += 1
+            res = orig_post(path, payload)
+            # Mutate the created email on the server so same-actor readback disagrees
+            for row in self.app.workspaces[DEMO_WORKSPACE]:
+                if row["id"] == res["contact"]["id"]:
+                    row["email"] = "tampered@example.test"
+            return res
+
+        create_handler.executor._post = post_with_readback_mismatch
+        try:
+            with patch("web_operation_agent.goal.executor.RemoteBrowserClient", _RemoteBrowser):
+                result2 = executor2.execute({
+                    "message_id": "m7",
+                    "text": "Create contact Linus Torvalds with email linus@example.test.",
+                    "page_url": self.app.origin + "/contacts",
+                })
+        finally:
+            create_handler.executor._post = orig_post
+        self.assertEqual(result2.terminal_reason, "indeterminate_write")
+        self.assertEqual(len(channel2.approvals), 1)
+        self.assertEqual(post_calls["n"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

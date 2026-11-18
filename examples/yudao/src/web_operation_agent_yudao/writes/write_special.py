@@ -11,8 +11,15 @@ from web_operation_agent.business.errors import (BusinessToolRequestError,
     BusinessMutationIndeterminate)
 from web_operation_agent.business.tools.contracts import BusinessMutationSpec, BusinessToolResult, ToolOperation
 from web_operation_agent.business.tools.registry import ToolDefinition
-from web_operation_agent.execution.events import turn_interval
-from web_operation_agent.schemas.approval_details import ApprovalDetail
+from web_operation_agent.business.write_pipeline import (
+    ProposalDiff,
+    body_detail,
+    change_detail,
+    create_detail,
+    derived_detail,
+    execute_verified_handler_write,
+    side_effect_detail,
+)
 from .write_definitions import object_schema, text, USER_RELATION, RECORD_OPERATIONS
 from .write_inputs import encode, epoch, recheck_choices
 from .write_relations import resolve_relation, recheck_relation
@@ -123,18 +130,18 @@ class NativeSpecialHandler:
             body, params = {}, {"ids": [record["id"]]} if receive else {"id": record["id"]}
         preserved = {k: record[k] for k in RECORD_OPERATIONS["crm_customer_update"].preserved -
             set(expected) - ({"ownerTime"} if receive else set()) if k in record}
-        details = [ApprovalDetail("change", k, f"{record[k]} → {v}") for k, v in expected.items()]
+        details = [change_detail(k, str(record[k]), str(v)) for k, v in expected.items()]
         duties = ["record", "unrelated_field_preservation"]
         derived = {}
         if self.operation == "crm_customer_put_pool":
-            details += [ApprovalDetail("side_effect", "关联联系人负责人", "全部清空：" +
+            details += [side_effect_detail("关联联系人负责人", "全部清空：" +
                         ("、".join(f"{r['name']}（ID={r['id']}）" for r in contacts) or "当前无联系人")),
-                        ApprovalDetail("side_effect", "客户权限", "删除客户全部 OWNER 数据权限；其他数据权限保留。应用登记负责人变更历史。")]
+                        side_effect_detail("客户权限", "删除客户全部 OWNER 数据权限；其他数据权限保留。应用登记负责人变更历史。")]
             duties += ["related_owner_clear", "owner_permission_removal"]
             derived = {"contacts": contacts, "remove_customer_owner_permissions": True, "owner_history": "application_native"}
         elif receive:
-            details += [ApprovalDetail("derived", "领取人", f"当前账号：{actor.get('nickname') or actor['id']}"),
-                        ApprovalDetail("side_effect", "客户权限", "为当前账号建立 OWNER 权限和负责人变更历史；不恢复联系人负责人。")]
+            details += [derived_detail("领取人", f"当前账号：{actor.get('nickname') or actor['id']}"),
+                        side_effect_detail("客户权限", "为当前账号建立 OWNER 权限和负责人变更历史；不恢复联系人负责人。")]
             duties += ["owner_permission", "related_owner_preservation"]
             # The native response does not expose ownerTime or owner history.
             # Their source rules are not a readback receipt for hidden metadata.
@@ -170,10 +177,10 @@ class NativeSpecialHandler:
             zone = zone() if callable(zone) else zone
             date = datetime.strptime(inputs["returnTime"], "%Y-%m-%d %H:%M:%S")
             expected["remindTime"] = int((date - timedelta(days=inputs["remindDays"])).replace(tzinfo=ZoneInfo(zone)).timestamp() * 1000)
-        details += [ApprovalDetail("derived", "合同", inputs["contract"]),
-            ApprovalDetail("derived", "负责人", inputs["owner"]),
-            ApprovalDetail("side_effect", "计划派生", f"关联客户 ID={contract['customerId']}；按当前合同计划确定第 {expected['period']} 期；提醒日期按回款时间减提醒天数。"),
-            ApprovalDetail("side_effect", "数据权限", "为指定负责人建立回款计划 OWNER 权限；不创建实际回款。")]
+        details += [derived_detail("合同", inputs["contract"]),
+            derived_detail("负责人", inputs["owner"]),
+            side_effect_detail("计划派生", f"关联客户 ID={contract['customerId']}；按当前合同计划确定第 {expected['period']} 期；提醒日期按回款时间减提醒天数。"),
+            side_effect_detail("数据权限", "为指定负责人建立回款计划 OWNER 权限；不创建实际回款。")]
         declared = SpecialEffects(self.operation).project_inputs(inputs)
         values = self._decode(body, declared.values, choices)
         values["contractId"], values["ownerUserId"], values["returnTime"] = inputs["contract"], inputs["owner"], inputs["returnTime"]
@@ -200,8 +207,8 @@ class NativeSpecialHandler:
         body, details, choices = encode(self.client, self.goal_data,
             {k: v for k, v in inputs.items() if k != "audience"}, dictionaries=SPECIAL_DICTIONARIES[self.operation])
         receivers = self._audience(actor)
-        details += [ApprovalDetail("side_effect", "发布受众", AUDIENCE + "；在派发时重新计算，不是固定名单。"),
-                    ApprovalDetail("side_effect", "接收关系", "创建公告接收关系，接收人可在公告列表查看；不额外发送站内信，不标记已读。")]
+        details += [side_effect_detail("发布受众", AUDIENCE + "；在派发时重新计算，不是固定名单。"),
+                    side_effect_detail("接收关系", "创建公告接收关系，接收人可在公告列表查看；不额外发送站内信，不标记已读。")]
         declared = SpecialEffects(self.operation).project_inputs(inputs)
         values = self._decode(body, declared.values, choices)
         values["audience"] = inputs["audience"]
@@ -232,7 +239,7 @@ class NativeSpecialHandler:
             targets = [inputs.get("title", inputs.get("contract", ""))]
         for field, value in inputs.items():
             if field != "target" and not any(d.label == field for d in details):
-                details.append(ApprovalDetail("body" if field == "content" else "change", field, str(value)))
+                details.append(body_detail(field, str(value)) if field == "content" else create_detail(field, str(value)))
         private.update(actor=str(actor["id"]), operation=self.operation)
         declared = SpecialEffects(self.operation).project_inputs(inputs)
         change = RequestedEffect(declared.entity, declared.action, declared.target_entity, declared.target, canonical(values))
@@ -244,31 +251,42 @@ class NativeSpecialHandler:
             reconcile_meta["before"] = {
                 k: private["snapshot"].get(k) for k in private["expected"] if k in private["snapshot"]
             }
+        diff = ProposalDiff.from_details(targets, details)
         return BusinessMutationSpec(private, {
             "crm_customer_put_pool": "客户放入公海并清除关联负责人及 OWNER 权限",
             "crm_customer_receive": "领取公海客户给当前账号并建立 OWNER 权限",
             "crm_customer_lock": "变更客户锁定状态", "crm_customer_deal_status": "变更客户成交状态",
             "crm_receivable_plan_create": "新建合同回款计划及负责人权限",
-            "oa_announcement_create": "发布 OA 公告并建立原生下属接收关系"}[self.operation], tuple(targets),
-            details=tuple(details), reconcile_key=key, reconciliation=reconcile_meta,
+            "oa_announcement_create": "发布 OA 公告并建立原生下属接收关系"}[self.operation], diff.targets,
+            details=diff.details(), reconcile_key=key, reconciliation=reconcile_meta,
             effect_projection=EffectProjection(change, canonical(bindings), canonical(preserved), canonical(derived), tuple(duties),
                 preserves_unmentioned=self.operation in STATE_PATHS))
 
     def dispatch(self, args, *, context=None):
-        actor = self.base._actor(context)
-        if str(actor["id"]) != args["actor"] or args["operation"] != self.operation:
-            raise BusinessToolPermissionError("prepared transition has a different actor or operation")
-        recheck_choices(self.client, args.get("choices", []))
-        if self.operation in STATE_PATHS:
-            current = self._customer(args["inputs"]["target"], pool=args["pool_before"])
-            if any(current.get(k) != args["snapshot"].get(k) for k in ("id", "name", "ownerUserId", "lockStatus", "dealStatus")):
-                raise BusinessMutationRefusedError("customer state changed after approval", reason="precondition_changed")
-            if self._grants(current["id"]) != args["grants"] or (self.operation not in STATE_FIELDS and self._contacts(current["id"]) != args["contacts"]):
-                raise BusinessMutationRefusedError("customer related effects changed after approval", reason="precondition_changed")
-            preserved = {k: current[k] for k in args["preserved"] if k in current}
-            record_id = current["id"]
-            path, method = "crm/customer/" + STATE_PATHS[self.operation], "PUT"
-        else:
+        is_state = self.operation in STATE_PATHS
+
+        def verify_actor():
+            actor = self.base._actor(context)
+            if str(actor["id"]) != args["actor"] or args["operation"] != self.operation:
+                raise BusinessToolPermissionError("prepared transition has a different actor or operation")
+            return actor
+
+        def pre_dispatch_reread(actor):
+            recheck_choices(self.client, args.get("choices", []))
+            if is_state:
+                current = self._customer(args["inputs"]["target"], pool=args["pool_before"])
+                if any(current.get(k) != args["snapshot"].get(k) for k in ("id", "name", "ownerUserId", "lockStatus", "dealStatus")):
+                    raise BusinessMutationRefusedError("customer state changed after approval", reason="precondition_changed")
+                if self._grants(current["id"]) != args["grants"] or (self.operation not in STATE_FIELDS and self._contacts(current["id"]) != args["contacts"]):
+                    raise BusinessMutationRefusedError("customer related effects changed after approval", reason="precondition_changed")
+                preserved = {k: current[k] for k in args["preserved"] if k in current}
+                return {
+                    "record_id": current["id"],
+                    "path": "crm/customer/" + STATE_PATHS[self.operation],
+                    "method": "PUT",
+                    "preserved": preserved,
+                    "receivers": [],
+                }
             for relation in args.get("relations", []):
                 if "list_path" in relation:
                     recheck_relation(self.client, relation)
@@ -279,73 +297,91 @@ class NativeSpecialHandler:
             if self.operation == "crm_receivable_plan_create" and self._plans(args["contract"]) != args["plans"]:
                 raise BusinessMutationRefusedError("contract plan periods changed after approval", reason="precondition_changed")
             receivers = self._audience(actor) if self.operation == "oa_announcement_create" else []
-            path, method, record_id, preserved = args["entity"] + "/create", "POST", None, {}
-        uncertain_dispatch = False
-        try:
-            result = self.client.write_once(method, path, body=args["body"], params=args["params"],
-                                            operation=self.operation)
-        except BusinessMutationIndeterminate:
-            # State transitions have a bound target ID and the checks below cover
+            return {
+                "record_id": None,
+                "path": args["entity"] + "/create",
+                "method": "POST",
+                "preserved": {},
+                "receivers": receivers,
+            }
+
+        def dispatch_once(_actor, reread_state):
+            return self.client.write_once(
+                reread_state["method"],
+                reread_state["path"],
+                body=args["body"],
+                params=args["params"],
+                operation=self.operation,
+            )
+
+        def verify_readback(actor, reread_state, dispatch_result, _uncertain):
+            record_id = reread_state["record_id"] if reread_state["record_id"] is not None else dispatch_result
+            if is_state:
+                pool = self.operation == "crm_customer_put_pool"
+                actual = self._customer(f"{args['snapshot']['name']}（ID={record_id}）", pool=pool)
+                expected = args["expected"]
+            else:
+                actual = self.client.get(args["entity"] + "/get", id=record_id)
+                expected = {**args["body"], **args["expected"]}
+            if not isinstance(actual, dict) or str(actual.get("id")) != str(record_id) or any(actual.get(k) != v for k, v in expected.items()):
+                raise BusinessMutationIndeterminate("native effect does not confirm every approved field", phase="postcondition", reconciliation={"id": record_id})
+            effects = [{"effect": "record", "verified": True, "id": record_id}]
+            preserved = reread_state["preserved"]
+            if is_state:
+                if any(actual.get(k) != v for k, v in preserved.items()):
+                    raise BusinessMutationIndeterminate("customer transition changed unrelated business fields", phase="postcondition")
+                effects.append({"effect": "unrelated_field_preservation", "verified": True})
+                if self.operation not in STATE_FIELDS:
+                    contacts = self._contacts(record_id)
+                    wanted = [{**c, "ownerUserId": None} for c in args["contacts"]] if pool else args["contacts"]
+                    if contacts != wanted:
+                        raise BusinessMutationIndeterminate("complete related contact ownership is not verified", phase="postcondition")
+                    effects.append({"effect": "related_owner_clear" if pool else "related_owner_preservation", "verified": True})
+                    grants = self._grants(record_id)
+                    if pool:
+                        if any(str(g["level"]) == "1" for g in grants) or grants != [g for g in args["grants"] if str(g["level"]) != "1"]:
+                            raise BusinessMutationIndeterminate("customer OWNER permission removal is not verified", phase="postcondition")
+                        effects.append({"effect": "owner_permission_removal", "verified": True})
+                    else:
+                        self._verify_owner(grants, actor["id"])
+                        effects.append({"effect": "owner_permission", "verified": True})
+            elif self.operation == "crm_receivable_plan_create":
+                self._verify_owner(self._grants(record_id, 8), args["body"]["ownerUserId"])
+                if actual.get("receivableId") is not None:
+                    raise BusinessMutationIndeterminate("new plan unexpectedly links an actual receivable", phase="postcondition")
+                effects += [{"effect": "plan_derivation", "verified": True}, {"effect": "owner_permission", "verified": True}]
+            else:
+                actual_receivers = actual.get("receiverUserIds")
+                if (str(actual.get("publisherUserId")) != str(actor["id"]) or not isinstance(actual_receivers, list)
+                        or sorted(actual_receivers) != reread_state["receivers"] or len(set(actual_receivers)) != len(actual_receivers)):
+                    raise BusinessMutationIndeterminate("announcement receiver relations are not verified", phase="postcondition")
+                effects.append({"effect": "receiver_relations", "verified": True, "count": len(actual_receivers)})
+            name = actual.get("name") or actual.get("title") or "回款计划"
+            return BusinessToolResult(
+                {"verified": True, "record_id": str(record_id), "entity": args["entity"],
+                 "reference": f"{name}（ID={record_id}）", "effects": effects},
+                {"verified": True, "operation": self.operation, "effects": effects},
+            )
+
+        return execute_verified_handler_write(
+            verify_actor=verify_actor,
+            pre_dispatch_reread=pre_dispatch_reread,
+            dispatch_once=dispatch_once,
+            verify_readback=verify_readback,
+            invalidate_reads=lambda: self.goal_data.invalidate_reads(
+                frozenset({args["entity"], "crm/contact"} if is_state else {args["entity"]})
+            ),
+            # State transitions have a bound target ID and the checks cover
             # both the requested state and their related effects. A create has no
             # attributable ID after an uncertain response.
-            if self.operation not in STATE_PATHS:
-                raise
-            result = record_id
-            uncertain_dispatch = True
-        record_id = record_id if record_id is not None else result
-        with turn_interval("verification"):
-            try:
-                if self.operation in STATE_PATHS:
-                    pool = self.operation == "crm_customer_put_pool"
-                    actual = self._customer(f"{args['snapshot']['name']}（ID={record_id}）", pool=pool)
-                    expected = args["expected"]
-                else:
-                    actual = self.client.get(args["entity"] + "/get", id=record_id)
-                    expected = {**args["body"], **args["expected"]}
-                if not isinstance(actual, dict) or str(actual.get("id")) != str(record_id) or any(actual.get(k) != v for k, v in expected.items()):
-                    raise BusinessMutationIndeterminate("native effect does not confirm every approved field", phase="postcondition", reconciliation={"id": record_id})
-                effects = [{"effect": "record", "verified": True, "id": record_id}]
-                if self.operation in STATE_PATHS:
-                    if any(actual.get(k) != v for k, v in preserved.items()):
-                        raise BusinessMutationIndeterminate("customer transition changed unrelated business fields", phase="postcondition")
-                    effects.append({"effect": "unrelated_field_preservation", "verified": True})
-                    if self.operation not in STATE_FIELDS:
-                        contacts = self._contacts(record_id)
-                        wanted = [{**c, "ownerUserId": None} for c in args["contacts"]] if pool else args["contacts"]
-                        if contacts != wanted:
-                            raise BusinessMutationIndeterminate("complete related contact ownership is not verified", phase="postcondition")
-                        effects.append({"effect": "related_owner_clear" if pool else "related_owner_preservation", "verified": True})
-                        grants = self._grants(record_id)
-                        if pool:
-                            if any(str(g["level"]) == "1" for g in grants) or grants != [g for g in args["grants"] if str(g["level"]) != "1"]:
-                                raise BusinessMutationIndeterminate("customer OWNER permission removal is not verified", phase="postcondition")
-                            effects.append({"effect": "owner_permission_removal", "verified": True})
-                        else:
-                            self._verify_owner(grants, actor["id"])
-                            effects.append({"effect": "owner_permission", "verified": True})
-                elif self.operation == "crm_receivable_plan_create":
-                    self._verify_owner(self._grants(record_id, 8), args["body"]["ownerUserId"])
-                    if actual.get("receivableId") is not None:
-                        raise BusinessMutationIndeterminate("new plan unexpectedly links an actual receivable", phase="postcondition")
-                    effects += [{"effect": "plan_derivation", "verified": True}, {"effect": "owner_permission", "verified": True}]
-                else:
-                    actual_receivers = actual.get("receiverUserIds")
-                    if (str(actual.get("publisherUserId")) != str(actor["id"]) or not isinstance(actual_receivers, list)
-                            or sorted(actual_receivers) != receivers or len(set(actual_receivers)) != len(actual_receivers)):
-                        raise BusinessMutationIndeterminate("announcement receiver relations are not verified", phase="postcondition")
-                    effects.append({"effect": "receiver_relations", "verified": True, "count": len(actual_receivers)})
-            except BusinessMutationIndeterminate:
-                raise
-            except Exception as exc:
-                raise BusinessMutationIndeterminate("native write acknowledged; same-actor readback failed", phase="postcondition",
-                    reconciliation={"id": record_id, "entity": args["entity"]}) from exc
-        self.goal_data.invalidate_reads(frozenset({args["entity"], "crm/contact"} if self.operation in STATE_PATHS else {args["entity"]}))
-        if uncertain_dispatch:
-            from web_operation_agent.business.dispatch_evidence import verified_after_readback
-            verified_after_readback()
-        name = actual.get("name") or actual.get("title") or "回款计划"
-        return BusinessToolResult({"verified": True, "record_id": str(record_id), "entity": args["entity"],
-            "reference": f"{name}（ID={record_id}）", "effects": effects}, {"verified": True, "operation": self.operation, "effects": effects})
+            allow_readback_recovery=is_state,
+            use_verification_interval=True,
+            readback_failure_message="native write acknowledged; same-actor readback failed",
+            readback_reconciliation=lambda rs, dr: {
+                "id": rs["record_id"] if rs["record_id"] is not None else dr,
+                "entity": args["entity"],
+            },
+        )
 
     @staticmethod
     def _verify_owner(grants, owner):

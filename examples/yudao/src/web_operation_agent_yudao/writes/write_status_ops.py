@@ -15,8 +15,13 @@ from web_operation_agent.business.errors import (
 )
 from web_operation_agent.business.tools.contracts import BusinessMutationSpec, BusinessToolResult, ToolOperation
 from web_operation_agent.business.tools.registry import ToolDefinition
-from web_operation_agent.execution.events import turn_interval
-from web_operation_agent.schemas.approval_details import ApprovalDetail
+from web_operation_agent.business.write_pipeline import (
+    ProposalDiff,
+    change_detail,
+    execute_verified_handler_write,
+    preserved_detail,
+    side_effect_detail,
+)
 from .write_definitions import object_schema, text
 
 ERP_DOCUMENT_ENTITIES = {
@@ -168,11 +173,14 @@ class _StatusHandler:
             before_label = _ERP_STATUS_LABELS.get(record.get("status"), str(record.get("status")))
             after_label = _ERP_STATUS_LABELS[target_code]
             summary = f"{inputs['action']}{doc_type}「{record.get('no')}」"
-            details = (
-                ApprovalDetail("preserved", "单据类型", doc_type),
-                ApprovalDetail("preserved", "单号", str(record.get("no"))),
-                ApprovalDetail("change", "审批状态", f"{before_label} → {after_label}"),
-                ApprovalDetail("side_effect", "连带业务影响", _ERP_SIDE_EFFECTS[doc_type]),
+            diff = ProposalDiff.from_details(
+                (str(record.get("no")),),
+                (
+                    preserved_detail("单据类型", doc_type),
+                    preserved_detail("单号", str(record.get("no"))),
+                    change_detail("审批状态", before_label, after_label),
+                    side_effect_detail("连带业务影响", _ERP_SIDE_EFFECTS[doc_type]),
+                ),
             )
             change = RequestedEffect(entity, "state_change", entity, str(record.get("no")), canonical({"status": after_label}))
             preserved = {k: record[k] for k in ("no", "accountId", "totalPrice") if k in record}
@@ -187,8 +195,8 @@ class _StatusHandler:
             }
             key = hashlib.sha256(json.dumps({"op": self.operation, "entity": entity, "id": record["id"], "status": target_code},
                                             sort_keys=True).encode()).hexdigest()
-            return BusinessMutationSpec(payload, summary, (str(record.get("no")),),
-                                        details=details, reconcile_key=key,
+            return BusinessMutationSpec(payload, summary, diff.targets,
+                                        details=diff.details(), reconcile_key=key,
                                         reconciliation={"entity": entity, "operation": self.operation,
                                                         "id": record["id"], "expected": payload["expected"],
                                                         "before": {"status": record.get("status")}},
@@ -205,9 +213,12 @@ class _StatusHandler:
                 )
             before_label = _PROMO_STATUS_LABELS.get(record.get("status"), str(record.get("status")))
             summary = f"{inputs['status']}优惠券模板「{record.get('name')}」"
-            details = (
-                ApprovalDetail("preserved", "优惠券模板", str(record.get("name"))),
-                ApprovalDetail("change", "开启状态", f"{before_label} → {inputs['status']}"),
+            diff = ProposalDiff.from_details(
+                (str(record.get("name")),),
+                (
+                    preserved_detail("优惠券模板", str(record.get("name"))),
+                    change_detail("开启状态", before_label, inputs["status"]),
+                ),
             )
             change = RequestedEffect(entity, "state_change", entity, str(record.get("name")), canonical({"status": inputs["status"]}))
             preserved = {k: record[k] for k in ("name", "discountPrice", "usePrice") if k in record}
@@ -221,8 +232,8 @@ class _StatusHandler:
                 "expected": {"status": target_code},
             }
             key = hashlib.sha256(json.dumps({"op": self.operation, "id": record["id"], "status": target_code}, sort_keys=True).encode()).hexdigest()
-            return BusinessMutationSpec(payload, summary, (str(record.get("name")),),
-                                        details=details, reconcile_key=key,
+            return BusinessMutationSpec(payload, summary, diff.targets,
+                                        details=diff.details(), reconcile_key=key,
                                         reconciliation={"entity": entity, "operation": self.operation,
                                                         "id": record["id"], "expected": payload["expected"],
                                                         "before": {"status": record.get("status")}},
@@ -237,10 +248,13 @@ class _StatusHandler:
             )
         before_label = _PROMO_STATUS_LABELS.get(record.get("status"), str(record.get("status")))
         summary = f"关闭秒杀活动「{record.get('name')}」"
-        details = (
-            ApprovalDetail("preserved", "秒杀活动", str(record.get("name"))),
-            ApprovalDetail("change", "活动状态", f"{before_label} → 关闭"),
-            ApprovalDetail("side_effect", "不可逆影响", "活动关闭后立即停止秒杀且不可重新开启"),
+        diff = ProposalDiff.from_details(
+            (str(record.get("name")),),
+            (
+                preserved_detail("秒杀活动", str(record.get("name"))),
+                change_detail("活动状态", before_label, "关闭"),
+                side_effect_detail("不可逆影响", "活动关闭后立即停止秒杀且不可重新开启"),
+            ),
         )
         change = RequestedEffect(entity, "state_change", entity, str(record.get("name")), canonical({"status": "关闭"}))
         preserved = {k: record[k] for k in ("name", "spuId") if k in record}
@@ -254,58 +268,70 @@ class _StatusHandler:
             "expected": {"status": 1},
         }
         key = hashlib.sha256(json.dumps({"op": self.operation, "id": record["id"]}, sort_keys=True).encode()).hexdigest()
-        return BusinessMutationSpec(payload, summary, (str(record.get("name")),),
-                                    details=details, reconcile_key=key,
+        return BusinessMutationSpec(payload, summary, diff.targets,
+                                    details=diff.details(), reconcile_key=key,
                                     reconciliation={"entity": entity, "operation": self.operation,
                                                     "id": record["id"], "expected": payload["expected"],
                                                     "before": {"status": record.get("status")}},
                                     effect_projection=effect)
 
     def dispatch(self, args: dict, *, context=None) -> BusinessToolResult:
-        actor = self.base._actor(context)
-        if str(actor["id"]) != args.get("actor") or args.get("operation") != self.operation:
-            raise BusinessToolPermissionError("prepared transition has a different actor or operation")
         entity = args["entity"]
         record_id = args["record_id"]
-        current = self.client.get(entity + "/get", id=record_id)
-        if not isinstance(current, dict) or any(current.get(k) != v for k, v in args["snapshot"].items()):
-            raise BusinessMutationRefusedError("record state changed after approval", reason="precondition_changed")
-        if self.operation == "erp_document_status" and (args.get("params") or {}).get("status") == 10:
-            for field, why in _ERP_UNAPPROVE_BLOCKERS.get(entity, ()):
-                if _positive_number(current.get(field)):
-                    raise BusinessMutationRefusedError(why, reason="precondition_changed")
-        uncertain = False
-        try:
-            self.client.write_once(args["method"], args["path"], body=args["body"], params=args["params"],
-                                   operation=self.operation)
-        except BusinessMutationIndeterminate:
-            uncertain = True
-        with turn_interval("verification"):
-            try:
-                actual = self.client.get(entity + "/get", id=record_id)
-                if (not isinstance(actual, dict) or str(actual.get("id")) != str(record_id)
-                        or any(actual.get(k) != v for k, v in args["expected"].items())):
-                    raise BusinessMutationIndeterminate("status transition readback did not confirm target state",
-                                                        phase="postcondition", reconciliation={"id": record_id, "entity": entity})
-                if any(actual.get(k) != v for k, v in args["preserved"].items()):
-                    raise BusinessMutationIndeterminate("status transition changed unrelated header fields",
-                                                        phase="postcondition", reconciliation={"id": record_id, "entity": entity})
-            except BusinessMutationIndeterminate:
-                raise
-            except Exception as exc:
-                raise BusinessMutationIndeterminate("status transition acknowledged; same-actor readback failed",
-                                                    phase="postcondition", reconciliation={"id": record_id, "entity": entity}) from exc
-        self.goal_data.invalidate_reads(frozenset({entity}))
-        if uncertain:
-            from web_operation_agent.business.dispatch_evidence import verified_after_readback
-            verified_after_readback()
-        effects = [{"effect": "record", "verified": True, "id": record_id},
-                   {"effect": "unrelated_field_preservation", "verified": True}]
-        label = actual.get("no") or actual.get("name") or str(record_id)
-        return BusinessToolResult(
-            {"verified": True, "record_id": str(record_id), "entity": entity,
-             "reference": f"{label}（ID={record_id}）", "effects": effects},
-            {"verified": True, "operation": self.operation, "effects": effects},
+
+        def verify_actor():
+            actor = self.base._actor(context)
+            if str(actor["id"]) != args.get("actor") or args.get("operation") != self.operation:
+                raise BusinessToolPermissionError("prepared transition has a different actor or operation")
+            return actor
+
+        def pre_dispatch_reread(_actor):
+            current = self.client.get(entity + "/get", id=record_id)
+            if not isinstance(current, dict) or any(current.get(k) != v for k, v in args["snapshot"].items()):
+                raise BusinessMutationRefusedError("record state changed after approval", reason="precondition_changed")
+            if self.operation == "erp_document_status" and (args.get("params") or {}).get("status") == 10:
+                for field, why in _ERP_UNAPPROVE_BLOCKERS.get(entity, ()):
+                    if _positive_number(current.get(field)):
+                        raise BusinessMutationRefusedError(why, reason="precondition_changed")
+            return current
+
+        def dispatch_once(_actor, _reread_state):
+            return self.client.write_once(
+                args["method"],
+                args["path"],
+                body=args["body"],
+                params=args["params"],
+                operation=self.operation,
+            )
+
+        def verify_readback(_actor, _reread_state, _dispatch_result, _uncertain):
+            actual = self.client.get(entity + "/get", id=record_id)
+            if (not isinstance(actual, dict) or str(actual.get("id")) != str(record_id)
+                    or any(actual.get(k) != v for k, v in args["expected"].items())):
+                raise BusinessMutationIndeterminate("status transition readback did not confirm target state",
+                                                    phase="postcondition", reconciliation={"id": record_id, "entity": entity})
+            if any(actual.get(k) != v for k, v in args["preserved"].items()):
+                raise BusinessMutationIndeterminate("status transition changed unrelated header fields",
+                                                    phase="postcondition", reconciliation={"id": record_id, "entity": entity})
+            effects = [{"effect": "record", "verified": True, "id": record_id},
+                       {"effect": "unrelated_field_preservation", "verified": True}]
+            label = actual.get("no") or actual.get("name") or str(record_id)
+            return BusinessToolResult(
+                {"verified": True, "record_id": str(record_id), "entity": entity,
+                 "reference": f"{label}（ID={record_id}）", "effects": effects},
+                {"verified": True, "operation": self.operation, "effects": effects},
+            )
+
+        return execute_verified_handler_write(
+            verify_actor=verify_actor,
+            pre_dispatch_reread=pre_dispatch_reread,
+            dispatch_once=dispatch_once,
+            verify_readback=verify_readback,
+            invalidate_reads=lambda: self.goal_data.invalidate_reads(frozenset({entity})),
+            allow_readback_recovery=True,
+            use_verification_interval=True,
+            readback_failure_message="status transition acknowledged; same-actor readback failed",
+            readback_reconciliation=lambda _rs, _dr: {"id": record_id, "entity": entity},
         )
 
 

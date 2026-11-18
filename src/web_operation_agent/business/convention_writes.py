@@ -28,12 +28,9 @@ from ..execution.submit_contract import same_value, scalar_text
 from ..execution.value_source import (
     Entry,
     SourceLedger,
-    append_overwrites_existing,
     check_entries,
 )
 from ..goal.skill_literals import _existing_append_supplied, literal_supplied
-from ..schemas.approval_details import ApprovalDetail
-from .dispatch_evidence import verified_after_readback
 from .effects import EffectProjection, RequestedEffect, canonical
 from .errors import (
     BusinessMutationIndeterminate,
@@ -43,12 +40,20 @@ from .errors import (
 )
 from .tools.contracts import BusinessMutationSpec, BusinessToolResult, ToolOperation
 from .tools.registry import ToolDefinition
-
-_SECRET_FIELD = re.compile(
-    r"pass(?:word)?|pwd|secret|private_?key|api[_-]?key|aes_?key|sign_?key|mch_?key|"
-    r"token|authorization|credential|^config$|config$|密码|密钥|令牌",
-    re.I,
+from .write_pipeline import (
+    DEFAULT_SECRET_FIELD_PATTERN,
+    ProposalDiff,
+    change_detail,
+    execute_verified_handler_write,
+    non_volatile_snapshot,
+    preserved_detail,
+    require_append_preservation,
+    restricted_snapshot_digests,
+    verify_entry_provenance,
+    verify_preservation_snapshot,
 )
+
+_SECRET_FIELD = DEFAULT_SECRET_FIELD_PATTERN
 _FIELD_KINDS = frozenset({"string", "integer", "number", "boolean", "id_array"})
 
 
@@ -202,19 +207,12 @@ def _record_display_name(record: dict, name_fields: tuple[str, ...], id_field: s
 
 
 def _non_volatile_snapshot(record: dict, volatile: frozenset[str]) -> dict:
-    return {
-        k: v for k, v in record.items()
-        if k not in volatile and not _SECRET_FIELD.search(k)
-    }
+    return non_volatile_snapshot(record, volatile, secret_pattern=_SECRET_FIELD)
 
 
 def _restricted_snapshot_digests(record: dict, volatile: frozenset[str]) -> dict[str, str]:
     """Digest excluded sensitive/config fields by hashed field name without exposing keys or values."""
-    return {
-        hashlib.sha256(k.encode()).hexdigest()[:16]: hashlib.sha256(canonical(record[k]).encode()).hexdigest()
-        for k in sorted(record)
-        if k not in volatile and _SECRET_FIELD.search(k)
-    }
+    return restricted_snapshot_digests(record, volatile, secret_pattern=_SECRET_FIELD)
 
 
 def _values_equal(left, right, *, kind: str = "") -> bool:
@@ -228,20 +226,7 @@ def _values_equal(left, right, *, kind: str = "") -> bool:
 
 
 def _snapshot_preserved(before: dict, after: dict, *, ignore: frozenset[str]) -> list[str]:
-    drifted: list[str] = []
-    for key in sorted(set(before) | set(after)):
-        if key in ignore:
-            continue
-        b_val, a_val = before.get(key), after.get(key)
-        if isinstance(b_val, list) and isinstance(a_val, list):
-            if len(b_val) != len(a_val) or any(not same_value(x, y) for x, y in zip(b_val, a_val)):
-                drifted.append(key)
-        elif isinstance(b_val, dict) or isinstance(a_val, dict):
-            if canonical(b_val) != canonical(a_val):
-                drifted.append(key)
-        elif not _values_equal(b_val, a_val):
-            drifted.append(key)
-    return drifted
+    return verify_preservation_snapshot(before, after, ignore=ignore, values_equal=_values_equal)
 
 
 def _violates_optional_bounds(f_spec: ConventionFieldSpec, val: object) -> bool:
@@ -266,11 +251,7 @@ def _entry_provenance_ok(
     texts: tuple[str, ...] | list[str],
 ) -> bool:
     """Validate one field entry against user texts and earlier scoped candidate values."""
-    sub = SourceLedger()
-    if scoped_cands:
-        sub.add_candidates([(entry.field, val) for _binding, val in scoped_cands])
-    sub.add(entry)
-    return check_entries(sub, list(texts))[0].ok
+    return verify_entry_provenance(entry, scoped_cands, texts)
 
 
 class ConventionWriteEffects:
@@ -377,7 +358,7 @@ class ConventionUpdateHandler:
             if binding is not None:
                 bindings.append(binding)
             shown_label = f"{f_spec.label}（{f_spec.name}）" if f_spec.label else f_spec.name
-            details.append(ApprovalDetail("change", shown_label, f"{old_disp} → {new_disp}"))
+            details.append(change_detail(shown_label, str(old_disp), str(new_disp)))
             provenance_items.append({
                 "field": f_spec.name,
                 "label": f_spec.label or f_spec.name,
@@ -422,8 +403,9 @@ class ConventionUpdateHandler:
         target_label = f"{disp_name}（{spec.label} #{record_id}）" if disp_name != str(record_id) else f"{spec.label} #{record_id}"
         preserved_count = len([k for k in payload if k != spec.id_field and k not in encoded_updates])
         details.append(
-            ApprovalDetail("preserved", "其余字段保留", f"保持同账号读取的其余 {preserved_count} 个字段原值不变")
+            preserved_detail("其余字段保留", f"保持同账号读取的其余 {preserved_count} 个字段原值不变")
         )
+        diff = ProposalDiff.from_details((target_label,), details)
         # Project ALL requested inputs from `args` so EffectProjection.require(expected) matches 1:1
         all_projected = {}
         for item in raw_changes:
@@ -459,8 +441,8 @@ class ConventionUpdateHandler:
         return BusinessMutationSpec(
             private,
             f"修改{spec.label}「{disp_name}」",
-            (target_label,),
-            details=tuple(details),
+            diff.targets,
+            details=diff.details(),
             reconcile_key=key,
             reconciliation={"entity": entity, "id": record_id, "operation": "update_record", "body_digest": key},
             effect_projection=projection,
@@ -501,12 +483,14 @@ class ConventionUpdateHandler:
             # 1. Check append overwrite protection on strings (including clearing to None)
             if isinstance(raw_val, str) or raw_val is None:
                 val_for_append = raw_val if isinstance(raw_val, str) else ""
-                if (append_overwrites_existing(prompt, label, old_val, val_for_append)
-                        or append_overwrites_existing(prompt, f_spec.name, old_val, val_for_append)):
-                    raise BusinessToolRequestError(
-                        f"用户要求在「{label}」中追加或补充内容，当前修改覆盖或清空了原有内容；"
+                require_append_preservation(
+                    prompt,
+                    (((label, f_spec.name), old_val, val_for_append),),
+                    error_factory=lambda _overwritten, _lbl=label: BusinessToolRequestError(
+                        f"用户要求在「{_lbl}」中追加或补充内容，当前修改覆盖或清空了原有内容；"
                         "请先读取并保留目标记录该字段原值，再在其后追加本次内容。"
-                    )
+                    ),
+                )
 
             field_cands = (
                 {
@@ -647,90 +631,107 @@ class ConventionUpdateHandler:
                     )
 
     def dispatch(self, args: dict, *, context=None) -> BusinessToolResult:
-        actor_id = self.port.verify_actor(context)
-        if actor_id != args.get("actor"):
-            raise BusinessToolIdentityError("prepared convention update belongs to a different actor")
         entity = args["entity"]
-        spec = self.port.update_specs().get(entity)
-        if spec is None:
-            raise BusinessToolRequestError("convention update spec is no longer available")
         record_id = args["record_id"]
-        self.port.recheck_bindings(args.get("bindings") or [], actor_id=actor_id)
 
-        # Pre-dispatch reread: refuse if any non-volatile field drifted since preparation
-        current = self.port.read_record(entity, record_id)
-        if not isinstance(current, dict):
-            raise BusinessMutationRefusedError(
-                "target record is no longer readable before dispatch",
-                reason="precondition_changed",
-            )
-        current_snap = _non_volatile_snapshot(current, spec.volatile_fields)
-        if (_snapshot_preserved(args["snapshot"], current_snap, ignore=spec.volatile_fields)
-                or _restricted_snapshot_digests(current, spec.volatile_fields) != args.get("restricted_field_digests", {})):
-            raise BusinessMutationRefusedError(
-                "current record changed after approval; prepare again",
-                reason="precondition_changed",
-            )
+        def verify_actor():
+            actor_id = self.port.verify_actor(context)
+            if actor_id != args.get("actor"):
+                raise BusinessToolIdentityError("prepared convention update belongs to a different actor")
+            spec = self.port.update_specs().get(entity)
+            if spec is None:
+                raise BusinessToolRequestError("convention update spec is no longer available")
+            return actor_id, spec
 
-        uncertain_dispatch = False
-        try:
-            self.port.dispatch_update(spec, record_id, args["payload"])
-        except BusinessMutationIndeterminate:
-            uncertain_dispatch = True
-
-        # Post-dispatch same-actor full-field readback
-        try:
-            after = self.port.read_record(entity, record_id)
-        except Exception as exc:
-            raise BusinessMutationIndeterminate(
-                "convention update acknowledged; same-actor readback failed",
-                phase="postcondition",
-                reconciliation={"entity": entity, "id": record_id},
-            ) from exc
-        if not isinstance(after, dict) or str(after.get(spec.id_field)) != str(record_id):
-            raise BusinessMutationIndeterminate(
-                "convention update readback missed target record",
-                phase="postcondition",
-                reconciliation={"entity": entity, "id": record_id},
-            )
-        changed: dict = args["changed"]
-        field_kinds = {f.name: f.kind for f in spec.fields}
-        spec_fields = {f.name: f for f in spec.fields}
-        match_fn = getattr(self.port, "matches_readback_value", None)
-        for key, expected_val in changed.items():
-            matched = (
-                match_fn(spec, spec_fields[key], after.get(key), expected_val)
-                if callable(match_fn) and key in spec_fields
-                else _values_equal(after.get(key), expected_val, kind=field_kinds.get(key, ""))
-            )
-            if not matched:
-                raise BusinessMutationIndeterminate(
-                    f"convention update readback did not confirm field {key}",
-                    phase="postcondition",
-                    reconciliation={"entity": entity, "id": record_id, "field": key},
+        def pre_dispatch_reread(actor_state):
+            actor_id, spec = actor_state
+            self.port.recheck_bindings(args.get("bindings") or [], actor_id=actor_id)
+            current = self.port.read_record(entity, record_id)
+            if not isinstance(current, dict):
+                raise BusinessMutationRefusedError(
+                    "target record is no longer readable before dispatch",
+                    reason="precondition_changed",
                 )
-        ignore = frozenset(spec.volatile_fields) | frozenset(changed.keys())
-        drifted = _snapshot_preserved(current_snap, _non_volatile_snapshot(after, spec.volatile_fields), ignore=ignore)
-        if not drifted and _restricted_snapshot_digests(after, spec.volatile_fields) != args.get("restricted_field_digests", {}):
-            drifted = ["restricted_field"]
-        if drifted:
-            raise BusinessMutationIndeterminate(
-                "convention update altered unmentioned fields: " + ", ".join(drifted[:6]),
-                phase="postcondition",
-                reconciliation={"entity": entity, "id": record_id, "unverified_effect": "unrelated_field_preservation"},
+            current_snap = _non_volatile_snapshot(current, spec.volatile_fields)
+            if verify_preservation_snapshot(
+                args["snapshot"],
+                current_snap,
+                ignore=spec.volatile_fields,
+                restricted_before=args.get("restricted_field_digests", {}),
+                restricted_after=_restricted_snapshot_digests(current, spec.volatile_fields),
+                values_equal=_values_equal,
+            ):
+                raise BusinessMutationRefusedError(
+                    "current record changed after approval; prepare again",
+                    reason="precondition_changed",
+                )
+            return current_snap
+
+        def dispatch_once(actor_state, _current_snap):
+            _actor_id, spec = actor_state
+            self.port.dispatch_update(spec, record_id, args["payload"])
+
+        def verify_readback(actor_state, current_snap, _dispatch_result, _uncertain):
+            _actor_id, spec = actor_state
+            after = self.port.read_record(entity, record_id)
+            if not isinstance(after, dict) or str(after.get(spec.id_field)) != str(record_id):
+                raise BusinessMutationIndeterminate(
+                    "convention update readback missed target record",
+                    phase="postcondition",
+                    reconciliation={"entity": entity, "id": record_id},
+                )
+            changed: dict = args["changed"]
+            field_kinds = {f.name: f.kind for f in spec.fields}
+            spec_fields = {f.name: f for f in spec.fields}
+            match_fn = getattr(self.port, "matches_readback_value", None)
+            for key, expected_val in changed.items():
+                matched = (
+                    match_fn(spec, spec_fields[key], after.get(key), expected_val)
+                    if callable(match_fn) and key in spec_fields
+                    else _values_equal(after.get(key), expected_val, kind=field_kinds.get(key, ""))
+                )
+                if not matched:
+                    raise BusinessMutationIndeterminate(
+                        f"convention update readback did not confirm field {key}",
+                        phase="postcondition",
+                        reconciliation={"entity": entity, "id": record_id, "field": key},
+                    )
+            ignore = frozenset(spec.volatile_fields) | frozenset(changed.keys())
+            drifted = verify_preservation_snapshot(
+                current_snap,
+                _non_volatile_snapshot(after, spec.volatile_fields),
+                ignore=ignore,
+                restricted_before=args.get("restricted_field_digests", {}),
+                restricted_after=_restricted_snapshot_digests(after, spec.volatile_fields),
+                values_equal=_values_equal,
             )
-        self.port.invalidate_reads(frozenset({entity}))
-        if uncertain_dispatch:
-            verified_after_readback()
-        disp_name = _record_display_name(after, spec.name_fields, spec.id_field)
-        reference = f"{disp_name}（ID={record_id}）" if disp_name and disp_name != str(record_id) else f"ID={record_id}"
-        effects = [
-            {"effect": "record", "verified": True, "id": record_id},
-            {"effect": "unrelated_field_preservation", "verified": True, "id": record_id},
-        ]
-        return BusinessToolResult(
-            {"verified": True, "record_id": str(record_id), "entity": entity, "reference": reference, "effects": effects},
-            {"verified": True, "operation": "update_record", "effects": effects},
+            if drifted:
+                raise BusinessMutationIndeterminate(
+                    "convention update altered unmentioned fields: " + ", ".join(drifted[:6]),
+                    phase="postcondition",
+                    reconciliation={"entity": entity, "id": record_id, "unverified_effect": "unrelated_field_preservation"},
+                )
+            disp_name = _record_display_name(after, spec.name_fields, spec.id_field)
+            reference = f"{disp_name}（ID={record_id}）" if disp_name and disp_name != str(record_id) else f"ID={record_id}"
+            effects = [
+                {"effect": "record", "verified": True, "id": record_id},
+                {"effect": "unrelated_field_preservation", "verified": True, "id": record_id},
+            ]
+            return BusinessToolResult(
+                {"verified": True, "record_id": str(record_id), "entity": entity, "reference": reference, "effects": effects},
+                {"verified": True, "operation": "update_record", "effects": effects},
+            )
+
+        return execute_verified_handler_write(
+            verify_actor=verify_actor,
+            pre_dispatch_reread=pre_dispatch_reread,
+            dispatch_once=dispatch_once,
+            verify_readback=verify_readback,
+            invalidate_reads=lambda: self.port.invalidate_reads(frozenset({entity})),
+            allow_readback_recovery=True,
+            use_verification_interval=False,
+            readback_failure_message="convention update acknowledged; same-actor readback failed",
+            readback_reconciliation=lambda _rs, _dr: {"entity": entity, "id": record_id},
         )
 
 
@@ -844,9 +845,12 @@ class ConventionStatusHandler:
         restricted_digests = _restricted_snapshot_digests(record, spec.volatile_fields)
         disp_name = _record_display_name(record, spec.name_fields, spec.id_field)
         target_label = f"{disp_name}（{spec.label} #{record_id}）" if disp_name != str(record_id) else f"{spec.label} #{record_id}"
-        details = (
-            ApprovalDetail("preserved", spec.label, disp_name),
-            ApprovalDetail("change", "状态", f"{before_label} → {after_label}"),
+        diff = ProposalDiff.from_details(
+            (target_label,),
+            (
+                preserved_detail(spec.label, disp_name),
+                change_detail("状态", before_label, after_label),
+            ),
         )
         change = RequestedEffect(
             entity, "state_change", entity, str(args["target"]).strip(), canonical({spec.status_field: after_label})
@@ -872,84 +876,101 @@ class ConventionStatusHandler:
         return BusinessMutationSpec(
             private,
             f"将{spec.label}「{disp_name}」状态设为{after_label}",
-            (target_label,),
-            details=details,
+            diff.targets,
+            details=diff.details(),
             reconcile_key=key,
             reconciliation={"entity": entity, "id": record_id, "operation": "toggle_record_status", "body_digest": key},
             effect_projection=projection,
         )
 
     def dispatch(self, args: dict, *, context=None) -> BusinessToolResult:
-        actor_id = self.port.verify_actor(context)
-        if actor_id != args.get("actor"):
-            raise BusinessToolIdentityError("prepared status toggle belongs to a different actor")
         entity = args["entity"]
-        spec = self.port.status_specs().get(entity)
-        if spec is None:
-            raise BusinessToolRequestError("two-state status spec is no longer available")
         record_id = args["record_id"]
-        current = self.port.read_record(entity, record_id)
-        if not isinstance(current, dict):
-            raise BusinessMutationRefusedError(
-                "target record is no longer readable before dispatch",
-                reason="precondition_changed",
-            )
-        current_snap = _non_volatile_snapshot(current, spec.volatile_fields)
-        if (_snapshot_preserved(args["snapshot"], current_snap, ignore=spec.volatile_fields)
-                or _restricted_snapshot_digests(current, spec.volatile_fields) != args.get("restricted_field_digests", {})):
-            raise BusinessMutationRefusedError(
-                "current record changed after approval; prepare again",
-                reason="precondition_changed",
-            )
 
-        uncertain_dispatch = False
-        try:
+        def verify_actor():
+            actor_id = self.port.verify_actor(context)
+            if actor_id != args.get("actor"):
+                raise BusinessToolIdentityError("prepared status toggle belongs to a different actor")
+            spec = self.port.status_specs().get(entity)
+            if spec is None:
+                raise BusinessToolRequestError("two-state status spec is no longer available")
+            return spec
+
+        def pre_dispatch_reread(spec):
+            current = self.port.read_record(entity, record_id)
+            if not isinstance(current, dict):
+                raise BusinessMutationRefusedError(
+                    "target record is no longer readable before dispatch",
+                    reason="precondition_changed",
+                )
+            current_snap = _non_volatile_snapshot(current, spec.volatile_fields)
+            if verify_preservation_snapshot(
+                args["snapshot"],
+                current_snap,
+                ignore=spec.volatile_fields,
+                restricted_before=args.get("restricted_field_digests", {}),
+                restricted_after=_restricted_snapshot_digests(current, spec.volatile_fields),
+                values_equal=_values_equal,
+            ):
+                raise BusinessMutationRefusedError(
+                    "current record changed after approval; prepare again",
+                    reason="precondition_changed",
+                )
+            return current_snap
+
+        def dispatch_once(spec, _current_snap):
             self.port.dispatch_status(spec, record_id, args["target_code"])
-        except BusinessMutationIndeterminate:
-            uncertain_dispatch = True
 
-        try:
+        def verify_readback(spec, current_snap, _dispatch_result, _uncertain):
             after = self.port.read_record(entity, record_id)
-        except Exception as exc:
-            raise BusinessMutationIndeterminate(
-                "status toggle acknowledged; same-actor readback failed",
-                phase="postcondition",
-                reconciliation={"entity": entity, "id": record_id},
-            ) from exc
-        if not isinstance(after, dict) or str(after.get(spec.id_field)) != str(record_id):
-            raise BusinessMutationIndeterminate(
-                "status toggle readback missed target record",
-                phase="postcondition",
-                reconciliation={"entity": entity, "id": record_id},
+            if not isinstance(after, dict) or str(after.get(spec.id_field)) != str(record_id):
+                raise BusinessMutationIndeterminate(
+                    "status toggle readback missed target record",
+                    phase="postcondition",
+                    reconciliation={"entity": entity, "id": record_id},
+                )
+            if spec.label_for_code(after.get(spec.status_field)) != args["after_label"]:
+                raise BusinessMutationIndeterminate(
+                    "status toggle readback did not confirm target status",
+                    phase="postcondition",
+                    reconciliation={"entity": entity, "id": record_id},
+                )
+            ignore = frozenset(spec.volatile_fields) | {spec.status_field}
+            drifted = verify_preservation_snapshot(
+                current_snap,
+                _non_volatile_snapshot(after, spec.volatile_fields),
+                ignore=ignore,
+                restricted_before=args.get("restricted_field_digests", {}),
+                restricted_after=_restricted_snapshot_digests(after, spec.volatile_fields),
+                values_equal=_values_equal,
             )
-        if spec.label_for_code(after.get(spec.status_field)) != args["after_label"]:
-            raise BusinessMutationIndeterminate(
-                "status toggle readback did not confirm target status",
-                phase="postcondition",
-                reconciliation={"entity": entity, "id": record_id},
+            if drifted:
+                raise BusinessMutationIndeterminate(
+                    "status toggle altered unmentioned fields: " + ", ".join(drifted[:6]),
+                    phase="postcondition",
+                    reconciliation={"entity": entity, "id": record_id, "unverified_effect": "unrelated_field_preservation"},
+                )
+            disp_name = _record_display_name(after, spec.name_fields, spec.id_field)
+            reference = f"{disp_name}（ID={record_id}）" if disp_name and disp_name != str(record_id) else f"ID={record_id}"
+            effects = [
+                {"effect": "record", "verified": True, "id": record_id},
+                {"effect": "unrelated_field_preservation", "verified": True, "id": record_id},
+            ]
+            return BusinessToolResult(
+                {"verified": True, "record_id": str(record_id), "entity": entity, "reference": reference, "effects": effects},
+                {"verified": True, "operation": "toggle_record_status", "effects": effects},
             )
-        ignore = frozenset(spec.volatile_fields) | {spec.status_field}
-        drifted = _snapshot_preserved(current_snap, _non_volatile_snapshot(after, spec.volatile_fields), ignore=ignore)
-        if not drifted and _restricted_snapshot_digests(after, spec.volatile_fields) != args.get("restricted_field_digests", {}):
-            drifted = ["restricted_field"]
-        if drifted:
-            raise BusinessMutationIndeterminate(
-                "status toggle altered unmentioned fields: " + ", ".join(drifted[:6]),
-                phase="postcondition",
-                reconciliation={"entity": entity, "id": record_id, "unverified_effect": "unrelated_field_preservation"},
-            )
-        self.port.invalidate_reads(frozenset({entity}))
-        if uncertain_dispatch:
-            verified_after_readback()
-        disp_name = _record_display_name(after, spec.name_fields, spec.id_field)
-        reference = f"{disp_name}（ID={record_id}）" if disp_name and disp_name != str(record_id) else f"ID={record_id}"
-        effects = [
-            {"effect": "record", "verified": True, "id": record_id},
-            {"effect": "unrelated_field_preservation", "verified": True, "id": record_id},
-        ]
-        return BusinessToolResult(
-            {"verified": True, "record_id": str(record_id), "entity": entity, "reference": reference, "effects": effects},
-            {"verified": True, "operation": "toggle_record_status", "effects": effects},
+
+        return execute_verified_handler_write(
+            verify_actor=verify_actor,
+            pre_dispatch_reread=pre_dispatch_reread,
+            dispatch_once=dispatch_once,
+            verify_readback=verify_readback,
+            invalidate_reads=lambda: self.port.invalidate_reads(frozenset({entity})),
+            allow_readback_recovery=True,
+            use_verification_interval=False,
+            readback_failure_message="status toggle acknowledged; same-actor readback failed",
+            readback_reconciliation=lambda _rs, _dr: {"entity": entity, "id": record_id},
         )
 
 
