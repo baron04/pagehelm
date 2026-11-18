@@ -595,6 +595,33 @@ class LiveProductSessionTests(unittest.TestCase):
         finally:
             server.close()
 
+    def test_shared_server_begin_drain_refuses_new_sessions_and_marks_readiness(self):
+        server = LiveProductServer(max_sessions=2, sse_wait_s=.01)
+        try:
+            existing = server.create_session(
+                allowed_origin=ORIGIN,
+                page_controller_module=ORIGIN + "/page-controller.js",
+                runner_factory=lambda _channel: _Runner({"ok": True}),
+                session_id="drain-existing")
+            self.assertFalse(server.draining)
+            self.assertTrue(server.readiness_snapshot()["accepting_sessions"])
+
+            server.begin_drain()
+            self.assertTrue(server.draining)
+            snapshot = server.readiness_snapshot()
+            self.assertTrue(snapshot["ready"])
+            self.assertFalse(snapshot["accepting_sessions"])
+            with self.assertRaisesRegex(RuntimeError, "draining"):
+                server.create_session(
+                    allowed_origin=ORIGIN,
+                    page_controller_module=ORIGIN + "/page-controller.js",
+                    runner_factory=lambda _channel: _Runner(),
+                    session_id="drain-new")
+            existing.start()
+            self.assertEqual(existing.wait(2), {"ok": True})
+        finally:
+            server.close()
+
     def test_shared_server_enforces_capacity_per_stable_actor(self):
         now = int(time.time() * 1000)
 

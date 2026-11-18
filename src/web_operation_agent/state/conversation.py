@@ -11,6 +11,7 @@ import stat
 import threading
 import time
 from collections import deque
+from contextlib import closing, contextmanager
 
 from ..business.runtime import BusinessToolResult
 from ..privacy import redact_sensitive_assignments, redact_session_handoffs
@@ -335,10 +336,14 @@ class SQLiteConversationState(ConversationState):
             with self._lock:
                 self._page_operation_granted = bool(row[1])
 
+    @contextmanager
     def _connect(self):
         database = sqlite3.connect(self.path, isolation_level=None, timeout=5)
         database.execute("PRAGMA synchronous=FULL")
-        return database
+        try:
+            yield database
+        finally:
+            database.close()
 
     def _persist(self) -> None:
         with self._lock:
@@ -384,7 +389,7 @@ def prune_sqlite_conversations(path: str | os.PathLike[str], *,
         raise ValueError("conversation retention cutoff must be at least one day old")
     if not os.path.exists(target):
         return 0
-    with sqlite3.connect(target, isolation_level=None, timeout=5) as database:
+    with closing(sqlite3.connect(target, isolation_level=None, timeout=5)) as database:
         database.execute("BEGIN IMMEDIATE")
         removed = database.execute(
             "DELETE FROM conversation_contexts WHERE updated < ?",

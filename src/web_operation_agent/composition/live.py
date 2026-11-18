@@ -490,6 +490,7 @@ class LiveProductServer:
         self._sessions: dict[str, LiveProductSession] = {}
         self._lock = threading.RLock()
         self._closed = False
+        self._draining = False
         self.gateway = EmbeddedGateway(
             self.registry, host=host, port=port, sse_wait_s=sse_wait_s,
             public_base_url=public_base_url,
@@ -519,15 +520,26 @@ class LiveProductServer:
             session.close(reason)
         return len(expired)
 
+    @property
+    def draining(self) -> bool:
+        with self._lock:
+            return self._draining
+
+    def begin_drain(self) -> None:
+        """Stop accepting new sessions while existing sessions finish in-flight work."""
+        with self._lock:
+            self._draining = True
+
     def readiness_snapshot(self) -> dict:
         """Return bounded service state without session identifiers or application content."""
         self._reap_expired()
         with self._lock:
             closed = self._closed
+            draining = self._draining
             session_count = len(self._sessions)
         snapshot = {
             "ready": not closed,
-            "accepting_sessions": not closed and session_count < self.max_sessions,
+            "accepting_sessions": not closed and not draining and session_count < self.max_sessions,
             "session_count": session_count,
             "session_capacity": self.max_sessions,
         }
@@ -560,6 +572,9 @@ class LiveProductServer:
         with self._lock:
             if self._closed:
                 raise RuntimeError("live product server is closed")
+            if self._draining:
+                raise LiveProductCapacityError(
+                    "live product server is draining and no longer accepts new sessions")
             self._reap_expired()
             if len(self._sessions) >= self.max_sessions:
                 raise LiveProductCapacityError(

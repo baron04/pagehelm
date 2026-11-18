@@ -6,6 +6,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from web_operation_agent.business.runtime import BusinessToolResult
@@ -169,10 +170,11 @@ class DurableConversationStateTests(unittest.TestCase):
             state = SQLiteConversationState(path, "session-one")
             state.record(message_id="m1", user_text="one", assistant_text="done",
                          status="finished")
-            with sqlite3.connect(path) as database:
+            with closing(sqlite3.connect(path)) as database:
                 database.execute(
                     "UPDATE conversation_contexts SET payload=? WHERE conversation_id=?",
                     ('{"schema_version":1,"prior_turns":"wrong"}', "session-one"))
+                database.commit()
             with self.assertRaisesRegex(ValueError, "turns"):
                 SQLiteConversationState(path, "session-one")
 
@@ -185,13 +187,14 @@ class DurableConversationStateTests(unittest.TestCase):
             current = SQLiteConversationState(path, "current-session")
             current.record(message_id="m2", user_text="new", assistant_text="done",
                            status="finished")
-            with sqlite3.connect(path) as database:
+            with closing(sqlite3.connect(path)) as database:
                 database.execute(
                     "UPDATE conversation_contexts SET updated=1000 "
                     "WHERE conversation_id='old-session'")
                 database.execute(
                     "UPDATE conversation_contexts SET updated=200000000 "
                     "WHERE conversation_id='current-session'")
+                database.commit()
 
             self.assertEqual(prune_sqlite_conversations(
                 path, older_than_ms=100_000_000, now_ms=200_000_000), 1)
@@ -220,13 +223,14 @@ class DurableConversationStateTests(unittest.TestCase):
     def test_sqlite_upgrades_legacy_table_without_page_operation_column(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "legacy.sqlite3"
-            with sqlite3.connect(path) as db:
+            with closing(sqlite3.connect(path)) as db:
                 db.execute(
                     "CREATE TABLE conversation_contexts ("
                     "conversation_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated INTEGER NOT NULL)")
                 db.execute(
                     "INSERT INTO conversation_contexts VALUES (?, ?, ?)",
                     ("legacy-session", '{"schema_version":1,"prior_turns":[]}', 1000))
+                db.commit()
             state = SQLiteConversationState(path, "legacy-session")
             self.assertFalse(state.page_operation_granted)
             state.page_operation_granted = True
