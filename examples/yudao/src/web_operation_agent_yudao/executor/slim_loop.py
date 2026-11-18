@@ -39,6 +39,7 @@ from web_operation_agent.business.errors import (
     BusinessToolIdentityError,
     BusinessToolUnavailableError,
 )
+from web_operation_agent.execution.checks import ProgramCheckSpec, record_check_fired
 from web_operation_agent.execution.draft_handoff import field_identity, handoff_draft, unrestorable_form
 from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor, history_messages
 from web_operation_agent.execution.model_loop_contracts import (
@@ -98,6 +99,7 @@ from .page_prompts import (
 )
 from .procedures import (
     YudaoProceduresBase,
+    _ConcurrentReadProcedure,
     _Procedure,
     _business_scope,
     _draft_field_named,
@@ -107,6 +109,100 @@ from .procedures import (
 )
 
 _STATUS_READ_TOOLS = frozenset({"find_record", "search_api", "call_api", "entity_rules", "load_domain_guide", "finish"})
+_CONCURRENT_READ_TOOLS = frozenset({"call_api", "find_record", "search_api", "entity_rules", "load_domain_guide"})
+
+YUDAO_CHECK_SPECS: dict[str, ProgramCheckSpec] = {
+    "read_only_question": ProgramCheckSpec(
+        name="read_only_question",
+        checks_what="Status-only questions refuse page mutation or navigation tools.",
+        retry_guidance="本轮只询问状态；请根据当前账号的只读接口结果直接回答，不操作页面。",
+        terminal_delivery="Only verified read-only API status facts are delivered; page actions remain refused.",
+    ),
+    "draft_only": ProgramCheckSpec(
+        name="draft_only",
+        checks_what="Draft-only form prefill requests block Skill write tools and persistent proposals.",
+        retry_guidance="用户本轮只要求预填表单；请改用页面表单步骤，停在提交前。",
+        terminal_delivery="No persistent write is proposed or dispatched; only transient form prefill is allowed.",
+    ),
+    "dangerous_unconfirmed": ProgramCheckSpec(
+        name="dangerous_unconfirmed",
+        checks_what="Irreversible or reverse status actions require explicit user confirmation from an earlier turn.",
+        retry_guidance="请先在对话里说明动作对目标记录及关联库存/活动的具体影响，并用 finish(need_input) 请用户确认。",
+        terminal_delivery="The turn stops with need_input before creating an approval card until the user confirms.",
+    ),
+    "unrequested_draft_field": ProgramCheckSpec(
+        name="unrequested_draft_field",
+        checks_what="Draft form entries may only set fields explicitly named or valued by the user.",
+        retry_guidance="这些表单字段没有得到用户请求支持，未填写；请只填用户指定的字段。",
+        terminal_delivery="Unrequested draft values are refused before touching page controls.",
+    ),
+    "draft_handoff_required": ProgramCheckSpec(
+        name="draft_handoff_required",
+        checks_what="Entered draft business forms must complete same-form readback and submit-control handoff before done.",
+        retry_guidance="已填写的业务表单尚未完成同一实时表单的回读与提交控件交接；请用 then_highlight 完成交接或如实说明 cannot。",
+        terminal_delivery="After a failed retry, the reply is preserved and annotated as undelivered with status=cannot.",
+    ),
+    "delivery_sensitive": ProgramCheckSpec(
+        name="delivery_sensitive",
+        checks_what="Delivery answers and item descriptions must not contain unredacted credentials.",
+        retry_guidance="交付内容含凭据；删去后重新交付。",
+        terminal_delivery="After a failed retry, the reply is annotated as undelivered with status=cannot.",
+    ),
+    "delivery_missing_receipt": ProgramCheckSpec(
+        name="delivery_missing_receipt",
+        checks_what="Delivered non-page items must cite at least one current-turn receipt.",
+        retry_guidance="已交付项必须引用至少一份本轮回执。",
+        terminal_delivery="After a failed retry, the affected item is marked undelivered with status=cannot.",
+    ),
+    "delivery_foreign_receipt": ProgramCheckSpec(
+        name="delivery_foreign_receipt",
+        checks_what="Every cited delivery receipt must exist in this turn's TurnTables namespace.",
+        retry_guidance="有回执不存在或不属于本轮；请用本轮工具返回的编号。",
+        terminal_delivery="After a failed retry, the affected item is marked undelivered with status=cannot.",
+    ),
+    "delivery_page_handoff": ProgramCheckSpec(
+        name="delivery_page_handoff",
+        checks_what="Answers claiming form handoff must match a handoff still active on the current page.",
+        retry_guidance="交接的表单或提交按钮已不在用户页上；核对当前页面并必要时重新交接。",
+        terminal_delivery="After a failed retry, the page item is marked undelivered with status=cannot.",
+    ),
+    "delivery_page_home": ProgramCheckSpec(
+        name="delivery_page_home",
+        checks_what="Delivered page items must not remain on the application home route.",
+        retry_guidance="用户页仍在首页；先到达交付要求的页面再标为已交付。",
+        terminal_delivery="After a failed retry, the page item is marked undelivered with status=cannot.",
+    ),
+    "delivery_dialog_missing": ProgramCheckSpec(
+        name="delivery_dialog_missing",
+        checks_what="Page items declaring container=dialog require an active dialog on the current page.",
+        retry_guidance="交付声明为弹窗，但当前用户页没有这个弹窗。",
+        terminal_delivery="After a failed retry, the page item is marked undelivered with status=cannot.",
+    ),
+    "delivery_page_masked": ProgramCheckSpec(
+        name="delivery_page_masked",
+        checks_what="Non-dialog page delivery requires no unexpected blocking dialog mask on the current page.",
+        retry_guidance="当前页面仍有弹窗遮罩未关闭；等页面落定后再标为已交付。",
+        terminal_delivery="After a failed retry, the page item is marked undelivered with status=cannot.",
+    ),
+    "delivery_write_unverified": ProgramCheckSpec(
+        name="delivery_write_unverified",
+        checks_what="Delivered kind=write items require a verified write outcome, handoff, or verified satisfaction.",
+        retry_guidance="交付项声明为已完成写入（kind=write），但本轮没有已核验的写入结果或表单交接；请先完成或如实标为 undelivered / cannot。",
+        terminal_delivery="After a failed retry, the write item is marked undelivered with status=cannot.",
+    ),
+    "delivery_page_obligation": ProgramCheckSpec(
+        name="delivery_page_obligation",
+        checks_what="Requests asking to open, pull up, or filter a page cannot be satisfied by API text alone.",
+        retry_guidance="请在用户页完成对应导航与筛选并加入 kind=page 交付项，或标为 undelivered 并以 cannot 说明。",
+        terminal_delivery="After a failed retry, the reply is annotated as undelivered with status=cannot.",
+    ),
+    "delivery_incomplete": ProgramCheckSpec(
+        name="delivery_incomplete",
+        checks_what="finish(status=done) requires every declared delivery item to have status=delivered.",
+        retry_guidance="仍有交付项未交付或在等澄清、批准；本轮如实标为未完成。",
+        terminal_delivery="After a failed retry, undelivered items close the turn as status=cannot.",
+    ),
+}
 
 
 class YudaoLoopProcedures(YudaoProceduresBase):
@@ -385,8 +481,27 @@ def _handoff_key(observation, marked: str):
     return "row"
 
 
-class SlimTurnExecutor(ModelDrivenTurnExecutor):
-    """Yudao composition of the application-neutral model-driven executor."""
+def _emit_yudao_check_fired(executor, s, check: str, *, outcome: str = "blocked",
+                            attempt: int = 1, answer_preserved: bool = False) -> None:
+    ledger = getattr(s, "ledger", None)
+    if ledger is None:
+        return
+    record_check_fired(
+        ledger,
+        s=s,
+        trace=getattr(executor, "_trace", None),
+        check=check,
+        outcome=outcome,
+        attempt=attempt,
+        answer_preserved=answer_preserved,
+    )
+
+
+class YudaoTurnExecutor(ModelDrivenTurnExecutor):
+    """Canonical Yudao composition of the application-neutral model-driven executor."""
+
+    program_read_delivery = False
+    direct_skill_operations = True
 
     def _ctx(self) -> SlimTurnContext:
         ctx = getattr(self, "turn_context", None)
@@ -400,6 +515,7 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
         prev_request = ctx.current_request
         prev_earlier = ctx.earlier_requests
         prev_intent = ctx.write_intent
+        prev_tables = ctx.turn_tables
         ctx.current_request = state.message.text
         self.knowledge.turn_targets = {}
         context = self.conversation_state.model_context() or {}
@@ -413,10 +529,17 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
         if getattr(self, "procedures", None) is not None:
             self.procedures.form_fill = None
             self.procedures.turn_context = ctx
+        handoffs = getattr(self.knowledge, "handoffs", BASELINE_SESSION_HANDOFFS)
+        date_override = getattr(self, "_date_override", getattr(self, "today", ""))
+        time_zone = getattr(self, "_time_zone", "Asia/Shanghai")
+        tables = TurnTables(handoffs)
+        ctx.turn_tables = (tables, _today(date_override, time_zone), time_zone)
         try:
             with turn_actor_reads(self.knowledge.client, turn_context=ctx):
                 return super()._run(state)
         finally:
+            ctx.turn_tables = prev_tables
+            tables.close()
             ctx.write_intent = prev_intent
             ctx.earlier_requests = prev_earlier
             ctx.current_request = prev_request
@@ -450,10 +573,24 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
         return not (isinstance(intent, WriteIntent) and intent.mode == "draft") \
             and not _draft_only_request(ctx.current_request or "")
 
+    def _emit_check_fired(self, s, check: str, *, outcome: str = "blocked",
+                          attempt: int = 1, answer_preserved: bool = False) -> None:
+        _emit_yudao_check_fired(self, s, check, outcome=outcome, attempt=attempt, answer_preserved=answer_preserved)
+
+    def _concurrent_read_commit(self, s, name: str, args: dict, prepared, turn) -> LoopToolResult:
+        ctx = self._ctx()
+        prev_turn = ctx.executor_turn
+        ctx.executor_turn = turn
+        try:
+            return super()._concurrent_read_commit(s, name, args, prepared, turn)
+        finally:
+            ctx.executor_turn = prev_turn
+
     def _invoke_tool(self, s, name, args, turn):
         ctx = self._ctx()
         if _read_only_status_question(ctx.current_request):
             if name not in (_STATUS_READ_TOOLS | (_TABLE_TOOLS if ctx.turn_tables else frozenset())):
+                self._emit_check_fired(s, "read_only_question")
                 return LoopToolResult("本轮只询问状态；请根据当前账号的只读接口结果直接回答，不操作页面。",
                                       kind="read", state="refused", error_code="read_only_question")
         intent = ctx.write_intent
@@ -462,6 +599,7 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
             avail = getattr(writes, "available_definitions", writes.definitions) if writes is not None else (lambda: ())
             operations = {definition.name for definition in avail()}
             if name in {"load_skill", "read_skill_resource", "propose_operation"} | operations:
+                self._emit_check_fired(s, "draft_only")
                 return LoopToolResult("用户本轮只要求预填表单；Skill 写入工具不可用。",
                                       kind="write", state="refused", error_code="draft_only")
         before = getattr(s, "obs", None)
@@ -483,6 +621,8 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
             result = super()._invoke_tool(s, name, args, turn)
         finally:
             ctx.executor_turn = prev_turn
+        if result.state == "refused" and result.error_code == "unrequested_draft_field":
+            self._emit_check_fired(s, "unrequested_draft_field")
         if self.native_submit is not None:
             marked_now = str(turn.get("marked") or getattr(result, "marked", None) or "")
             if marked_now and marked_now != marked_before:
@@ -661,6 +801,29 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
             args = {**args, "answer": (str(args.get("answer") or "").rstrip() + "\n\n" + pressed).strip()}
         return args
 
+    def _finish_tool(self, turn):
+        tool = super()._finish_tool(turn)
+        parameters = tool["function"]["parameters"]
+        parameters["properties"]["items"] = {"type": "array", "minItems": 1, "maxItems": 16, "items": {
+            "type": "object", "properties": {
+                "item": {"type": "string", "minLength": 1, "maxLength": 240},
+                "kind": {"type": "string", "enum": ["data", "page", "write"]},
+                "status": {"type": "string", "enum": ["delivered", "undelivered"]},
+                "container": {"type": "string", "enum": ["page", "dialog"]},
+                "receipts": {"type": "array", "maxItems": 12,
+                             "items": {"type": "string", "minLength": 1, "maxLength": 48}}},
+            "required": ["item", "kind", "status", "receipts"], "additionalProperties": False}}
+        if turn.get("sources") is None or turn.get("runtime_used"):
+            parameters["required"].append("items")
+        return tool
+
+    def _completion_proved(self, s, name, args, result=None, *, target=None):
+        if args.get("answer") and result is not None and result.kind == "page":
+            if not any(receipt.action == "handoff_form" and receipt.command_id == result.completion_command
+                       for receipt in self._tool_receipts):
+                return False
+        return super()._completion_proved(s, name, args, result, target=target)
+
     def _finish_feedback(self, s, turn, args):
         if not turn.get("submit_started") and not turn.get("written"):
             self._default_handoff(s, turn)
@@ -688,215 +851,6 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
                         "已填写的业务表单尚未完成同一实时表单的回读与提交控件交接。"
                         "请核对当前表单，用 fill_fields 的 then_highlight 完成审核交接；"
                         "不能交接时用 cannot 如实说明，不能仅凭填写或普通高亮声称完成。")
-        return super()._finish_feedback(s, turn, args)
-
-    def _propose(self, s, writes, operation: str, inputs: dict, turn: dict) -> LoopToolResult:
-        ctx = self._ctx() if hasattr(self, "_ctx") else getattr(self, "turn_context", None)
-        intent = ctx.write_intent if ctx is not None else None
-        if (isinstance(intent, WriteIntent) and intent.mode == "draft") or _draft_only_request(s.message.text):
-            return LoopToolResult(
-                "用户本轮只要求预填表单。未提出写入提案，也未执行写入；请改用页面表单步骤，停在提交前。",
-                kind="write", state="refused", dispatch="not_dispatched", error_code="draft_only")
-        dangerous_op = (
-            operation == "promotion_seckill_activity_close"
-            or (operation == "erp_document_status" and isinstance(inputs, dict) and inputs.get("action") == "反审批")
-        )
-        if dangerous_op and (not self._earlier_words or not _confirm_words(s.message.text)):
-            action_label = ("关闭秒杀活动（不可逆）" if operation == "promotion_seckill_activity_close"
-                            else "反审批单据（回退库存或核销状态）")
-            s.ledger.append("skill_operation_refused", step=s.step + 1, tool=operation,
-                            error_code="dangerous_unconfirmed", detail=action_label, side_effect_possible=False)
-            return LoopToolResult(
-                f"「{action_label}」属于不可逆或逆向状态变更。请先在对话里向用户说明该动作对目标记录及关联库存/活动的具体影响，"
-                "并用 finish(need_input) 请用户明确确认；用户确认后下一轮再提出写入提案。",
-                kind="write", state="needs_input", dispatch="not_dispatched", error_code="dangerous_unconfirmed",
-            )
-        return super()._propose(s, writes, operation, inputs, turn)
-
-    def __init__(self, *, knowledge, actor_name="", today="", time_zone="Asia/Shanghai", conventions=(),
-                 draft_steps=None, mutation_prefill=None, location_bindings=False, native_submit=None, page_reads=None, **kwargs):
-        application, goal_port = kwargs["application"], kwargs["goal_port"]
-        self.knowledge = knowledge
-        self.turn_context = SlimTurnContext()
-        knowledge.handoffs = SessionHandoffPolicy.extending(application.ports.routes.session_handoff_query_keys)
-        procedure_type = YudaoLoopProcedures
-        if location_bindings:
-            from ..reads.location import LocationProcedures
-            procedure_type = LocationProcedures
-        self.procedures = owner = procedure_type(
-            knowledge, goal_port, application.descriptor.origin, turn_context=self.turn_context)
-        owner.page_reads = page_reads
-        review = getattr(goal_port, "review", None)
-        schemas = scoped_page_tools(review) if self.program_read_delivery else _table_tool_schemas(review)
-        if location_bindings:
-            from ..reads.location import location_schemas
-            schemas = location_schemas(schemas)
-        procedures = tuple(LoopProcedure(json.dumps(schema, ensure_ascii=False),
-            _Procedure(owner, schema["function"]["name"]),
-            "read" if schema["function"]["name"] in {"call_api", "find_record", "entity_rules", "load_domain_guide"} | _TABLE_TOOLS else
-            "metadata" if schema["function"]["name"] in {"search_menu", "search_api"} else "page",
-            "yudao.read", frozenset({"handoffs"}) if schema["function"]["name"] == "highlight" else frozenset(),
-            lambda arguments, observation, name=schema["function"]["name"]:
-                _requirements(name, arguments, observation, getattr(goal_port, "review", None)))
-                for schema in schemas if schema["function"]["name"] != "finish")
-        has_compiled_rules = "source" in getattr(goal_port, "capabilities", lambda: frozenset())()
-        profile = ModelLoopProfile(
-            system_text(user=actor_name or "当前用户", date=_today(today, time_zone), tz=time_zone,
-                        conventions=conventions,
-                        runtime_source=bool(getattr(getattr(kwargs.get("config"), "source", None),
-                                                    "runtime_source", False)),
-                        compiled_rules=has_compiled_rules)
-                .replace(SYSTEM_READ, SYSTEM_READ if self.program_read_delivery else TABLE_READ_RULES)
-                + page_scope_notice(review) + ("\n当前仅定位：filter_page一次导航、切页签和筛选；"
-                    "open_record按当前行的record_id或精确列值打开详情；page_section/page_number切页签和分页。"
-                    "新增绑定工具只操作查询区；原普通动作完整保留，沿用同一准入及业务填表值来源边界。"
-                    if location_bindings else ""), procedures,
-            lambda observation, marked: page_text(observation, handoffs=knowledge.handoffs, marked=marked,
-                                                  list_path=_own_list_path(goal_port, observation)),
-            owner.prepare, lambda observation, answer: tuple(
-                _tabs_not_shown(observation, answer, request=self.turn_context.current_request)),
-            owner.verification_messages, draft_steps, mutation_prefill,
-            untraced_numbers=untraced_answer_numbers)
-        super().__init__(profile=profile, **kwargs)
-        if native_submit is not None:
-            self.native_submit = native_submit
-            if hasattr(self.channel, "read_only_mode"):
-                self.channel.read_only_mode = False
-            updated_instructions = (
-                self.profile.instructions
-                .replace(
-                    "只有下面“已安装的 Skill”覆盖的操作能办：你提出写入提案，用户在批准卡片上确认后，程序执行一次并回读核对。\n"
-                    "   - 本轮提供了 Skill 写入工具且用户要求办理其覆盖的事时，先 load_skill，再用已安装操作提出提案；没有对应 Skill 时把表单填好交接。",
-                    "优先用下面“已安装的 Skill”覆盖的操作提出提案；Skill 未覆盖的新增、修改或行内状态动作，"
-                    "在用户页用原生表单或行内按钮配合 request_submit 经批准卡提交（不得因无对应 Skill 而拒绝，唯独涉及密码或本地文件上传时填好其余字段交接）。\n"
-                    "   - 本轮提供了 Skill 写入工具且用户要求办理其覆盖的事时，先 load_skill，再用已安装操作提出提案；没有对应 Skill 且非纯预填时，打开对应页面表单填好后用 request_submit 请求批准提交。",
-                    1,
-                )
-                .replace(
-                    "用户要的事里有 Skill 办不到的部分（参数里没有的字段、另一种业务动作）：先如实说明办不到的是哪部分（cannot），不要只办能办的那部分就说完成。",
-                    "用户要的事里若既有 Skill 参数没覆盖某个字段或动作，改走用户页原生表单配合 request_submit 办理；若应用页面本身也不支持，再如实说明办不到的是哪部分（cannot），不要只办能办的那部分就说完成。",
-                    1,
-                )
-                + NATIVE_SUBMIT_RULES
-            )
-            self.profile = replace(self.profile, instructions=updated_instructions)
-
-    def _untraced_numbers(self, prompt, answer, turn):
-        stripped = _TABLE_TOKEN.sub("", _BARE_RECEIPT.sub("", answer or ""))
-        return super()._untraced_numbers(prompt, stripped, turn)
-
-    def _clean_answer(self, answer: str) -> str:
-        handoffs = getattr(getattr(self, "knowledge", None), "handoffs", BASELINE_SESSION_HANDOFFS)
-        return _clean_user_answer(answer, handoffs)
-
-    def _with_not_executed(self, s, turn, answer):
-        return self._clean_answer(super()._with_not_executed(s, turn, answer))
-
-
-_RECEIPT_PAREN = re.compile(
-    r"[（(][^（）()\n]{0,32}?(?:ev_[0-9a-f]{12}_\d+|(?:本轮)?行表\s*`?t\d{1,2}`?)[^（）()\n]{0,120}?[）)]"
-)
-_RECEIPT_INLINE = re.compile(
-    r"(?:[，,；;、]\s*)?(?:依据|来源|引用|参考|见)?(?:本轮)?(?:读取|工具|页面状态)?回执"
-    r"(?:号|编号)?[:：=\s]*`?ev_[0-9a-f]{12}_\d+`?(?:[、,，/\s]+`?ev_[0-9a-f]{12}_\d+`?)*"
-)
-_BARE_RECEIPT = re.compile(r"`?ev_[0-9a-f]{12}_\d+`?")
-_RECEIPT_STUB = re.compile(r"[（(]\s*(?:依据|来源|引用|参考|见)?(?:本轮)?(?:读取|工具)?回执[，,、\s]*(?:详见)?(?:本轮读取数据)?\s*[）)]")
-_EMPTY_PARENS = re.compile(r"[（(]\s*[）)]")
-_TABLE_TOKEN = re.compile(r"(?:(?:本轮)?行表|数据表|临时表|表)\s*`?t\d{1,2}`?|`t\d{1,2}`")
-_PAGE_OBLIGATION = re.compile(
-    r"调出|(?:帮我|请)?(?:打开|进入|跳转到?|定位到?|切到|切换到)[^，。；！？?\n]{0,24}"
-    r"(?:页面|列表页?|详情|台账|看板|页签|栏目|菜单|视图|界面)"
-    r"|在[^，。；！？?\n]{0,12}(?:页面|列表页?|台账)(?:上|里|中)?(?:筛选|过滤|按条件筛)"
-)
-_META_PAGE_QUESTION = re.compile(r"(?:怎么|如何|怎样|能否|能不能|是否|为什么)[^，。；！？?\n]{0,12}(?:打开|调出|进入|跳转|切到)")
-_NEGATED_PAGE_OBLIGATION = re.compile(
-    r"(?:不要|不用|无需|无须|不必|不需|别|勿)[^，。；！？?\n]{0,8}(?:打开|调出|进入|跳转|定位|切到|切换|筛选)"
-)
-_ALREADY_SATISFIED = re.compile(r"已是|已经为|已经是|无需修改|原本就是|保持一致|未发生变化")
-_WRITE_UNEXECUTED = re.compile(r"未(?:执行|完成|成功|提交|保存|修改|写入)|尚未|未能")
-
-
-def _requires_page_delivery(prompt: str) -> bool:
-    said = _words(prompt or "").strip()
-    if not said:
-        return False
-    for clause in re.split(r"[，,；;。！？!\n]+", said):
-        if not clause or not _PAGE_OBLIGATION.search(clause):
-            continue
-        if _META_PAGE_QUESTION.search(clause) or _NEGATED_PAGE_OBLIGATION.search(clause):
-            continue
-        return True
-    return False
-
-
-def _clean_user_answer(answer: str, handoffs) -> str:
-    if not answer:
-        return answer
-    cleaned = redacted(answer, handoffs)
-    cleaned = _RECEIPT_PAREN.sub("", cleaned)
-    cleaned = _RECEIPT_INLINE.sub("", cleaned)
-    cleaned = _BARE_RECEIPT.sub("", cleaned)
-    cleaned = _TABLE_TOKEN.sub("本轮读取数据", cleaned)
-    cleaned = _RECEIPT_STUB.sub("", cleaned)
-    cleaned = _EMPTY_PARENS.sub("", cleaned)
-    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
-    cleaned = re.sub(r"\s+([，。；：！？])", r"\1", cleaned)
-    return cleaned.strip()
-
-
-class TableReadTurnExecutor(SlimTurnExecutor):
-    """Product candidate: calculation and delivery both cite this turn's real receipts."""
-
-    program_read_delivery = False
-    direct_skill_operations = True
-
-    def __init__(self, *, today="", time_zone="Asia/Shanghai", **kwargs):
-        self._date_override, self._time_zone = today, time_zone
-        kwargs.setdefault("model_steps", MODEL_STEPS)
-        super().__init__(today=today, time_zone=time_zone, **kwargs)
-        instructions = self.profile.instructions.replace(
-            "先 load_skill，再用已安装操作提出提案",
-            "直接用 propose_operation(operation, inputs) 提出提案（程序自动加载对应 Skill，需要查完整领域规则时仍可调 load_skill；"
-            "扁平单表记录字段修改优先用 update_record，两态启停/上下架优先用 toggle_record_status，专用新建或状态变更用对应操作）",
-        )
-        self.profile = replace(self.profile, instructions=instructions + PAGE_DELIVERY_RULES)
-
-    def _run(self, state):
-        ctx = self._ctx()
-        tables = TurnTables(self.knowledge.handoffs)
-        prev_tables = ctx.turn_tables
-        ctx.turn_tables = (tables, _today(self._date_override, self._time_zone), self._time_zone)
-        try:
-            return super()._run(state)
-        finally:
-            ctx.turn_tables = prev_tables
-            tables.close()
-
-    def _finish_tool(self, turn):
-        tool = super()._finish_tool(turn)
-        parameters = tool["function"]["parameters"]
-        parameters["properties"]["items"] = {"type": "array", "minItems": 1, "maxItems": 16, "items": {
-            "type": "object", "properties": {
-                "item": {"type": "string", "minLength": 1, "maxLength": 240},
-                "kind": {"type": "string", "enum": ["data", "page", "write"]},
-                "status": {"type": "string", "enum": ["delivered", "undelivered"]},
-                "container": {"type": "string", "enum": ["page", "dialog"]},
-                "receipts": {"type": "array", "maxItems": 12,
-                             "items": {"type": "string", "minLength": 1, "maxLength": 48}}},
-            "required": ["item", "kind", "status", "receipts"], "additionalProperties": False}}
-        if turn.get("sources") is None or turn.get("runtime_used"):
-            parameters["required"].append("items")
-        return tool
-
-    def _completion_proved(self, s, name, args, result=None, *, target=None):
-        if args.get("answer") and result is not None and result.kind == "page":
-            if not any(receipt.action == "handoff_form" and receipt.command_id == result.completion_command
-                       for receipt in self._tool_receipts):
-                return False
-        return super()._completion_proved(s, name, args, result, target=target)
-
-    def _finish_feedback(self, s, turn, args):
         feedback = super()._finish_feedback(s, turn, args)
         if feedback:
             return feedback
@@ -1000,13 +954,183 @@ class TableReadTurnExecutor(SlimTurnExecutor):
             return text + f"\n本轮工具回执：{reference}"
         return text
 
+    def _untraced_numbers(self, prompt, answer, turn):
+        stripped = _TABLE_TOKEN.sub("", _BARE_RECEIPT.sub("", answer or ""))
+        return super()._untraced_numbers(prompt, stripped, turn)
+
+    def _clean_answer(self, answer: str) -> str:
+        handoffs = getattr(getattr(self, "knowledge", None), "handoffs", BASELINE_SESSION_HANDOFFS)
+        return _clean_user_answer(answer, handoffs)
+
+    def _with_not_executed(self, s, turn, answer):
+        return self._clean_answer(super()._with_not_executed(s, turn, answer))
+
+    def _propose(self, s, writes, operation: str, inputs: dict, turn: dict) -> LoopToolResult:
+        ctx = self._ctx() if hasattr(self, "_ctx") else getattr(self, "turn_context", None)
+        intent = ctx.write_intent if ctx is not None else None
+        if (isinstance(intent, WriteIntent) and intent.mode == "draft") or _draft_only_request(s.message.text):
+            _emit_yudao_check_fired(self, s, "draft_only")
+            return LoopToolResult(
+                "用户本轮只要求预填表单。未提出写入提案，也未执行写入；请改用页面表单步骤，停在提交前。",
+                kind="write", state="refused", dispatch="not_dispatched", error_code="draft_only")
+        dangerous_op = (
+            operation == "promotion_seckill_activity_close"
+            or (operation == "erp_document_status" and isinstance(inputs, dict) and inputs.get("action") == "反审批")
+        )
+        if dangerous_op and (not self._earlier_words or not _confirm_words(s.message.text)):
+            action_label = ("关闭秒杀活动（不可逆）" if operation == "promotion_seckill_activity_close"
+                            else "反审批单据（回退库存或核销状态）")
+            s.ledger.append("skill_operation_refused", step=s.step + 1, tool=operation,
+                            error_code="dangerous_unconfirmed", detail=action_label, side_effect_possible=False)
+            _emit_yudao_check_fired(self, s, "dangerous_unconfirmed")
+            return LoopToolResult(
+                f"「{action_label}」属于不可逆或逆向状态变更。请先在对话里向用户说明该动作对目标记录及关联库存/活动的具体影响，"
+                "并用 finish(need_input) 请用户明确确认；用户确认后下一轮再提出写入提案。",
+                kind="write", state="needs_input", dispatch="not_dispatched", error_code="dangerous_unconfirmed",
+            )
+        return super()._propose(s, writes, operation, inputs, turn)
+
+    def __init__(self, *, knowledge, actor_name="", today="", time_zone="Asia/Shanghai", conventions=(),
+                 draft_steps=None, mutation_prefill=None, location_bindings=False, native_submit=None, page_reads=None, **kwargs):
+        self._date_override, self._time_zone = today, time_zone
+        kwargs.setdefault("model_steps", MODEL_STEPS)
+        application, goal_port = kwargs["application"], kwargs["goal_port"]
+        self.knowledge = knowledge
+        self.turn_context = SlimTurnContext()
+        knowledge.handoffs = SessionHandoffPolicy.extending(application.ports.routes.session_handoff_query_keys)
+        procedure_type = YudaoLoopProcedures
+        if location_bindings:
+            from ..reads.location import LocationProcedures
+            procedure_type = LocationProcedures
+        self.procedures = owner = procedure_type(
+            knowledge, goal_port, application.descriptor.origin, turn_context=self.turn_context)
+        owner.page_reads = page_reads
+        review = getattr(goal_port, "review", None)
+        schemas = _table_tool_schemas(review)
+        if location_bindings:
+            from ..reads.location import location_schemas
+            schemas = location_schemas(schemas)
+        procedures = tuple(LoopProcedure(json.dumps(schema, ensure_ascii=False),
+            (_ConcurrentReadProcedure if schema["function"]["name"] in _CONCURRENT_READ_TOOLS else _Procedure)(
+                owner, schema["function"]["name"]),
+            "read" if schema["function"]["name"] in {"call_api", "find_record", "entity_rules", "load_domain_guide"} | _TABLE_TOOLS else
+            "metadata" if schema["function"]["name"] in {"search_menu", "search_api"} else "page",
+            "yudao.read", frozenset({"handoffs"}) if schema["function"]["name"] == "highlight" else frozenset(),
+            lambda arguments, observation, name=schema["function"]["name"]:
+                _requirements(name, arguments, observation, getattr(goal_port, "review", None)))
+                for schema in schemas if schema["function"]["name"] != "finish")
+        has_compiled_rules = "source" in getattr(goal_port, "capabilities", lambda: frozenset())()
+        profile = ModelLoopProfile(
+            system_text(user=actor_name or "当前用户", date=_today(today, time_zone), tz=time_zone,
+                        conventions=conventions,
+                        runtime_source=bool(getattr(getattr(kwargs.get("config"), "source", None),
+                                                    "runtime_source", False)),
+                        compiled_rules=has_compiled_rules)
+                + page_scope_notice(review) + ("\n当前仅定位：filter_page一次导航、切页签和筛选；"
+                    "open_record按当前行的record_id或精确列值打开详情；page_section/page_number切页签和分页。"
+                    "新增绑定工具只操作查询区；原普通动作完整保留，沿用同一准入及业务填表值来源边界。"
+                    if location_bindings else ""), procedures,
+            lambda observation, marked: page_text(observation, handoffs=knowledge.handoffs, marked=marked,
+                                                  list_path=_own_list_path(goal_port, observation)),
+            owner.prepare, lambda observation, answer: tuple(
+                _tabs_not_shown(observation, answer, request=self.turn_context.current_request)),
+            owner.verification_messages, draft_steps, mutation_prefill,
+            untraced_numbers=untraced_answer_numbers)
+        super().__init__(profile=profile, **kwargs)
+        if native_submit is not None:
+            self.native_submit = native_submit
+            if hasattr(self.channel, "read_only_mode"):
+                self.channel.read_only_mode = False
+            updated_instructions = (
+                self.profile.instructions
+                .replace(
+                    "只有下面“已安装的 Skill”覆盖的操作能办：你提出写入提案，用户在批准卡片上确认后，程序执行一次并回读核对。\n"
+                    "   - 本轮提供了 Skill 写入工具且用户要求办理其覆盖的事时，先 load_skill，再用已安装操作提出提案；没有对应 Skill 时把表单填好交接。",
+                    "优先用下面“已安装的 Skill”覆盖的操作提出提案；Skill 未覆盖的新增、修改或行内状态动作，"
+                    "在用户页用原生表单或行内按钮配合 request_submit 经批准卡提交（不得因无对应 Skill 而拒绝，唯独涉及密码或本地文件上传时填好其余字段交接）。\n"
+                    "   - 本轮提供了 Skill 写入工具且用户要求办理其覆盖的事时，先 load_skill，再用已安装操作提出提案；没有对应 Skill 且非纯预填时，打开对应页面表单填好后用 request_submit 请求批准提交。",
+                    1,
+                )
+                .replace(
+                    "用户要的事里有 Skill 办不到的部分（参数里没有的字段、另一种业务动作）：先如实说明办不到的是哪部分（cannot），不要只办能办的那部分就说完成。",
+                    "用户要的事里若既有 Skill 参数没覆盖某个字段或动作，改走用户页原生表单配合 request_submit 办理；若应用页面本身也不支持，再如实说明办不到的是哪部分（cannot），不要只办能办的那部分就说完成。",
+                    1,
+                )
+                + NATIVE_SUBMIT_RULES
+            )
+            self.profile = replace(self.profile, instructions=updated_instructions)
+        instructions = self.profile.instructions.replace(
+            "先 load_skill，再用已安装操作提出提案",
+            "直接用 propose_operation(operation, inputs) 提出提案（程序自动加载对应 Skill，需要查完整领域规则时仍可调 load_skill；"
+            "扁平单表记录字段修改优先用 update_record，两态启停/上下架优先用 toggle_record_status，专用新建或状态变更用对应操作）",
+        )
+        self.profile = replace(self.profile, instructions=instructions + PAGE_DELIVERY_RULES)
+
+
+SlimTurnExecutor = YudaoTurnExecutor
+TableReadTurnExecutor = YudaoTurnExecutor
+
+
+_RECEIPT_PAREN = re.compile(
+    r"[（(][^（）()\n]{0,32}?(?:ev_[0-9a-f]{12}_\d+|(?:本轮)?行表\s*`?t\d{1,2}`?)[^（）()\n]{0,120}?[）)]"
+)
+_RECEIPT_INLINE = re.compile(
+    r"(?:[，,；;、]\s*)?(?:依据|来源|引用|参考|见)?(?:本轮)?(?:读取|工具|页面状态)?回执"
+    r"(?:号|编号)?[:：=\s]*`?ev_[0-9a-f]{12}_\d+`?(?:[、,，/\s]+`?ev_[0-9a-f]{12}_\d+`?)*"
+)
+_BARE_RECEIPT = re.compile(r"`?ev_[0-9a-f]{12}_\d+`?")
+_RECEIPT_STUB = re.compile(r"[（(]\s*(?:依据|来源|引用|参考|见)?(?:本轮)?(?:读取|工具)?回执[，,、\s]*(?:详见)?(?:本轮读取数据)?\s*[）)]")
+_EMPTY_PARENS = re.compile(r"[（(]\s*[）)]")
+_TABLE_TOKEN = re.compile(r"(?:(?:本轮)?行表|数据表|临时表|表)\s*`?t\d{1,2}`?|`t\d{1,2}`")
+_PAGE_OBLIGATION = re.compile(
+    r"调出|(?:帮我|请)?(?:打开|进入|跳转到?|定位到?|切到|切换到)[^，。；！？?\n]{0,24}"
+    r"(?:页面|列表页?|详情|台账|看板|页签|栏目|菜单|视图|界面)"
+    r"|在[^，。；！？?\n]{0,12}(?:页面|列表页?|台账)(?:上|里|中)?(?:筛选|过滤|按条件筛)"
+)
+_META_PAGE_QUESTION = re.compile(r"(?:怎么|如何|怎样|能否|能不能|是否|为什么)[^，。；！？?\n]{0,12}(?:打开|调出|进入|跳转|切到)")
+_NEGATED_PAGE_OBLIGATION = re.compile(
+    r"(?:不要|不用|无需|无须|不必|不需|别|勿)[^，。；！？?\n]{0,8}(?:打开|调出|进入|跳转|定位|切到|切换|筛选)"
+)
+_ALREADY_SATISFIED = re.compile(r"已是|已经为|已经是|无需修改|原本就是|保持一致|未发生变化")
+_WRITE_UNEXECUTED = re.compile(r"未(?:执行|完成|成功|提交|保存|修改|写入)|尚未|未能")
+
+
+def _requires_page_delivery(prompt: str) -> bool:
+    said = _words(prompt or "").strip()
+    if not said:
+        return False
+    for clause in re.split(r"[，,；;。！？!\n]+", said):
+        if not clause or not _PAGE_OBLIGATION.search(clause):
+            continue
+        if _META_PAGE_QUESTION.search(clause) or _NEGATED_PAGE_OBLIGATION.search(clause):
+            continue
+        return True
+    return False
+
+
+def _clean_user_answer(answer: str, handoffs) -> str:
+    if not answer:
+        return answer
+    cleaned = redacted(answer, handoffs)
+    cleaned = _RECEIPT_PAREN.sub("", cleaned)
+    cleaned = _RECEIPT_INLINE.sub("", cleaned)
+    cleaned = _BARE_RECEIPT.sub("", cleaned)
+    cleaned = _TABLE_TOKEN.sub("本轮读取数据", cleaned)
+    cleaned = _RECEIPT_STUB.sub("", cleaned)
+    cleaned = _EMPTY_PARENS.sub("", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\s+([，。；：！？])", r"\1", cleaned)
+    return cleaned.strip()
+
 
 __all__ = [
     "ActorKnowledge",
     "SlimTurnContext",
     "SlimTurnExecutor",
     "TableReadTurnExecutor",
+    "YUDAO_CHECK_SPECS",
     "YudaoLoopProcedures",
+    "YudaoTurnExecutor",
     "conventions_text",
     "history_messages",
     "page_text",

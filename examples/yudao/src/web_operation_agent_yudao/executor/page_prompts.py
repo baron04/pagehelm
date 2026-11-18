@@ -1,7 +1,6 @@
-"""Prompts, tool schemas, page text projection, and explicit turn context for SlimTurnExecutor."""
+"""Prompts, tool schemas, page text projection, and explicit turn context for YudaoTurnExecutor."""
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import hashlib
@@ -12,7 +11,6 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from web_operation_agent.business.tools.contracts import form_control_unavailable
-from web_operation_agent.execution.read_summary import summary_schema
 from web_operation_agent.privacy import redact_sensitive_assignments
 
 from ..reads.turn_tables import TurnReadError, date_range
@@ -124,13 +122,8 @@ TOOLS = [
         "path": {"type": "string"},
         "params": {"type": "string", "maxLength": 8000, "description": "查询参数的 JSON 对象字符串，例如 {\"pageNo\":1,\"pageSize\":20}"},
         "fields": {"type": "array", "items": {"type": "string"}, "description":
-                   "只取这些列（列名是返回行里的键）。给了 fields，分页接口从 pageNo 起最多读 5000 行；"
-                   "只有确认从第 1 页读完且页数一致，才计算全量合计、最大、最小、覆盖前三名的并列档、分组和月份行数。"
-                   "普通分析读取时指定；带summary时程序自动并入其引用列，无须重复声明。"},
-        "row_offset": {"type": "integer", "minimum": 0, "maximum": _ALL_ROWS, "description":
-                       "fields 行展示的起点，默认0；工具给出 next_row_offset 时保持其它参数不变、以该值续读。"
-                       "不是应用分页参数；每次重读应用，没有跨调用快照。"},
-        "summary": summary_schema()},
+                   "指定用于行表的接口字段；给 fields 时分页接口最多读取5000行。"
+                   "未指定只读所请求的页；以行表完整性为准。"}},
         ["path"]),
     _tool("highlight", "把当前页面中已确认属于目标记录的业务按钮标出来，交给用户自己点（例如删除、审核、启停或表单确定）。不会点击或完成该业务动作。", {
         "index": {"type": "integer"},
@@ -184,16 +177,7 @@ VERIFY_WRITES = """
 SYSTEM_INTRO = """你是企业后台助手，替当前登录用户完成请求。用户：{user}；今天 {date}（{tz}），未写年份按今年。
 你能做三类事；混合请求每项都须落实：
 """
-SYSTEM_READ = """1. 读取并交付数据。search_api 找已发布接口，call_api 按同账号读取；find_record 按确切名称找记录，带kind限定类型。业务编号用已发布接口对应参数查，不能当名称。目标多条用need_input让用户选；完整查询无匹配即cannot说明范围，不缩短名称、穷举模块或反复切页签。
-- 数据答案统一用call_api.summary：单字段/名单用columns；统计用measures(count/count_distinct/sum/min/max)，条件用where(AND)，排序用order_by(asc/desc,nulls)，排名用top。声明用户所有条件和列，程序自动并入读取列，最多读5000行；未读全不称完整。条件只能用接口已声明params或summary.where，等值不是范围。指定关联对象时先按当前账号解析唯一编号，再用对应外键的summary.where精确限定；接口参数已提交不等于返回行已落实条件。不能加入用户及部署约定没有要求的筛选。
-- 关联分组用编号，名称只展示，同名不同编号不合并。日期按用户动词选实际列；“创建”用createTime，业务日期不能代替；未约定术语先澄清。时间阈值带时区。逐记录排名用group_by=["id"]及数值measure；第N个位置并列全保留，不取N个不同价位。
-- 收到read_answer后用finish(status=done,answer="",read_answer=引用)交付服务端正文；不手抄事实、名单或重算。它只覆盖该次条件和数据，不能代替用户另要的页面、表单或交接。
-- CRM sceneType只在用户限定负责/参与/下属范围时按接口定义使用；全范围与当前页签不同，空结果只说明实际查询范围。后续指代需重新读取，历史助手文字不是当前事实。
-- “查看某字段/数量/名单”直接交付；“查看某记录/详情/页面”进入相应位置。纯查询不额外操作页面。金额由程序按已核验单位填入，未核验的标“单位未核验”，不自行换算或补单位。
-- 删改/作废/归档或问限制与影响，先用 entity_rules 查源码规则再用 call_api 核对现值；跨模块消歧或单位口径用 load_domain_guide。
-- 无权限结论只能来自指向它本身的确切读取被拒。某次查询被拒不等于整类不可读；已读结果能回答时照常作答。
-"""
-TABLE_READ_RULES = """1. 读同账号的应用接口。search_api 找接口，call_api 读已发布参数；find_record 按名称或简称找记录，kind 限定类型，编号用对应编号参数。
+SYSTEM_READ = """1. 读同账号的应用接口。search_api 找接口，call_api 读已发布参数；find_record 按名称或简称找记录，kind 限定类型，编号用对应编号参数。
 1）交付中的值须来自本轮回执。call_api 若已完整内联全部行（≤30 行）且字段已为最终展示口径、无需二次计算，可直接引用其读取回执交付，省去多余的 tables/sql 调用；若涉及分转元（÷100.0）等单位换算、子集计数、跨页、聚合、差额、分组或极值排名，须看行表完整性并用 sql 计算使衍生数值有回执；说明依据条件、口径和算法。
 2）相对日期先用 date_range 换成具体范围，再写入 API 参数或 SQL 筛选。已发生事项的本周、本月、本季度、今年默认截至当天；计划、预算用scope=planned覆盖完整自然周期。近N天含当天共N个自然日，用unit=rolling_days及days=N；最近一个月为近30天，上个月为上一个自然月。用户明确起止日期优先，用unit=range及start_date/end_date，首尾均含。按用户动词选真实时间列；创建时间不代替业务日期。SQL 表保留接口原值或已核验的显示单位；时间戳用换算结果中的毫秒阈值，ISO 日期用日期范围。
 3）找不到接口、字段或记录，或读取失败，说明缺什么；不能核实时用 cannot 或追问。不把已提交的参数当作返回行确已满足条件的证明；用已读字段核对。范围未读全不能报全量合计、极值、完整名单或不存在。
@@ -206,6 +190,7 @@ TABLE_READ_RULES = """1. 读同账号的应用接口。search_api 找接口，ca
 10）最早、最晚、最大、最小等有并列时列出全部；取前 N 名保留第 N 名并列。需要唯一结果时再问用户。
 - 最后调用 finish：answer 写给用户的完整正文，items 逐项列出交付什么、是否交付、依据的本轮回执号。混合请求把读数、用户页状态和写入分别列项；回执只证明实际返回的内容。普通中间输出不会交付。
 """
+TABLE_READ_RULES = SYSTEM_READ
 
 PAGE_DELIVERY_RULES = """
 用户要求定位、调出、打开记录详情、切页签、点树节点或在列表筛选时，结果必须落在发起请求的用户页上。接口结果、记录地址和文字建议不能代替页面落点。
@@ -236,16 +221,7 @@ _TABLE_TOOLS = frozenset(tool["function"]["name"] for tool in TABLE_TOOLS)
 
 
 def _table_tool_schemas(review):
-    for tool in scoped_page_tools(review):
-        if tool["function"]["name"] == "call_api":
-            tool = deepcopy(tool)
-            properties = tool["function"]["parameters"]["properties"]
-            del properties["summary"]
-            properties["fields"]["description"] = (
-                "指定用于行表的接口字段；给 fields 时分页接口最多读取5000行。"
-                "未指定只读所请求的页；以行表完整性为准。")
-            del properties["row_offset"]
-        yield tool
+    yield from scoped_page_tools(review)
     yield from TABLE_TOOLS
 
 
