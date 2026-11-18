@@ -12,7 +12,7 @@ from web_operation_agent.execution.model_loop_contracts import (AnswerTarget, Lo
 from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
 from web_operation_agent.answer.answering import StructuredQueryAnswer
 from web_operation_agent.goal.data import DataRefused
-from web_operation_agent.goal.executor import GoalTurnExecutor
+from web_operation_agent.execution.harness import TurnHarness
 from web_operation_agent.execution.receipt import TurnReceipt
 from web_operation_agent.execution.action_admission import ActionPermit, ActionEffect, ActionAdmissionRefused
 from web_operation_agent.business.draft_steps import DraftStepPermit
@@ -128,7 +128,7 @@ class DispatchDiagnosticsTests(unittest.TestCase):
                     url_after=after.url,observation=after,write_guard_held=False if stale else final_guard)
             state.obs=after
             return receipt
-        with patch.object(GoalTurnExecutor,"_dispatch",side_effect=dispatch):
+        with patch.object(TurnHarness,"dispatch_browser",side_effect=dispatch):
             executor._dispatch(state,"click",{"ref":"e1"})
         return executor._page_action_outcome,actions,events
 
@@ -179,7 +179,7 @@ class DispatchDiagnosticsTests(unittest.TestCase):
         def dispatch(*args, **kwargs):
             state.obs = after
             return receipt
-        with patch.object(GoalTurnExecutor, "_dispatch", side_effect=dispatch) as browser:
+        with patch.object(TurnHarness, "dispatch_browser", side_effect=dispatch) as browser:
             executor._dispatch(state, "fill", {"ref": "e2", "value": "Ada", "commit": True})
         result = executor._page_action_outcome
         self.assertEqual((result.state, result.error_code, state.terminal_reason),
@@ -226,7 +226,7 @@ class DispatchDiagnosticsTests(unittest.TestCase):
             advance(.75)
             state.obs = after
             return receipt
-        with patch.object(GoalTurnExecutor, "_dispatch", side_effect=dispatch) as browser:
+        with patch.object(TurnHarness, "dispatch_browser", side_effect=dispatch) as browser:
             executor._dispatch(state, "click", {"ref":"e1"})
             result = executor._page_action_outcome
         return result, state.receipt.report(NS(), "run"), events, browser.call_count
@@ -1241,7 +1241,7 @@ class HandoffStaysTests(unittest.TestCase):
                                     url_after=after.url, observation=after, write_guard_held=False)
             self.state.obs = after
             return receipt
-        self.dispatch_patch = patch.object(GoalTurnExecutor, "_dispatch", side_effect=dispatch)
+        self.dispatch_patch = patch.object(TurnHarness, "dispatch_browser", side_effect=dispatch)
         return executor
 
     def test_the_same_handoff_asked_again_on_an_unchanged_page_sends_nothing(self):

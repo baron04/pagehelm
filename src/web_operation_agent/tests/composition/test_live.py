@@ -39,17 +39,6 @@ class _Runner:
         return self.value
 
 
-class _TurnRunner:
-    def __init__(self, value=None, error=None):
-        self.value = value
-        self.error = error
-
-    def run_once(self, message=None):
-        if self.error:
-            raise self.error
-        return {"message": message["text"], "value": self.value}
-
-
 @dataclass(frozen=True)
 class _TurnResult:
     status: str
@@ -484,30 +473,6 @@ class LiveProductSessionTests(unittest.TestCase):
                 lease_id=lease_app)
             self.assertEqual(reply_app["settled"], True)
             self.assertEqual(journal.get(digest_app).state, "failed")
-
-    def test_legacy_per_turn_factory_remains_a_thin_compatibility_path(self):
-        channel, lease = _channel_with_observation()
-        message = _message(1)
-        channel.accept_message(message, lease_id=lease)
-        calls = []
-
-        def factory(received, turn):
-            calls.append((received, turn))
-            return _TurnRunner(value=turn)
-
-        host = LiveConversationRunner(channel, runner_factory=factory)
-        holder = {}
-        worker = threading.Thread(
-            target=lambda: holder.setdefault("outcomes", host.run_once()), daemon=True)
-        worker.start()
-        recorded = host.next_outcome(timeout_s=2)
-        host.close("test_complete")
-        worker.join(2)
-
-        self.assertFalse(worker.is_alive())
-        self.assertEqual(calls, [(message, 1)])
-        self.assertEqual(holder["outcomes"], (recorded,))
-        self.assertEqual(recorded.result, {"message": "Task 1", "value": 1})
 
     def test_owns_gateway_bootstrap_worker_and_status_without_exposing_token(self):
         live = LiveProductSession(
