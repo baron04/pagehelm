@@ -1,0 +1,810 @@
+/* ─────────────────────────────────────────────── thread */
+.woa-thread-shell {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  /* Squeezed to nothing by a confirmation in a short window, the thread's own padding
+     would otherwise spill out of this box and under the card. */
+  overflow: hidden;
+}
+/* The title bar's rule, drawn only while something is scrolled up beneath it. */
+.woa-thread-shell::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  height: 1px;
+  background: var(--woa-line);
+  opacity: 0;
+  transition: opacity var(--woa-motion-fast) var(--woa-motion-easing);
+  pointer-events: none;
+}
+.woa-thread-shell[data-scrolled]::before {
+  opacity: 1;
+}
+.woa-thread {
+  height: 100%;
+  overflow-y: auto;
+  /* Where scrollbars take room, keep it taken: a conversation growing past one screen
+     would otherwise narrow and re-wrap every line the moment the bar appears. */
+  scrollbar-gutter: stable;
+  overflow-x: hidden;
+  /* Prepending history is anchored explicitly to the visible turn. */
+  overflow-anchor: none;
+  /* The right padding plus the panel's own 8px scrollbar below must land on the composer's
+     14px edge: the transcript's right edge then sits on the input's edge, with the bar
+     reserved in the gap between them. */
+  padding: 16px 6px 4px 14px;
+}
+/* The transcript remains keyboard-scrollable, but a saturated ring around the entire
+   reading area looks like an application error. Use the same quiet boundary as the rest
+   of the panel while preserving a visible keyboard focus state. */
+.woa-thread:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--woa-line-strong);
+}
+.woa-thread__content {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+.woa-thread__content:not([data-empty])::after {
+  content: "";
+  flex: 0 0 60px;
+}
+/* With nothing said yet, the greeting starts at the top, under the title bar. */
+.woa-thread__content[data-empty] {
+  justify-content: flex-start;
+}
+
+/* Scrollbars are chrome, not content: thin, on the panel's own neutrals, and never a
+   dark overlay pill sitting on top of the composer. The transcript is the one exception:
+   it takes the panel's own 8px scrollbar below, so the gutter its right padding reserves
+   is an exact width and the transcript can stay aligned with the composer beside it. */
+.woa-field textarea,
+.woa-md__tablewrap,
+.woa-md__block pre,
+.woa-approval {
+  scrollbar-width: thin;
+  scrollbar-color: var(--woa-line-strong) transparent;
+}
+.woa-thread::-webkit-scrollbar,
+.woa-field textarea::-webkit-scrollbar,
+.woa-md__tablewrap::-webkit-scrollbar,
+.woa-md__block pre::-webkit-scrollbar,
+.woa-approval::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.woa-thread::-webkit-scrollbar-track,
+.woa-field textarea::-webkit-scrollbar-track,
+.woa-md__tablewrap::-webkit-scrollbar-track,
+.woa-md__block pre::-webkit-scrollbar-track,
+.woa-approval::-webkit-scrollbar-track {
+  background: transparent;
+}
+.woa-thread::-webkit-scrollbar-thumb,
+.woa-field textarea::-webkit-scrollbar-thumb,
+.woa-md__tablewrap::-webkit-scrollbar-thumb,
+.woa-md__block pre::-webkit-scrollbar-thumb,
+.woa-approval::-webkit-scrollbar-thumb {
+  background: var(--woa-line-strong);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: var(--woa-radius-pill);
+}
+
+.woa-turns {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+/* Settled turns are skipped by layout and paint when off screen, but stay in the DOM so
+   find-in-page, screen readers and select-all keep working. */
+.woa-turn[data-settled] {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 180px;
+}
+/* That skipping contains paint, so a settled turn clips whatever overhangs its box. The box
+   reaches 6px into the thread's gutter on each side, where the answer's controls overhang
+   the text to line their glyphs up with it; the text itself stays where it was. */
+.woa-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0 -6px;
+  padding: 0 6px;
+}
+/* What arrives, arrives: a short fade and a 4px rise, on the person's words and on each
+   part of the reply as it is added. */
+.woa-user,
+.woa-agent > *,
+.woa-pending {
+  animation: woa-arrive var(--woa-motion-base) var(--woa-motion-easing);
+}
+@keyframes woa-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+/* The person's words: a soft tinted bubble on their side, its tail corner tucked in. The
+   agent's words get no bubble at all -- they are the page, set for reading. */
+.woa-user {
+  align-self: flex-end;
+  max-width: 85%;
+  margin: 0;
+  padding: 8px 14px;
+  border-radius: var(--woa-radius-field) var(--woa-radius-field) var(--woa-radius-inline) var(--woa-radius-field);
+  background: var(--woa-accent-soft);
+  color: var(--woa-ink);
+  overflow-wrap: anywhere;
+}
+
+.woa-agent,
+.woa-result {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* A boundary the server drew: everything above it is still readable, and no longer
+   context for the model. */
+.woa-pending {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 16px;
+}
+.woa-sending,
+.woa-undelivered {
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--woa-font-size-meta);
+  color: var(--woa-ink-faint);
+}
+.woa-undelivered {
+  color: var(--woa-danger);
+}
+.woa-undelivered button {
+  color: var(--woa-accent);
+  font-weight: 500;
+}
+
+/* The shell, rather than the scrolling element, is the containing block. The control stays
+   above the composer while the transcript moves behind it. */
+.woa-jump {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: var(--woa-radius-pill);
+  background: var(--woa-surface-raised);
+  color: var(--woa-ink);
+  font-size: var(--woa-font-size-meta);
+  box-shadow: var(--woa-shadow-2), inset 0 0 0 1px var(--woa-line-strong);
+  transition: background var(--woa-motion-fast) var(--woa-motion-easing);
+}
+.woa-jump:hover {
+  background: var(--woa-surface-muted);
+}
+
+.woa-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 0 12px;
+}
+.woa-skeleton i {
+  position: relative;
+  overflow: hidden;
+  display: block;
+  height: 30px;
+  border-radius: var(--woa-radius-control);
+  background: var(--woa-surface-muted);
+}
+/* A wait reads as motion across the line, not as the line breathing: a band of sheen
+   crosses each bar left to right and leaves by the right edge. The bar itself never
+   changes colour, so a still frame and a moving one say the same thing. Reduced motion
+   runs the crossing once, instantly, and what remains is the plain bar. */
+.woa-skeleton i::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, var(--woa-sheen-fill) 30%,
+              var(--woa-sheen-edge) 50%, var(--woa-sheen-fill) 70%, transparent);
+  animation: woa-sheen 1.5s ease-in-out infinite;
+}
+/* Long, short, medium. The delays stagger the crossing, so the three bars read as one
+   wave passing down the stack rather than three blinkers in phase. */
+.woa-skeleton i:nth-child(1) {
+  width: 86%;
+}
+.woa-skeleton i:nth-child(2) {
+  width: 42%;
+}
+.woa-skeleton i:nth-child(2)::after {
+  animation-delay: 0.1s;
+}
+.woa-skeleton i:nth-child(3) {
+  width: 62%;
+}
+.woa-skeleton i:nth-child(3)::after {
+  animation-delay: 0.2s;
+}
+@keyframes woa-sheen {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* ─────────────────────────────────────────────── work process */
+/* ── the work timeline ──────────────────────────────────────────────────────
+   One node per thing the turn did, in the order it happened, with a rail down the left
+   so the steps read as one run rather than a list of unrelated lines. It stays after the
+   answer: it is where a reader checks which call produced the numbers above. */
+.woa-work {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+/* A running turn's steps, folded to one live line: a spinner, the step being worked on, and
+   the turn's clock. Each new step rises into place; a confirmation waiting on the person
+   turns the line amber and the spinner into a slow pulse. */
+.woa-work__live {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  inline-size: calc(100% + 12px);
+  margin-inline: -6px;
+  padding: 3px 6px;
+  border-radius: var(--woa-radius-control);
+  font-size: var(--woa-font-size-small);
+  text-align: start;
+  color: var(--woa-ink);
+  transition: background var(--woa-motion-fast) var(--woa-motion-easing);
+}
+.woa-work__live:hover {
+  background: var(--woa-surface-muted);
+}
+.woa-work__live:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--woa-line-strong);
+}
+.woa-work__mark {
+  inline-size: 16px;
+  block-size: 16px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.woa-work__now {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: linear-gradient(
+    90deg,
+    var(--woa-ink-muted) 0%,
+    var(--woa-ink-muted) 35%,
+    var(--woa-ink) 50%,
+    var(--woa-ink-muted) 65%,
+    var(--woa-ink-muted) 100%
+  );
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: woa-step-in var(--woa-motion-base) var(--woa-motion-easing), woa-shimmer 1.8s linear infinite;
+}
+@keyframes woa-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+.woa-work__live[data-waiting] .woa-work__now {
+  background: none;
+  color: var(--woa-warning);
+  animation: woa-step-in var(--woa-motion-base) var(--woa-motion-easing);
+}
+/* Stopping: the press was heard. No shimmer -- nothing more is being worked on. */
+.woa-work__live[data-stopping] .woa-work__now {
+  background: none;
+  color: var(--woa-ink-muted);
+  animation: woa-step-in var(--woa-motion-base) var(--woa-motion-easing);
+}
+.woa-work__live .woa-work__chevron {
+  flex: none;
+}
+.woa-work__live[aria-expanded="true"] .woa-work__chevron {
+  transform: rotate(180deg);
+}
+.woa-work__clock {
+  margin-inline-start: auto;
+  flex: none;
+  font-size: var(--woa-font-size-meta);
+  color: var(--woa-ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.woa-work__live + .woa-work__steps {
+  animation: woa-unfold var(--woa-motion-base) var(--woa-motion-easing);
+}
+
+/* A landed turn's steps, folded to one line: how much work stood behind the answer, and a
+   way in. Quiet, because the answer below it is the point. */
+.woa-work__summary {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 6px;
+  margin-inline-start: -6px;
+  border-radius: var(--woa-radius-control);
+  font-size: var(--woa-font-size-small);
+  color: var(--woa-ink-muted);
+  font-variant-numeric: tabular-nums;
+  transition: background var(--woa-motion-fast) var(--woa-motion-easing),
+    color var(--woa-motion-fast) var(--woa-motion-easing);
+}
+.woa-work__summary:hover {
+  background: var(--woa-surface-muted);
+  color: var(--woa-ink);
+}
+.woa-work__summary > svg:first-child {
+  color: var(--woa-success);
+}
+.woa-work__summary[data-failed] > svg:first-child {
+  color: var(--woa-danger);
+}
+.woa-work__summary[data-stopped] > svg:first-child {
+  color: var(--woa-ink-faint);
+}
+.woa-work__chevron {
+  color: var(--woa-ink-faint);
+  transition: transform var(--woa-motion-fast) var(--woa-motion-easing);
+}
+.woa-work__summary[aria-expanded="true"] .woa-work__chevron {
+  transform: rotate(180deg);
+}
+.woa-work__summary:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--woa-line-strong);
+}
+.woa-work__summary + .woa-work__steps {
+  animation: woa-unfold var(--woa-motion-base) var(--woa-motion-easing);
+}
+@keyframes woa-unfold {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+.woa-work__steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+/* One continuous rail behind the marks, from the first to the last, so the steps read as
+   one run. Drawn once rather than per node: a per-node segment between two short rows is
+   a few pixels long and reads as a speck. */
+.woa-work__steps::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 7px;
+  inset-block: 12px;
+  inline-size: 1px;
+  background: var(--woa-line);
+}
+.woa-step {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  column-gap: 8px;
+  align-items: start;
+  font-size: var(--woa-font-size-small);
+  color: var(--woa-ink-muted);
+  position: relative;
+}
+/* As tall as the text's first line and offset by the line's own padding, so a mark sits on
+   the middle of that line whatever the font's size. */
+.woa-step__mark {
+  inline-size: 16px;
+  block-size: calc(1em * var(--woa-line-height));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-block-start: 4px;
+  color: var(--woa-ink-faint);
+  /* The mark sits on the rail, so it carries the panel's own background to punch a hole
+     in it rather than having the line run through the icon. */
+  background: var(--woa-bg);
+  position: relative;
+}
+.woa-step[data-status="done"] .woa-step__mark {
+  color: var(--woa-ink-faint);
+}
+.woa-step[data-status="running"] .woa-step__mark {
+  color: var(--woa-accent);
+}
+.woa-step[data-status="failed"] .woa-step__mark {
+  color: var(--woa-danger);
+}
+.woa-step[data-status="stopped"] .woa-step__mark {
+  color: var(--woa-ink-faint);
+}
+.woa-step[data-status="running"] {
+  color: var(--woa-ink);
+}
+.woa-step[data-status="waiting"] {
+  color: var(--woa-warning);
+}
+@keyframes woa-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+.woa-dot {
+  inline-size: 6px;
+  block-size: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+/* Waiting on the person stays solid, without a competing animation. */
+.woa-pulse {
+  inline-size: 8px;
+  block-size: 8px;
+  border-radius: 50%;
+  background: var(--woa-warning);
+}
+.woa-step__line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  inline-size: 100%;
+  padding: 4px 0;
+  text-align: start;
+  color: inherit;
+  min-width: 0;
+}
+/* A node that opens says so with a chevron, and its row lights under the pointer. Its
+   padding reaches into the gutter so its text starts where a plain node's does. */
+button.woa-step__line {
+  cursor: pointer;
+  inline-size: calc(100% + 12px);
+  margin-inline: -6px;
+  padding-inline: 6px;
+  border-radius: var(--woa-radius-control);
+  transition: background var(--woa-motion-fast) var(--woa-motion-easing);
+}
+button.woa-step__line:hover {
+  color: var(--woa-ink);
+  background: var(--woa-surface-muted);
+}
+.woa-step__chevron {
+  margin-inline-start: auto;
+  flex: none;
+  color: var(--woa-ink-faint);
+  transition: transform var(--woa-motion-fast) var(--woa-motion-easing);
+}
+.woa-step[data-open] .woa-step__chevron {
+  transform: rotate(180deg);
+}
+button.woa-step__line:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--woa-line-strong);
+  border-radius: var(--woa-radius-control);
+}
+.woa-step__text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* 4px between the card and its own line and 4px between it and the next line, measured
+   box to box: a line's box is what lights under the pointer, so it must not touch the card. */
+.woa-step__detail {
+  grid-column: 2;
+  margin: 4px 0;
+  padding: 8px;
+  border-radius: var(--woa-radius-card);
+  background: var(--woa-surface);
+  box-shadow: inset 0 0 0 1px var(--woa-line);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 8px;
+  row-gap: 4px;
+  font-size: var(--woa-font-size-meta);
+}
+.woa-step__detail dt {
+  color: var(--woa-ink-faint);
+}
+.woa-step__detail dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.woa-step__detail code {
+  font-size: var(--woa-font-size-meta);
+}
+/* The summary line of a turn with nothing to unfold: its mark and words sit where the
+   summary button's do, without the button. */
+.woa-took {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding-block: 3px;
+  font-size: var(--woa-font-size-small);
+  color: var(--woa-ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+.woa-took > svg:first-child {
+  color: var(--woa-success);
+}
+.woa-took[data-failed] > svg:first-child {
+  color: var(--woa-danger);
+}
+.woa-took[data-stopped] > svg:first-child {
+  color: var(--woa-ink-faint);
+}
+
+.woa-spinner {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border-radius: 50%;
+  border: 1.6px solid var(--woa-line-strong);
+  border-top-color: var(--woa-accent);
+  /* A calm pace: a spinner this small turning much faster than this reads as urgency. */
+  animation: woa-spin 1.6s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .woa-spinner {
+    animation-duration: 3s;
+  }
+}
+@keyframes woa-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ─────────────────────────────────────────────── answer */
+.woa-md {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  /* The agent's answer is read, not scanned: a looser line than the chrome around it. */
+  line-height: var(--woa-line-height-prose);
+  overflow-wrap: anywhere;
+}
+.woa-md p,
+.woa-md h2,
+.woa-md h3,
+.woa-md blockquote,
+.woa-md ul,
+.woa-md ol {
+  margin: 0;
+}
+.woa-md h2 {
+  font-size: var(--woa-font-size-title);
+  font-weight: 600;
+}
+.woa-md h3 {
+  font-size: var(--woa-font-size);
+  font-weight: 600;
+}
+/* Wide enough for a two-digit marker: at 18px, item 10 onwards lost its first glyph. */
+.woa-md__list {
+  padding-inline-start: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+/* The transcript is itself a list, so the UA's nested-list style downgrades every answer
+   bullet to a hollow ring; the answer's unordered lists are pinned back to the solid disc. */
+ul.woa-md__list {
+  list-style-type: disc;
+}
+.woa-md__list li::marker {
+  font-variant-numeric: tabular-nums;
+}
+.woa-md blockquote {
+  padding-inline-start: 10px;
+  border-inline-start: 2px solid var(--woa-line-strong);
+  color: var(--woa-ink-muted);
+}
+.woa-md hr {
+  border: 0;
+  border-top: 1px solid var(--woa-line);
+  margin: 2px 0;
+}
+.woa-md__code {
+  font-family: var(--woa-mono-stack);
+  font-size: var(--woa-font-size-meta);
+  padding: 1px 4px;
+  border-radius: var(--woa-radius-inline);
+  background: var(--woa-surface-muted);
+}
+.woa-md__inert {
+  color: var(--woa-ink);
+  text-decoration: underline dotted var(--woa-line-strong);
+}
+.woa-md a {
+  color: var(--woa-accent);
+  text-underline-offset: 2px;
+}
+
+.woa-md__caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.02em;
+  vertical-align: -0.16em;
+  background: var(--woa-accent);
+  animation: woa-blink 1.05s steps(2, start) infinite;
+}
+@keyframes woa-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* A table sits in the prose, not in a box: no frame, a firmer rule under the header than
+   between rows, and its outer columns aligned with the text around it. */
+.woa-md__tablewrap {
+  overflow-x: auto;
+}
+.woa-md table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--woa-font-size-small);
+  line-height: var(--woa-line-height);
+}
+.woa-md th {
+  text-align: left;
+  font-weight: 500;
+  font-size: var(--woa-font-size-meta);
+  color: var(--woa-ink-faint);
+  padding: 6px 10px;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--woa-line-strong);
+}
+.woa-md td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--woa-line);
+  font-variant-numeric: tabular-nums;
+  /* Cells wrap: a long value is content, and pushing it into sideways scroll made the
+     reader miss that the row beside it had more columns. Headers keep their line. */
+  overflow-wrap: anywhere;
+}
+.woa-md tr:last-child td {
+  border-bottom: 0;
+}
+.woa-md th:first-child,
+.woa-md td:first-child {
+  padding-inline-start: 0;
+}
+.woa-md th:last-child,
+.woa-md td:last-child {
+  padding-inline-end: 0;
+}
+.woa-md [data-align="right"] {
+  text-align: right;
+}
+
+.woa-md__block {
+  margin: 0;
+  border-radius: var(--woa-radius-card);
+  overflow: hidden;
+  background: var(--woa-surface-muted);
+  box-shadow: inset 0 0 0 1px var(--woa-line);
+}
+.woa-md__block header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  font-family: var(--woa-mono-stack);
+  font-size: var(--woa-font-size-micro);
+  color: var(--woa-ink-faint);
+  border-bottom: 1px solid var(--woa-line);
+}
+.woa-md__copy {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--woa-font-stack);
+  color: var(--woa-ink-muted);
+}
+.woa-md__copy:hover {
+  color: var(--woa-ink);
+}
+
+/* Under a landed answer, the things to do with it and when it was said. They stay out of
+   the way until the turn is pointed at or reached by keyboard. The copy control's tooltip
+   opens upwards from its left edge: below the last line the thread clips it, and centred
+   it would overhang the turn's box, which clips it too. */
+.woa-answer-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: -4px 0 0 -6px;
+  opacity: 0;
+  transition: opacity var(--woa-motion-fast) var(--woa-motion-easing);
+}
+.woa-turn:hover .woa-answer-actions,
+.woa-answer-actions:focus-within {
+  opacity: 1;
+}
+.woa-answer-actions .woa-icon-button {
+  color: var(--woa-ink-faint);
+}
+.woa-answer-actions .woa-icon-button:hover {
+  color: var(--woa-ink);
+}
+.woa-answer-actions .woa-icon-button[data-copied] {
+  color: var(--woa-success);
+}
+.woa-answer-actions .woa-icon-button[data-tip]::after {
+  top: auto;
+  bottom: calc(100% + 6px);
+  left: 0;
+  transform: translateY(2px);
+}
+.woa-answer-actions .woa-icon-button[data-tip]:hover::after,
+.woa-answer-actions .woa-icon-button[data-tip]:focus-visible::after {
+  transform: none;
+}
+.woa-answer-time {
+  font-size: var(--woa-font-size-meta);
+  line-height: var(--woa-line-height);
+  color: var(--woa-ink-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Without a pointer that hovers there is nothing to reveal them: they simply show. */
+@media (hover: none) {
+  .woa-answer-actions {
+    opacity: 1;
+  }
+}
+.woa-md__block pre {
+  margin: 0;
+  padding: 8px;
+  font-family: var(--woa-mono-stack);
+  font-size: var(--woa-font-size-meta);
+  /* Code keeps its own leading: one more unit of air per line is what makes a pasted
+     transcript scannable. It is still a declared fact, not a value typed at the rule. */
+  line-height: var(--woa-line-height-code);
+  overflow-x: auto;
+}
+.woa-md__more {
+  width: 100%;
+  padding: 6px;
+  font-size: var(--woa-font-size-meta);
+  color: var(--woa-accent);
+  border-top: 1px solid var(--woa-line);
+}

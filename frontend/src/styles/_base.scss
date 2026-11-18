@@ -1,0 +1,229 @@
+/* The panel owns a shadow root, so `:host` is the only thing it can style outside itself.
+   The generated token block above declares the palette on `:host`; this rule must not use
+   `all: initial`, which would discard those declarations along with the inherited cascade.
+   Resetting what actually leaks in -- inherited text properties -- is enough, and leaves
+   the tokens standing.
+
+   The host element is a transparent, non-interactive overlay rather than a zero-size node:
+   a collapsed host is measurable by nothing and reads as hidden to every tool that looks
+   at it, which is a trap for anyone integrating this. Children opt back into pointer
+   events; the application underneath keeps every click the panel is not sitting on. */
+:host {
+  position: fixed;
+  inset: 0;
+  z-index: inherit;
+  pointer-events: none;
+  /* Everything the host page can push in by inheritance. */
+  font: var(--woa-font-size) / var(--woa-line-height) var(--woa-font-stack);
+  font-weight: 400;
+  font-style: normal;
+  font-variant: normal;
+  letter-spacing: -0.002em;
+  word-spacing: normal;
+  text-align: start;
+  text-transform: none;
+  text-indent: 0;
+  text-shadow: none;
+  white-space: normal;
+  color: var(--woa-ink);
+  direction: ltr;
+  visibility: visible;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+.woa-root {
+  font-family: var(--woa-font-stack);
+  font-size: var(--woa-font-size);
+  line-height: var(--woa-line-height);
+  letter-spacing: -0.002em;
+  color: var(--woa-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.woa-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+button {
+  font: inherit;
+  letter-spacing: inherit;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+button:disabled {
+  cursor: not-allowed;
+}
+
+:focus-visible {
+  outline: 2px solid var(--woa-focus);
+  outline-offset: 2px;
+  border-radius: var(--woa-radius-control);
+}
+
+/* The card announces itself on arrival; only its keyboard-reached controls need a ring. */
+.woa-approval:focus {
+  outline: none;
+}
+
+/* The light is fixed to the viewport, outside the window's clipping and drawer layout.
+   All descendants stay inert: no hit target, focus, scroll, native cursor or event changes. */
+.woa-screen-effects {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  user-select: none;
+  overflow: hidden;
+  opacity: 1;
+  transition: opacity var(--woa-motion-effect-exit) ease;
+}
+.woa-screen-effects *,
+.woa-screen-effects::before,
+.woa-screen-effects::after {
+  pointer-events: none;
+}
+.woa-screen-effects__glow {
+  position: absolute;
+  inset: 0;
+  opacity: var(--woa-effect-opacity);
+}
+.woa-screen-effects__renderer {
+  position: absolute;
+  inset: 0;
+}
+.woa-screen-effects__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+}
+.woa-screen-effects__canvas[data-ready] {
+  opacity: 1;
+}
+.woa-screen-effects__renderer:has([data-ready]) + .woa-screen-effects__fallback {
+  display: none;
+}
+.woa-screen-effects__fallback {
+  position: absolute;
+  inset: 0;
+  animation: woa-ambient-breathe var(--woa-motion-ambient) ease-in-out infinite;
+  mask-image: linear-gradient(
+      90deg,
+      var(--woa-effect-mask-solid),
+      var(--woa-effect-mask-soft) 24px,
+      transparent var(--woa-effect-depth),
+      transparent calc(100% - var(--woa-effect-depth)),
+      var(--woa-effect-mask-soft) calc(100% - 24px),
+      var(--woa-effect-mask-solid)
+    ),
+    linear-gradient(
+      180deg,
+      var(--woa-effect-mask-solid),
+      var(--woa-effect-mask-soft) 24px,
+      transparent var(--woa-effect-depth),
+      transparent calc(100% - var(--woa-effect-depth)),
+      var(--woa-effect-mask-soft) calc(100% - 24px),
+      var(--woa-effect-mask-solid)
+    );
+}
+/* CSS approximation only when ai-motion cannot render. The inward mask stays fixed. */
+.woa-screen-effects__light {
+  position: absolute;
+  inset: -100vmax;
+  background: conic-gradient(
+    from -100deg,
+    var(--woa-glow-blue),
+    var(--woa-glow-violet),
+    var(--woa-glow-coral),
+    var(--woa-glow-gold),
+    var(--woa-glow-blue)
+  );
+  filter: blur(var(--woa-effect-blur));
+  animation: woa-ambient-flow var(--woa-motion-color) linear infinite;
+}
+.woa-screen-effects__light--alternate {
+  background: conic-gradient(
+    from -100deg,
+    var(--woa-glow-violet),
+    var(--woa-glow-blue),
+    var(--woa-glow-coral),
+    var(--woa-glow-gold),
+    var(--woa-glow-violet)
+  );
+  animation: woa-ambient-flow var(--woa-motion-color) linear infinite reverse,
+    woa-ambient-color var(--woa-motion-ambient) ease-in-out infinite;
+}
+@keyframes woa-ambient-breathe {
+  0%,
+  100% {
+    opacity: calc(var(--woa-effect-opacity) * 0.78);
+  }
+  50% {
+    opacity: var(--woa-effect-opacity);
+  }
+}
+@keyframes woa-ambient-color {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+@keyframes woa-ambient-flow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.woa-agent-cursor {
+  position: absolute;
+  left: var(--woa-effect-cursor-inset);
+  top: var(--woa-effect-cursor-inset);
+  width: var(--woa-effect-cursor-size);
+  height: var(--woa-effect-cursor-size);
+  filter: drop-shadow(0 2px 3px rgba(16, 18, 23, 0.22));
+  transition: left var(--woa-motion-cursor) var(--woa-motion-easing),
+    top var(--woa-motion-cursor) var(--woa-motion-easing), opacity var(--woa-motion-cursor) ease;
+}
+.woa-agent-cursor__pointer {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+.woa-screen-effects[data-phase="waiting"] {
+  opacity: 0.28;
+}
+.woa-screen-effects:not([data-phase="active"]) .woa-screen-effects__fallback,
+.woa-screen-effects:not([data-phase="active"]) .woa-screen-effects__light {
+  animation: none;
+  opacity: 1;
+}
+.woa-screen-effects[data-phase="waiting"] .woa-screen-effects__light--alternate {
+  opacity: 0;
+}
+.woa-screen-effects[data-phase="off"] {
+  opacity: 0;
+}
+.woa-screen-effects:not([data-phase="active"]) .woa-agent-cursor {
+  opacity: 0;
+}
+@media (forced-colors: active) {
+  .woa-screen-effects {
+    display: none;
+  }
+}

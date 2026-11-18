@@ -5,7 +5,7 @@
  * handwritten stylesheet quotes the scale rather than restating it; and the generated
  * sources are generated from this file rather than from a copy of it.
  */
-import {readFileSync} from 'node:fs'
+import {readdirSync, readFileSync} from 'node:fs'
 import {resolve} from 'node:path'
 import {describe, expect, it} from 'vitest'
 import tokens from '../src/styles/design_tokens.json'
@@ -81,8 +81,13 @@ describe('the handwritten styles', () => {
     const declared = new Set([
       ...Object.keys(tokens.scale), ...Object.keys(themes.light),
     ].map(name => `--woa-${name}`))
-    const used = [...withoutComments(read('src/styles/panel.scss'))
-      .matchAll(/var\((--woa-[a-z0-9-]+)/g)].map(match => match[1] ?? '')
+    const stylesDir = resolve(root, 'src/styles')
+    const scssFiles = readdirSync(stylesDir)
+      .filter(name => name.endsWith('.scss') && name !== '_tokens.generated.scss')
+    const used = scssFiles.flatMap(name => [
+      ...withoutComments(read(`src/styles/${name}`))
+        .matchAll(/var\((--woa-[a-z0-9-]+)/g),
+    ]).map(match => match[1] ?? '')
     expect([...new Set(used)].filter(name => !declared.has(name))).toEqual([])
   })
 })
