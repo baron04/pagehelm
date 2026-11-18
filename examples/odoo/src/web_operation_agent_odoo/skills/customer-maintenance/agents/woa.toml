@@ -1,3 +1,0 @@
-schema_version = 1
-scope_entities = ["res.partner"]
-write_operations = ["create_customer", "archive_customer"]

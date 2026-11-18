@@ -14,50 +14,41 @@
 # The example distributions depend on the core and on nothing else; if that ever
 # stops being true, a new name appears here.
 
-# MIT (required by examples/odoo, web-operation-agent)
+# MIT (required by examples/yudao, web-operation-agent, web-operation-agent[browser])
 attrs==26.1.0 \
     --hash=sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309
-# MIT AND PSF-2.0 (required by examples/odoo, web-operation-agent)
+# MIT AND PSF-2.0 (required by web-operation-agent[browser])
 greenlet==3.5.6 \
-    --hash=sha256:a5876d0a60355af98d535c47f6cd6eb0f8a432396dab26845d380b92f8412422 \
     --hash=sha256:f96f0e30b5a95c7631b12bfe214cbc90ec8fe8cfa36920596c10514a65743519 \
-    --hash=sha256:975736b002ed080d124cf81a79cb7e05cb26d6b3f5c7a7b651c0fcce70353aa1 \
     --hash=sha256:f98e8215e172f567ce80eeaed9107fb4d32b6c44f26983d9b8334658136a205a \
-    --hash=sha256:e85880b538e59a59f55117b81f208a6660ad5ac328aad9305f812d9b8bc67a0f \
     --hash=sha256:c75116c9de79949de23006e2d9b35ee82874c594fcf5c0311b439acaa14b8441
-# MIT (required by examples/odoo, web-operation-agent)
+# MIT (required by examples/yudao, web-operation-agent, web-operation-agent[browser])
 jsonschema==4.26.0 \
     --hash=sha256:d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce
-# MIT (required by examples/odoo, web-operation-agent)
+# MIT (required by examples/yudao, web-operation-agent, web-operation-agent[browser])
 jsonschema-specifications==2025.9.1 \
     --hash=sha256:98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe
-# Apache-2.0 (required by examples/odoo, web-operation-agent)
+# Apache-2.0 (required by web-operation-agent[browser])
 playwright==1.52.0 \
     --hash=sha256:0797c0479cbdc99607412a3c486a3a2ec9ddc77ac461259fd2878c975bcbb94a \
     --hash=sha256:d010124d24a321e0489a8c0d38a3971a7ca7656becea7656c9376bfea7f916d4 \
     --hash=sha256:4173e453c43180acc60fd77ffe1ebee8d0efbfd9986c03267007b9c3845415af
-# MIT (required by examples/odoo, web-operation-agent)
+# MIT (required by web-operation-agent[browser])
 pyee==13.0.1 \
     --hash=sha256:af2f8fede4171ef667dfded53f96e2ed0d6e6bd7ee3bb46437f77e3b57689228
-# MIT (required by examples/odoo, web-operation-agent)
+# MIT (required by examples/yudao, web-operation-agent, web-operation-agent[browser])
 PyYAML==6.0.3 \
-    --hash=sha256:fc09d0aa354569bc501d4e787133afc08552722d3ab34836a80547331bb5d4a0 \
     --hash=sha256:2283a07e2c21a2aa78d9c4442724ec1eb15f5e42a723b99cb3d822d48f5f7ad1 \
-    --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc \
     --hash=sha256:0f29edc409a6392443abf94b9cf89ce99889a1dd5376d94316ae5145dfedd5d6 \
-    --hash=sha256:9149cad251584d5fb4981be1ecde53a1ca46c891a79788c0df828d2f166bda28 \
     --hash=sha256:ee2922902c45ae8ccada2c5b501ab86c36525b883eff4255313a253a3160861c
-# MIT (required by examples/odoo, web-operation-agent)
+# MIT (required by examples/yudao, web-operation-agent, web-operation-agent[browser])
 referencing==0.37.0 \
     --hash=sha256:381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231
-# MIT (required by examples/odoo, web-operation-agent)
+# MIT (required by examples/yudao, web-operation-agent, web-operation-agent[browser])
 rpds-py==2026.9.1 \
-    --hash=sha256:e21c1429e205828ea886a2293a4a2c8e01f4c25d9893ca330e97a6cf73f52e7b \
     --hash=sha256:eba5d173f7d5708b22a93815017a4611873ed54db9f268077c0dd1ed99cfc858 \
-    --hash=sha256:addeda51556dac7c1a2f14cda62db8b621cd12afba3091d03a96c72932387eab \
     --hash=sha256:7868b85224291c6cb6759f9b5adb9745f486d226f62b16a614dd5a2a5ab2b35b \
-    --hash=sha256:2693b2728bbcc48d09a981a356954b0c47c53ff25b545856f28a889ea619f69a \
     --hash=sha256:457866b85daf5034296666168b84a69e0b2e89dc4f1af102b46f6448a60b9063
-# PSF-2.0 (required by examples/odoo, web-operation-agent)
+# PSF-2.0 (required by web-operation-agent[browser])
 typing_extensions==4.16.0 \
     --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8

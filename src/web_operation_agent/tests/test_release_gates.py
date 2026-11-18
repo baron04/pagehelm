@@ -48,20 +48,18 @@ class TheLocalEnvironmentTemplateIsSafeAndUseful(unittest.TestCase):
         self.values = dict(pairs)
         self.assertEqual(len(self.values), len(pairs), "duplicate environment setting")
 
-    def test_it_documents_the_minimum_model_and_odoo_configuration(self):
-        expected = {
-            "AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY", "AGENT_OPENAI_MODEL",
-            "WOA_ODOO_BASE_URL", "WOA_ODOO_API_KEY_FILE", "WOA_ODOO_STORAGE_STATE",
-            "WOA_ODOO_PAGE_CONTROLLER_MODULE",
-        }
+    def test_it_documents_the_minimum_model_configuration(self):
+        expected = {"AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY", "AGENT_OPENAI_MODEL"}
         self.assertFalse(expected - self.values.keys())
         self.assertFalse(any(self.values[name] for name in expected),
                          "copying the template must not enable a live service")
+        self.assertFalse(any(key.startswith("WOA_ODOO_") for key in self.values))
 
     def test_it_contains_neither_a_credential_nor_a_local_path(self):
         self.assertEqual(self.values["AGENT_OPENAI_API_KEY"], "")
         text = (ROOT / ".env.example").read_text(encoding="utf-8")
         self.assertNotRegex(text, r"/(Users|home)/[^/]+/")
+        self.assertNotIn("odoo", text.casefold())
 
 
 class _Copy:
@@ -98,7 +96,7 @@ class TheDependencyGateChecksDigestsAndNotOnlyNames(unittest.TestCase):
     """The gap that made this file worth writing."""
 
     FILES = ("requirements.lock", "sbom.json", "THIRD_PARTY.md", "scripts/lock_and_sbom.py",
-             "evals/pageagent/package-lock.json", "frontend/package-lock.json",
+             "frontend/package-lock.json",
              # The checker also reconciles the pinned browser asset against the notice.
              "src/web_operation_agent/policies/page_controller.json",
              # The checker imports the release's supported-Python declaration. Keep the
@@ -196,11 +194,49 @@ class TheCoreBoundaryGateCatchesWhatItNames(unittest.TestCase):
     def test_core_importing_the_evaluation_harness_is_caught(self):
         with _Copy(*self.FILES) as root:
             target = root / "src/web_operation_agent/execution/session.py"
-            target.write_text("from evals.odoo import protocol  # noqa\n"
+            target.write_text("from evals.source_operations import workflow_gate  # noqa\n"
                               + target.read_text())
             done = _run("check_core_boundary.py", cwd=root)
 
         self.assertEqual(done.returncode, 1)
+
+
+class TheRepositoryHygieneGateCatchesWhatItNames(unittest.TestCase):
+    FILES = ("scripts/check_repo_hygiene.py", ".env.example")
+
+    def test_clean_tree_passes(self):
+        with _Copy(*self.FILES) as root:
+            done = _run("check_repo_hygiene.py", cwd=root)
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    def test_local_user_home_paths_are_caught_while_container_home_is_allowed(self):
+        with _Copy(*self.FILES) as root:
+            (root / "container.txt").write_text("WORKDIR /home/ubuntu/workspace\n")
+            self.assertEqual(_run("check_repo_hygiene.py", cwd=root).returncode, 0)
+
+            (root / "leak.py").write_text('PATH = "/' + 'Users/alice/repo/secret.txt"\n')
+            done = _run("check_repo_hygiene.py", cwd=root)
+            self.assertEqual(done.returncode, 1)
+            self.assertIn("leak.py", done.stdout)
+
+            (root / "leak.py").write_text('PATH = "/ho' + 'me/alice/repo/secret.txt"\n')
+            done = _run("check_repo_hygiene.py", cwd=root)
+            self.assertEqual(done.returncode, 1)
+            self.assertIn("leak.py", done.stdout)
+
+    def test_file_uri_and_secrets_are_caught(self):
+        with _Copy(*self.FILES) as root:
+            (root / "uri.txt").write_text("fi" + "le:///tmp/local-artifact\n")
+            self.assertEqual(_run("check_repo_hygiene.py", cwd=root).returncode, 1)
+            (root / "uri.txt").unlink()
+
+            (root / "key.pem").write_text("-----BEGIN OPENSSH " + "PRIVATE KEY-----\n")
+            self.assertEqual(_run("check_repo_hygiene.py", cwd=root).returncode, 1)
+            (root / "key.pem").unlink()
+
+            (root / ".env.local").write_text("AGENT_OPENAI_API_KEY=" + "sk-" + "Ab3dEf9hIjKlMnOpQrStUvWx\n")
+            self.assertEqual(_run("check_repo_hygiene.py", cwd=root).returncode, 1)
 
 
 class TheWheelGateCatchesWhatItNames(unittest.TestCase):

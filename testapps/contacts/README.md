@@ -1,15 +1,15 @@
 # Synthetic Contacts test application
 
 This checkout-only application exercises the generic adapter and browser protocols. It is
-test apparatus, not a public integration template; use `examples/odoo/` when integrating a
-real application.
+test apparatus, not a public integration template; see `examples/yudao/` for the
+reference application integration.
 
 Its files mirror the responsibilities a real integration implements:
 
 | File | What it is | Do you write this? |
 |---|---|---|
 | [`app.py`](app.py) | The synthetic Contacts application: a list page, a record page per contact, a typed read and write API, two credentials, users with different permissions, two workspaces that repeat contact names, and the same-origin PageController the SPI requires a host to serve | **No** — your application already exists. This file exists so the example runs with nothing provisioned |
-| [`adapter.py`](adapter.py) | Identity, routes, current forms, postconditions, reconciliation and data classification, plus one dedicated read, one write, and REST/list implementations of the application-neutral entity-read and current-form contracts | See the Odoo adapter for the supported reference |
+| [`adapter.py`](adapter.py) | Identity, routes, current forms, postconditions, reconciliation and data classification, plus one dedicated read, one write, and REST/list implementations of the application-neutral entity-read and current-form contracts | See the Yudao adapter for the reference integration |
 | [`skills/`](skills/) | One Skill artifact per capability: when the tool applies, and the instructions the model follows when it does | Test fixtures only |
 | [`demo.py`](demo.py) | A Playwright-driven qualification composition for repeatable browser tests | **No** — it proves the chain but is not the product host |
 | [`server.py`](server.py) | The ordinary-browser composition: application login, server-side identity binding, durable session/journal state, shared gateway, and ReAct executor | Test host |
@@ -29,16 +29,15 @@ Both use a scripted model and no network, so they finish without an API key. Poi
 
 The Contacts adapter is also the second, structurally different qualification target for
 `EntityReadPort`. It exposes the same `discover_entities`, `describe_entity`, and
-`query_entity_records` schemas as Odoo, but obtains actor-visible rows from the synthetic
-REST endpoint and applies the bounded AND filter, stable sort, count, and pagination inside
-the adapter instead of translating to an ORM query. Both adapters call the same reusable
+`query_entity_records` schemas as the primary application adapter, obtaining actor-visible
+rows from the synthetic REST endpoint and applying the bounded AND filter, stable sort,
+count, and pagination inside the adapter. Both adapters call the same reusable
 `assert_entity_read_contract`; this remains internal qualification, not a second public
 reference integration.
 
 It is also the second qualification target for `ApplicationFormPort`: the Contacts adapter
-declares its own two create fields while Odoo translates its actor-scoped action catalog and
-`fields_get`. Both run `assert_current_form_contract`; neither exposes a native field name or
-DOM selector to the Agent. The test application also serves a writer-only `/contacts/new`
+declares its own two create fields and runs `assert_current_form_contract`, without
+exposing a native field name or DOM selector to the Agent. The test application also serves a writer-only `/contacts/new`
 screen so the real-browser qualification can prove prefill stops before the human-owned
 submit endpoint.
 Its adapter binds the create form by its DOM identity and names `Save contact` as the

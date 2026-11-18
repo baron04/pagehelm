@@ -104,10 +104,16 @@ class SelectionTests(unittest.TestCase):
         self.assertNotIn('--module', command)
 
     def test_evaluation_changes_only_run_their_own_suite(self):
-        names, plan = self.names(['evals/yudao/run_goals.py'])
+        names, plan = self.names(['evals/yudao/write_contract/inventory.py'])
         self.assertIn('evals/yudao apparatus', names)
         self.assertNotIn('core regression', names)
         self.assertFalse(plan['needs_python_browser'] or plan['needs_node_browser'])
+
+    def test_hygiene_gate_runs_on_code_and_env_template_changes(self):
+        names, _ = self.names(['.env.example'])
+        self.assertIn('repository hygiene', names)
+        names, _ = self.names(['scripts/check_repo_hygiene.py'])
+        self.assertIn('repository hygiene', names)
 
     def test_packaging_runs_wheel_installation_check(self):
         names, _ = self.names(['pyproject.toml'])

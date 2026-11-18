@@ -9,11 +9,11 @@ The inventory is based on [pyproject.toml](pyproject.toml), imports in
 optional test applications or their dependency trees as product dependencies.
 
 **This file is checked, not just written.** `scripts/lock_and_sbom.py --write`
-resolves every distribution's runtime closure and both npm lockfiles into
-[`requirements.lock`](requirements.lock) (exact versions with sha256 hashes,
-installable with `--require-hashes`) and [`sbom.json`](sbom.json) (CycloneDX 1.5,
-517 components). `--check` runs offline in `scripts/qualify.sh` and fails when the
-lock, the SBOM, the npm lockfiles, the pinned browser asset and this document stop
+resolves every distribution's runtime closure (including optional `[browser]`) and the
+`frontend/` npm lockfile into [`requirements.lock`](requirements.lock) (exact versions with
+sha256 hashes, installable with `--require-hashes`) and [`sbom.json`](sbom.json)
+(CycloneDX 1.5). `--check` runs offline in `scripts/qualify.sh` and fails when the
+lock, the SBOM, the npm lockfile, the pinned browser asset and this document stop
 agreeing. Anything whose bytes reach a user must be named here by name; build-only
 tooling is inventoried in the SBOM and covered by the blanket paragraph below.
 
@@ -23,16 +23,17 @@ The wheel contains Web Operation Agent's Python modules, policy and Skill JSON,
 the embedded browser Runtime, and the trace replay template. It does not contain
 browser binaries, PageController, test applications, or development tools.
 
-The only non-standard-library package imported by the shipping Python modules
-and declared as a direct runtime dependency is Playwright. The wheel does,
-however, carry one built JavaScript bundle with third-party code compiled into
-it; see *The assistant panel bundle* below.
+The shipping core package declares `PyYAML` and `jsonschema` as direct runtime
+dependencies (`dependencies`), and declares `playwright` under the optional
+`[browser]` extra (`[project.optional-dependencies].browser`) for headless browser
+qualification and browser-backed runs. The wheel also carries one built JavaScript
+bundle with third-party code compiled into it; see *The assistant bundle* below.
 
 | Component | Constraint | License | Source | Use |
 | --- | --- | --- | --- | --- |
 | [PyYAML](https://github.com/yaml/pyyaml) (`PyYAML`) | `>=6.0.2,<7` | MIT | PyPI and the linked source repository | Safe YAML parser for standard Skill metadata; aliases, tags and duplicate keys are rejected |
 | [jsonschema](https://github.com/python-jsonschema/jsonschema) (`jsonschema`) | `>=4.23,<5` | MIT | PyPI and the linked source repository | Draft 2020-12 validation of goal/skill payloads on the server side |
-| [Playwright for Python](https://github.com/microsoft/playwright-python) (`playwright`) | `>=1.52,<1.53` | Apache-2.0 | PyPI and the linked source repository | Browser worker and browser-build attestation; installed separately from this wheel |
+| [Playwright for Python](https://github.com/microsoft/playwright-python) (`playwright`) | `>=1.52,<1.53` | Apache-2.0 | PyPI and the linked source repository | Optional `[browser]` extra for browser worker and browser-build attestation; installed separately from the core wheel |
 
 jsonschema 4.26.0 metadata declares `attrs`, `jsonschema-specifications`,
 `referencing` and `rpds-py`; Playwright 1.52 metadata declares `pyee>=13,<14`
@@ -62,7 +63,7 @@ those exact artifacts.
 
 | Component | Qualified version | License | Source | Distribution boundary |
 | --- | ---: | --- | --- | --- |
-| `@page-agent/page-controller` | 1.12.4 | MIT | [alibaba/page-agent](https://github.com/alibaba/page-agent) | Supplied by the application deployment at an absolute HTTP(S) module URL; not tracked in this repository and not included in the wheel |
+| `@page-agent/page-controller` | 1.12.4 | MIT | [alibaba/page-agent](https://github.com/alibaba/page-agent) | Declared in `frontend/package.json` (`devDependencies`) for verification and provisioned at deployment time from the pinned npm tarball at an absolute HTTP(S) module URL; not included in the wheel |
 
 The assistant Runtime (`assistant.js`, built from `frontend/src/runtime/`) dynamically
 imports `PageController` and `getElementByIndex` from that module. It does not embed
@@ -73,9 +74,9 @@ The module URL does not attest what answered it, so the version is stated once, 
 this package, in
 [`src/web_operation_agent/policies/page_controller.json`](src/web_operation_agent/policies/page_controller.json):
 the npm release, its tarball integrity, and the sha256 of **every file a deployment
-has to serve**. `web_operation_agent.page_controller.verify_served_directory` compares a
+has to serve**. `web_operation_agent.transport.page_controller.verify_served_directory` compares a
 served directory against that pin, and `test_page_controller.py` fails when the Runtime
-name, this table, or the evaluation lockfile restates the version differently.
+name, this table, or `frontend/package-lock.json` restates the version differently.
 
 The row above read 1.12.2 until that check existed, as did the Runtime's own name,
 while every qualified environment served 1.12.4 byte for byte. The failure mode was
@@ -90,9 +91,10 @@ Three files are served, not one:
 | `SimulatorMask-Dq2GJqJc.js` | `26f70ee9cb6352ff4ef87a1c063af7533df89d6de79ad83d5fc03e19eb0e0205` | The entry file lazily imports it; a deployment serving only the entry breaks when that import resolves |
 | `LICENSE` | `393ad563ce5dd0bbe283ec40f9f5d631817262bc9bbd5eb17ed038a9d9f44803` | Serving the asset redistributes it, and MIT requires the notice to travel with it |
 
-`examples/odoo/deploy` provisions exactly these from the pinned tarball and refuses to
-continue when a digest disagrees. Nothing in this repository redistributes the asset:
-it is fetched at provisioning time and is not tracked in Git.
+Deployment provisioning (such as `examples/yudao/deploy`) serves or provisions these
+exact files from the pinned tarball and refuses to continue when a digest disagrees.
+Nothing in this repository redistributes the asset: it is fetched at provisioning time
+and is not tracked in Git.
 
 The other shipped frontend resource,
 `src/web_operation_agent/web_runtime/trace_replay.html`, is a project-maintained
@@ -139,19 +141,6 @@ Vitest, jsdom, Sass, the type packages and the test harnesses. None of it is com
 into the bundle or installed with the wheel, all of it is inventoried in `sbom.json`
 with its declared licence, and the release gate does not require a paragraph for each.
 
-## Evaluation-only PageAgent baseline
-
-The independent baseline under `evals/pageagent/` has its own npm lock and is not included in the Python wheel or product Runtime. It builds an ignored browser artifact for paired evaluation from exact MIT-licensed releases:
-
-| Component | Locked version | npm integrity | Use |
-| --- | ---: | --- | --- |
-| `@page-agent/core` | 1.12.4 | `sha512-Ixiv3xtjBF9ystUadNtHcmt4DDPbIis9gphxe3DB36a3Kt93K8lxDMyVltIJx986KkBJ4RGjNZ4/Dv63hJdDlg==` | Official PageAgent planning loop and custom-tool surface |
-| `@page-agent/page-controller` | 1.12.4 | `sha512-I8se6/QMhg1wMZp52fkX37xbv/lkUnBihtadcoZKOQ9xvL562/sd141mu5ANPGvaCosPlXxJQ3HGIwA2VM4bwQ==` | Official DOM observation and actions for the baseline |
-| `zod` | 4.5.4 | `sha512-sC95tT5iHHH9gtpj6A81kh+NEaRAUFN+qlUPDUbRfOMvNf5QCBqsb3WgvnpVtK5Y+4UfA6KqufotuTvMGiTlsA==` | Peer schema runtime required by PageAgentCore |
-| `esbuild` | 0.28.2 | `sha512-HKVLS8dvII+xoKW9kmqxbRKrnWEXfJJr/FZhhJmiqIB0e053QNYFqOBouTMO/k5sID4MvCiUCvv8b9M4h32wIA==` | Evaluation bundle build only |
-
-The tracked bridge imports these packages and delegates provider and custom business-tool calls to harness-owned bindings; it does not copy upstream implementation source into this repository. Generated bundles, `node_modules`, raw traces and provider payloads remain outside Git. Anyone redistributing the generated baseline bundle must include the PageAgent, ai-motion, chalk, Zod and other exact lockfile notices required by that distribution; the current manifest check covers the four direct qualification components and is not yet a complete generated SBOM.
-
 ## Build and CI tools
 
 These tools are not included in the wheel:
@@ -159,7 +148,7 @@ These tools are not included in the wheel:
 | Tool | Constraint | License/source | Use |
 | --- | --- | --- | --- |
 | [setuptools](https://github.com/pypa/setuptools) | `>=77`; exact version not locked | MIT | PEP 517 build backend |
-| [Node.js](https://github.com/nodejs/node) | CI uses major version 22; exact patch not locked | Node.js is MIT; each distribution carries additional third-party notices | Executes browser Runtime tests and builds the isolated PageAgent evaluation baseline |
+| [Node.js](https://github.com/nodejs/node) | CI uses major version 22; exact patch not locked | Node.js is MIT; each distribution carries additional third-party notices | Executes browser Runtime tests and builds the assistant bundle |
 | [actions/setup-node](https://github.com/actions/setup-node) | `49933ea5288caeca8642d1e84afbd3f7d6820020` (v4) | MIT | CI Node setup and npm cache |
 | [actions/checkout](https://github.com/actions/checkout) | `11d5960a326750d5838078e36cf38b85af677262` (v4) | MIT | CI checkout action |
 | [actions/setup-python](https://github.com/actions/setup-python) | `a26af69be951a213d495a4c3e4e4022e16d87065` (v5) | MIT | CI Python setup action |
@@ -191,11 +180,11 @@ The first, third and fifth items below used to be instructions nobody executed. 
 now mechanical, and `scripts/qualify.sh` runs them:
 
 1. **Done, and checked.** [`requirements.lock`](requirements.lock) records the resolved
-   runtime closure of all four distributions with a sha256 per artifact, and
-   [`sbom.json`](sbom.json) inventories those plus every npm component with its declared
-   licence and the field that declared it. `scripts/lock_and_sbom.py --check` refuses a
-   build where the lock, the SBOM, the npm lockfiles, the pinned browser asset and this
-   document disagree.
+   runtime closure of the core distribution (base and `[browser]`) and the Yudao example
+   distribution with a sha256 per artifact, and [`sbom.json`](sbom.json) inventories those
+   plus every `frontend/` npm component with its declared licence and the field that declared
+   it. `scripts/lock_and_sbom.py --check` refuses a build where the lock, the SBOM,
+   `frontend/package-lock.json`, the pinned browser asset and this document disagree.
 2. Still a person's job before publishing: inspect the final wheel and source
    distribution for undeclared vendored code, test applications, credentials, generated
    screenshots, and cache content. `scripts/check_wheel_contents.py` covers the shapes it
@@ -204,9 +193,8 @@ now mechanical, and `scripts/qualify.sh` runs them:
    the sha256 of every file a deployment serves, in
    [`policies/page_controller.json`](src/web_operation_agent/policies/page_controller.json);
    the MIT notice is one of those files, so it is fetched and served alongside the code.
-   `test_page_controller.py` fails when the Runtime name, this document or the evaluation
-   lockfile restates the version differently. A complete generated inventory for the
-   PageAgent evaluation bundle is in `sbom.json`.
+   `test_page_controller.py` fails when the Runtime name, this document or
+   `frontend/package-lock.json` restates the version differently.
 4. Still a person's job: include the exact Playwright driver, browser, base-image, and
    operating-system notices when any of those artifacts are bundled. Browsers installed by
    `playwright install` are separate artifacts and are outside `sbom.json` by design.

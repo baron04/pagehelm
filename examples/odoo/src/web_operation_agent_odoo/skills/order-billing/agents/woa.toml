@@ -1,3 +1,0 @@
-schema_version = 1
-scope_entities = ["sale.order", "account.move"]
-write_operations = ["invoice_sale_order"]

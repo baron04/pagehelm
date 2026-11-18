@@ -139,8 +139,7 @@ def make_plan(paths: list[str], profile: str = 'dev', reason: str = 'explicit pa
     tooling = any(f.startswith(('scripts/', '.github/')) or f == 'AGENTS.md' for f in p)
     python_dependencies = any(f in {'pyproject.toml', 'requirements.lock'} or f.endswith('/pyproject.toml') for f in p)
     frontend_dependencies = any(f in {'frontend/package.json', 'frontend/package-lock.json'} for f in p)
-    controller_dependencies = any(f in {'evals/pageagent/package.json', 'evals/pageagent/package-lock.json'} for f in p)
-    dependencies = python_dependencies or frontend_dependencies or controller_dependencies
+    dependencies = python_dependencies or frontend_dependencies
     broad = '__all_product__' in p
     packaging = dependencies or any(f in {'scripts/check_wheel_contents.py', 'scripts/check_wheels.sh',
                                          'MANIFEST.in', CORE + '__init__.py'} for f in p)
@@ -152,7 +151,7 @@ def make_plan(paths: list[str], profile: str = 'dev', reason: str = 'explicit pa
     frontend_paths = [f for f in p if f.startswith('frontend/')]
     story_paths = [f for f in frontend_paths if f.startswith(('frontend/stories/', 'frontend/.storybook/')) or '.stories.' in Path(f).name]
     frontend = bool(set(frontend_paths) - set(story_paths)) or broad or builders
-    runtime = ('frontend/vite.runtime.config.ts' in p) or builders or frontend_dependencies or controller_dependencies or any(f.startswith(('frontend/src/runtime/', 'frontend/src/contract/', 'frontend/src/trace/', 'frontend/trace/')) for f in p)
+    runtime = ('frontend/vite.runtime.config.ts' in p) or builders or frontend_dependencies or any(f.startswith(('frontend/src/runtime/', 'frontend/src/contract/', 'frontend/src/trace/', 'frontend/trace/')) for f in p)
     transport = any(f.startswith((CORE + 'transport/', CORE + 'state/', CORE + 'composition/',
                                   CORE + 'tests/transport/', CORE + 'tests/state/test_traceview.py')) for f in p)
     contacts = any(f.startswith('testapps/contacts/') for f in p) or broad or (profile == 'ci' and python_dependencies)
@@ -170,6 +169,10 @@ def make_plan(paths: list[str], profile: str = 'dev', reason: str = 'explicit pa
     if (production or broad or python_dependencies or 'scripts/check_core_boundary.py' in p
             or any(f.startswith('frontend/src/runtime/') for f in p)):
         add('core boundary', ['@python', 'scripts/check_core_boundary.py'])
+    if (core or yudao or contacts or frontend or tooling or broad
+            or any(f in {'.env.example', '.gitignore', 'SECURITY.md'} for f in p)
+            or any(f.startswith('evals/') for f in p)):
+        add('repository hygiene', ['@python', 'scripts/check_repo_hygiene.py'])
     if dependencies or any(f in {'scripts/lock_and_sbom.py', 'sbom.json', 'THIRD_PARTY.md'} for f in p):
         add('dependency lock/SBOM', ['@python', 'scripts/lock_and_sbom.py', '--check'])
     if core:
@@ -223,9 +226,7 @@ def make_plan(paths: list[str], profile: str = 'dev', reason: str = 'explicit pa
         if any(f.startswith(prefix) for f in p):
             add(prefix.rstrip('/') + ' apparatus', ['@python', '-m', 'unittest', 'discover', '-s', directory,
                                                     '-t', top], needs_python_packages=True)
-    if any(f.startswith('evals/pageagent/') for f in p):
-        add('PageAgent comparison', ['npm', 'test'], cwd='evals/pageagent', needs_page_controller=True)
-    known = lambda f: (f.startswith((CORE, 'frontend/', 'examples/odoo/', 'examples/yudao/', 'testapps/contacts/', 'evals/', 'docs/', 'scripts/', '.github/'))
+    known = lambda f: (f.startswith((CORE, 'frontend/', 'examples/yudao/', 'testapps/contacts/', 'evals/', 'docs/', 'scripts/', '.github/'))
                        or f in {'AGENTS.md', '.gitignore', '.gitattributes', '.editorconfig', 'LICENSE', 'pyproject.toml', 'requirements.lock', 'sbom.json', 'THIRD_PARTY.md'}
                        or Path(f).suffix.lower() in {'.md', '.txt', '.rst'})
     if any(not known(f) for f in p) and not core:
@@ -298,9 +299,9 @@ def main(argv=None) -> int:
         print('No relevant changes: no checks selected.')
         return 0
     environment = {**os.environ, 'PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD': '1', 'STORYBOOK_DISABLE_TELEMETRY': '1'}
-    environment['PYTHONPATH'] = os.pathsep.join(str(ROOT / f) for f in ('src', 'examples/odoo/src', 'examples/yudao/src', '.'))
+    environment['PYTHONPATH'] = os.pathsep.join(str(ROOT / f) for f in ('src', 'examples/yudao/src', '.'))
     if plan['needs_page_controller']:
-        environment['WOA_PAGE_CONTROLLER_MODULE'] = str(ROOT / 'evals/pageagent/node_modules/@page-agent/page-controller/dist/lib/page-controller.js')
+        environment['WOA_PAGE_CONTROLLER_MODULE'] = str(ROOT / 'frontend/node_modules/@page-agent/page-controller/dist/lib/page-controller.js')
     checks = [c for c in plan['checks'] if not args.only or c['name'] in args.only]
     if unknown := sorted(set(args.only) - {c['name'] for c in plan['checks']}):
         print(f'--only names not in the plan: {unknown}', file=sys.stderr)

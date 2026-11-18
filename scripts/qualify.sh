@@ -5,22 +5,14 @@
 # CI runs this same script, so a gate cannot pass locally and be missing in CI, or vice
 # versa. Two rules matter more than the list of suites:
 #
-#   * A gate that cannot run is never reported as a pass. The browser and live-Odoo gates
-#     print SKIPPED or BLOCKED with the exact prerequisite that is absent, and `--require-*`
-#     turns that absence into a failure for environments that must have it.
+#   * A gate that cannot run is never reported as a pass. The browser gates print SKIPPED or
+#     BLOCKED with the exact prerequisite that is absent, and `--require-browser` turns that
+#     absence into a failure for environments that must have it.
 #   * Any required failure makes this script exit non-zero. There is no summary line that
 #     says "qualified" while a section above it failed.
 #
 # Usage:
-#   scripts/qualify.sh [--require-browser] [--require-live] [--skip-wheel]
-#
-# Live-Odoo prerequisites (all of them, or the gate reports BLOCKED):
-#   WOA_ODOO_BASE_URL WOA_ODOO_API_KEY_FILE WOA_ODOO_STORAGE_STATE
-#   WOA_ODOO_PAGE_CONTROLLER_MODULE
-#   optionally WOA_ODOO_SOURCE_ROOT + WOA_ODOO_SOURCE_RELEASE, which add the source gate
-#   optionally WOA_ODOO_FIXTURE_CONTAINER + WOA_ODOO_FIXTURE_DATABASE +
-#     WOA_ODOO_FIXTURE_SNAPSHOT + WOA_ODOO_FIXTURE_RECORD, which make the gate refuse to
-#     run against a library that has drifted off its recorded baseline
+#   scripts/qualify.sh [--require-browser] [--skip-wheel]
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -41,18 +33,15 @@ tested_what="commit ${tested_commit} (${tested_branch}), tracked files ${tested_
 printf 'Qualifying %s\n' "${tested_what}"
 
 require_browser=0
-require_live=0
 skip_wheel=0
 for arg in "$@"; do
   case "${arg}" in
     --require-browser) require_browser=1 ;;
-    --require-live) require_live=1 ;;
     --skip-wheel) skip_wheel=1 ;;
-    -h|--help) sed -n '2,22p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,15p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown option: ${arg}" >&2; exit 2 ;;
   esac
 done
-[[ "${WOA_REQUIRE_PAGEAGENT_BROWSER:-}" == "1" ]] && require_browser=1
 
 failed=()
 results=()
@@ -77,10 +66,11 @@ run_gate() {   # run_gate <name> <required:0|1> <command...>
   fi
 }
 
-export PYTHONPATH="${ROOT}/src:${ROOT}/examples/odoo/src:${ROOT}/examples/yudao/src:${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
+export PYTHONPATH="${ROOT}/src:${ROOT}/examples/yudao/src:${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 
 # ---------------------------------------------------------------- offline gates
 run_gate "core distribution boundary" 1 "${PYTHON}" scripts/check_core_boundary.py
+run_gate "repository hygiene" 1 "${PYTHON}" scripts/check_repo_hygiene.py
 # Offline on purpose: it reads what is committed. Regenerating the lock and the SBOM needs
 # the index and is a deliberate release step, `scripts/lock_and_sbom.py --write`.
 run_gate "dependency lock, SBOM and licence notice" 1 \
@@ -118,9 +108,10 @@ run_gate "yudao example and host suite (offline)" 1 "${PYTHON}" -m unittest disc
   -t examples/yudao/src
 run_gate "Yudao evaluation apparatus (offline)" 1 "${PYTHON}" -m unittest discover \
   -s evals/yudao/tests -t .
-# Runtime needs this dependency, not the PageAgent comparison host or baseline bundle.
+# Runtime needs the pinned @page-agent/page-controller asset from frontend/node_modules.
+page_controller_module="${ROOT}/frontend/node_modules/@page-agent/page-controller/dist/lib/page-controller.js"
 pageagent_ready=0
-if [[ -f "${ROOT}/evals/pageagent/node_modules/@page-agent/page-controller/dist/lib/page-controller.js" ]]; then
+if [[ -f "${page_controller_module}" ]]; then
   pageagent_ready=1
 fi
 
@@ -175,7 +166,6 @@ else
     bash -c 'cd "$1/frontend" && npx playwright test' _ "${ROOT}"
 fi
 
-page_controller_module="${ROOT}/evals/pageagent/node_modules/@page-agent/page-controller/dist/lib/page-controller.js"
 runtime_blocked() {
   local gate
   for gate in "embedded Runtime Chromium qualification" "assistant lifecycle faults (I1, I2)"; do
@@ -184,9 +174,7 @@ runtime_blocked() {
   done
 }
 if [[ "${pageagent_ready}" != "1" ]]; then
-  runtime_blocked "the pinned PageController dependency was not qualified"
-elif [[ ! -f "${page_controller_module}" ]]; then
-  runtime_blocked "PageController module is absent: ${page_controller_module}"
+  runtime_blocked "run npm ci in frontend (missing ${page_controller_module})"
 elif [[ "${chromium_ready}" != "1" ]]; then
   runtime_blocked "Chromium is unavailable"
 else
@@ -198,118 +186,6 @@ else
     env WOA_PAGE_CONTROLLER_MODULE="${page_controller_module}" "${PYTHON}" \
     src/web_operation_agent/tests/run_all.py --module web_operation_agent.tests.transport.test_assistant_lifecycle \
     --only-browser --strict-skips
-fi
-
-# ---------------------------------------------------------------- live Odoo
-# The main application's gate is model-free on purpose: two scripted cases through the real
-# product turn, in real Chromium, against a real Odoo. A pass says the apparatus holds; it
-# says nothing about a model, which is what makes a failure here worth acting on.
-printf '\n\033[1m── live Odoo qualification ──\033[0m\n'
-odoo_vars=(WOA_ODOO_BASE_URL WOA_ODOO_API_KEY_FILE WOA_ODOO_STORAGE_STATE
-           WOA_ODOO_PAGE_CONTROLLER_MODULE)
-# Optional: with both set, the gate additionally requires the source treatment to be
-# non-empty, which is the check that catches a compiled map nothing consumes.
-odoo_source=()
-while IFS= read -r value; do odoo_source+=("${value}"); done < <(
-  "${PYTHON}" -c '
-import os, sys
-from pathlib import Path
-from web_operation_agent.modeling.client import load_env
-root = Path(sys.argv[1])
-configured = os.environ.get("WOA_MODEL_ENV", "").strip()
-loaded = load_env(Path(configured).expanduser() if configured else root / ".env")
-for name in sys.argv[2:]:
-    print(str(os.environ[name] if name in os.environ else loaded.get(name, "")).strip())
-' "${ROOT}" WOA_ODOO_SOURCE_ROOT WOA_ODOO_SOURCE_RELEASE
-)
-# The resettable fixture. Without it the gate still runs, but nothing stops it measuring
-# against a library some earlier run wrote to -- which is how G2 left a drifted baseline.
-odoo_fixture=()
-while IFS= read -r value; do odoo_fixture+=("${value}"); done < <(
-  "${PYTHON}" -c '
-import os, sys
-from pathlib import Path
-from web_operation_agent.modeling.client import load_env
-root = Path(sys.argv[1])
-configured = os.environ.get("WOA_MODEL_ENV", "").strip()
-loaded = load_env(Path(configured).expanduser() if configured else root / ".env")
-for name in sys.argv[2:]:
-    print(str(os.environ[name] if name in os.environ else loaded.get(name, "")).strip())
-' "${ROOT}" WOA_ODOO_FIXTURE_CONTAINER WOA_ODOO_FIXTURE_DATABASE \
-    WOA_ODOO_FIXTURE_SNAPSHOT WOA_ODOO_FIXTURE_RECORD
-)
-odoo_values=()
-while IFS= read -r value; do odoo_values+=("${value}"); done < <(
-  "${PYTHON}" -c '
-import os, sys
-from pathlib import Path
-from web_operation_agent.modeling.client import load_env
-root = Path(sys.argv[1])
-configured = os.environ.get("WOA_MODEL_ENV", "").strip()
-loaded = load_env(Path(configured).expanduser() if configured else root / ".env")
-for name in sys.argv[2:]:
-    print(str(os.environ[name] if name in os.environ else loaded.get(name, "")).strip())
-' "${ROOT}" "${odoo_vars[@]}"
-)
-odoo_missing=()
-for ((index=0; index<${#odoo_vars[@]}; index++)); do
-  [[ -z "${odoo_values[${index}]:-}" ]] && odoo_missing+=("${odoo_vars[${index}]}")
-done
-if (( ${#odoo_missing[@]} )); then
-  echo "BLOCKED: no live Odoo environment here."
-  printf '  unset: %s\n' "${odoo_missing[*]}"
-  echo "  This gate did not run. It is not a product failure and not a pass."
-  record "live Odoo qualification" BLOCKED "unset: ${odoo_missing[*]}"
-  if [[ "${require_live}" == "1" ]]; then failed+=("live Odoo qualification"); fi
-elif [[ "${chromium_ready}" != "1" ]]; then
-  record "live Odoo qualification" BLOCKED "Chromium is unavailable"
-  if [[ "${require_live}" == "1" ]]; then failed+=("live Odoo qualification"); fi
-else
-  echo "READY: every prerequisite is present; running the live qualification."
-  odoo_out="$(mktemp -d)"
-  odoo_source_args=()
-  if [[ -n "${odoo_source[0]:-}" && -n "${odoo_source[1]:-}" ]]; then
-    odoo_source_args=(--source-root "${odoo_source[0]}"
-                      --source-release "${odoo_source[1]}")
-  fi
-  odoo_fixture_args=()
-  if [[ -n "${odoo_fixture[0]:-}" && -n "${odoo_fixture[1]:-}" \
-        && -n "${odoo_fixture[2]:-}" && -n "${odoo_fixture[3]:-}" ]]; then
-    odoo_fixture_args=(--fixture-container "${odoo_fixture[0]}"
-                       --fixture-database "${odoo_fixture[1]}"
-                       --fixture-snapshot "${odoo_fixture[2]}"
-                       --fixture-record "${odoo_fixture[3]}")
-  else
-    echo "  note: no resettable fixture configured; this run cannot tell a clean library"
-    echo "        from one an earlier run wrote to."
-  fi
-  if "${PYTHON}" -m web_operation_agent_odoo.demo.qualify \
-      --base-url "${odoo_values[0]}" --api-key "${odoo_values[1]}" \
-      --storage-state "${odoo_values[2]}" \
-      --page-controller-module "${odoo_values[3]}" \
-      "${odoo_source_args[@]}" "${odoo_fixture_args[@]}" \
-      --output "${odoo_out}/odoo-live.json"; then
-    record "live Odoo qualification" PASS "artifact ${odoo_out}/odoo-live.json"
-  else
-    record "live Odoo qualification" FAIL "see ${odoo_out}"
-    failed+=("live Odoo qualification")
-  fi
-  odoo_form_tls_args=()
-  if [[ "${WOA_ODOO_FORM_IGNORE_BROWSER_HTTPS_ERRORS:-0}" == "1" ]]; then
-    odoo_form_tls_args=(--ignore-browser-https-errors)
-  fi
-  if "${PYTHON}" -m web_operation_agent_odoo.demo.form_qualify \
-      --base-url "${odoo_values[0]}" --api-key "${odoo_values[1]}" \
-      --storage-state "${odoo_values[2]}" \
-      --page-controller-module "${odoo_values[3]}" \
-      "${odoo_form_tls_args[@]}" \
-      --output "${odoo_out}/odoo-form-live.json"; then
-    record "live Odoo form qualification" PASS \
-      "artifact ${odoo_out}/odoo-form-live.json"
-  else
-    record "live Odoo form qualification" FAIL "see ${odoo_out}"
-    failed+=("live Odoo form qualification")
-  fi
 fi
 
 # ---------------------------------------------------------------- summary
