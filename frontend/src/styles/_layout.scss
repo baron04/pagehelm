@@ -1,0 +1,465 @@
+/* ─────────────────────────────────────────────── launcher */
+.woa-launcher {
+  /* Placed and sized from presentation.json. */
+  position: absolute;
+  pointer-events: auto;
+  border-radius: 50%;
+  padding: 0;
+  animation: woa-pop-in var(--woa-motion-fast) var(--woa-motion-easing);
+}
+/* Both halves of the swap announce themselves; neither blinks into place. What leaves
+   does so at once -- the collapse is the person's own action and wants no ceremony. */
+@keyframes woa-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+}
+
+/* The portrait is the identity; a quiet edge and shallow shadow lift it off the page. */
+.woa-launcher__disc {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--woa-accent-soft);
+  box-shadow: var(--woa-shadow-launcher);
+}
+.woa-launcher__disc img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* This portrait already fills its square. Preserve the headband and side earcups
+     inside the circular mask instead of enlarging the face a second time. */
+}
+/* The idle launcher echoes the welcome portrait's fine ring. It sits outside the image,
+   preserving every pixel of the headband, and gives way to the state ring while working. */
+.woa-launcher[data-state="idle"]::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  padding: 2px;
+  background: linear-gradient(135deg, var(--woa-face-ring), var(--woa-face-ring-mid), var(--woa-face-ring-end));
+  -webkit-mask: linear-gradient(black 0 0) content-box, linear-gradient(black 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(black 0 0) content-box, linear-gradient(black 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* Working, the disc breathes -- slowly, so it reads as busy rather than as calling out. */
+.woa-launcher[data-state="working"] .woa-launcher__disc {
+  animation: woa-launcher-breathe 4s ease-in-out infinite;
+}
+@keyframes woa-launcher-breathe {
+  50% {
+    transform: scale(1.04);
+  }
+}
+.woa-launcher[data-state="closed"] .woa-launcher__disc {
+  opacity: 0.6;
+}
+
+.woa-launcher__ring {
+  position: absolute;
+  inset: -3px;
+  pointer-events: none;
+}
+.woa-launcher[data-state="idle"] .woa-launcher__ring {
+  display: none;
+}
+.woa-launcher__ring svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.woa-launcher__nub {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--woa-radius-pill);
+  background: var(--woa-accent);
+  color: var(--woa-accent-ink);
+  font-size: var(--woa-font-size-micro);
+  font-weight: 600;
+  box-shadow: 0 0 0 2px var(--woa-bg);
+}
+.woa-launcher__nub[data-await="true"] {
+  background: var(--woa-warning);
+  color: var(--woa-warning-ink);
+}
+
+/* ─────────────────────────────────────────────── window */
+.woa-window {
+  position: absolute;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 320px;
+  min-height: 360px;
+  border-radius: var(--woa-radius-window);
+  background: var(--woa-bg);
+  overflow: hidden;
+  /* A hairline ring, a contact shadow and a wide soft drop: the window reads as lifted off
+     the page by light, not outlined by a border. */
+  box-shadow: var(--woa-shadow-window);
+  /* The window grows from the corner the launcher stands in, so opening reads as the
+     disc unfolding rather than an unrelated box arriving. */
+  transform-origin: bottom right;
+  animation: woa-window-in var(--woa-motion-base) var(--woa-motion-easing);
+}
+.woa-window[data-welcome] {
+  background: radial-gradient(120% 60% at 0% 0%, var(--woa-canvas-glow) 0%, transparent 60%),
+    radial-gradient(100% 50% at 100% 25%, var(--woa-canvas-glow-alt) 0%, transparent 55%), var(--woa-canvas-bg);
+}
+@keyframes woa-window-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+}
+/* A docked window grows out of the launcher it replaces, from the corner they share. */
+.woa-window[data-docked] {
+  transform-origin: bottom right;
+  animation-name: woa-window-from-launcher;
+}
+@keyframes woa-window-from-launcher {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}
+/* A drawer is the full height of the viewport at its right edge. It slides in from that
+   edge; the page beside it is narrowed at once rather than animated, since a page that
+   re-lays itself out every frame would be the slow part. */
+.woa-window[data-mode="drawer"] {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  height: auto;
+  min-height: 0;
+  border-radius: var(--woa-radius-flush);
+  box-shadow: var(--woa-shadow-drawer);
+  animation-name: woa-drawer-in;
+}
+@keyframes woa-drawer-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+}
+.woa-window[data-mode="drawer"] .woa-titlebar {
+  cursor: default;
+}
+.woa-window[data-mode="drawer"] .woa-handle[data-handle="w"] {
+  top: 0;
+  bottom: 0;
+}
+.woa-window[data-dragging="w"] {
+  transition: none;
+}
+/* On a phone the window is the screen. It settles into place without ever overhanging the
+   screen's edge, keeps clear of the notch and the home indicator, and neither moves nor
+   resizes. */
+.woa-window[data-mode="full"] {
+  inset: 0;
+  min-width: 0;
+  min-height: 0;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  border-radius: var(--woa-radius-flush);
+  box-shadow: none;
+  animation-name: woa-full-in;
+}
+@keyframes woa-full-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+.woa-window[data-mode="full"] .woa-titlebar {
+  cursor: default;
+}
+/* The end of the conversation is not a cue to scroll the page hidden under it. */
+.woa-window[data-mode="full"] .woa-thread {
+  overscroll-behavior: contain;
+}
+/* A phone enlarges the page around a text box set smaller than 16px when it takes focus,
+   and does not give the size back. */
+.woa-window[data-mode="full"] .woa-field textarea {
+  font-size: var(--woa-font-size-field-touch);
+}
+.woa-window[data-dragging] {
+  user-select: none;
+}
+
+/* Resize affordances: a 6px hot zone on each edge, larger at the corners. */
+.woa-handle {
+  position: absolute;
+  z-index: 2;
+}
+.woa-handle[data-handle="n"] {
+  top: 0;
+  left: 12px;
+  right: 12px;
+  height: 6px;
+  cursor: ns-resize;
+}
+.woa-handle[data-handle="s"] {
+  bottom: 0;
+  left: 12px;
+  right: 12px;
+  height: 6px;
+  cursor: ns-resize;
+}
+.woa-handle[data-handle="w"] {
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 6px;
+  cursor: ew-resize;
+}
+.woa-handle[data-handle="e"] {
+  right: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 6px;
+  cursor: ew-resize;
+}
+.woa-handle[data-handle="nw"] {
+  top: 0;
+  left: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+}
+.woa-handle[data-handle="se"] {
+  bottom: 0;
+  right: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+}
+.woa-handle[data-handle="ne"] {
+  top: 0;
+  right: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nesw-resize;
+}
+.woa-handle[data-handle="sw"] {
+  bottom: 0;
+  left: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nesw-resize;
+}
+
+/* The affordance is a hint, not a control: short, pale, and well inside the corner
+   radius, because the window clips to it and a mark sitting on the curve reads as a
+   rendering fault rather than a handle. */
+.woa-handle::after {
+  content: "";
+  position: absolute;
+  opacity: 0;
+  background: var(--woa-line-strong);
+  transition: opacity var(--woa-motion-fast) var(--woa-motion-easing);
+}
+.woa-handle:hover::after {
+  opacity: 1;
+}
+.woa-handle[data-handle="n"]::after,
+.woa-handle[data-handle="s"]::after {
+  left: 50%;
+  transform: translateX(-50%);
+  width: 60px;
+  height: 3px;
+  border-radius: var(--woa-radius-pill);
+}
+.woa-handle[data-handle="n"]::after {
+  top: 2px;
+}
+.woa-handle[data-handle="s"]::after {
+  bottom: 2px;
+}
+.woa-handle[data-handle="w"]::after,
+.woa-handle[data-handle="e"]::after {
+  top: 50%;
+  transform: translateY(-50%);
+  height: 60px;
+  width: 3px;
+  border-radius: var(--woa-radius-pill);
+}
+.woa-handle[data-handle="w"]::after {
+  left: 2px;
+}
+.woa-handle[data-handle="e"]::after {
+  right: 2px;
+}
+.woa-handle[data-handle^="n"]:not([data-handle="n"])::after,
+.woa-handle[data-handle^="s"]:not([data-handle="s"])::after {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--woa-line-strong);
+}
+.woa-handle[data-handle="nw"]::after {
+  top: 6px;
+  left: 6px;
+}
+.woa-handle[data-handle="ne"]::after {
+  top: 6px;
+  right: 6px;
+}
+.woa-handle[data-handle="sw"]::after {
+  bottom: 6px;
+  left: 6px;
+}
+.woa-handle[data-handle="se"]::after {
+  bottom: 6px;
+  right: 6px;
+}
+
+/* ─────────────────────────────────────────────── title bar */
+/* The bar is part of the window's own surface: no fill of its own and no rule under it.
+   The rule appears only once the conversation has scrolled beneath it (.woa-thread-shell). */
+.woa-titlebar {
+  position: relative;
+  flex: none;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px 0 14px;
+  cursor: grab;
+  background: var(--woa-bg);
+}
+.woa-window[data-dragging="move"] .woa-titlebar {
+  cursor: grabbing;
+}
+/* A new conversation has no face or name in the bar, so its controls sit at the right edge
+   on their own -- where the brand's `margin-right: auto` would otherwise put them. */
+.woa-titlebar[data-welcome] {
+  justify-content: flex-end;
+}
+.woa-titlebar[data-welcome] {
+  background: transparent;
+  height: 56px;
+  padding-right: 24px;
+}
+
+.woa-brand {
+  display: flex;
+  align-items: center;
+  margin-right: auto;
+}
+.woa-brand__face {
+  width: 30px;
+  height: 30px;
+  margin-right: 8px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--woa-accent-soft);
+  box-shadow: 0 0 0 1px var(--woa-line);
+}
+
+.woa-brand__word {
+  font-size: var(--woa-font-size-title);
+  font-weight: 600;
+  color: var(--woa-ink);
+  user-select: none;
+}
+
+.woa-readonly-badge {
+  margin-right: auto;
+  padding: 2px 8px;
+  border-radius: var(--woa-radius-pill);
+  border: var(--woa-border-width) solid var(--woa-line);
+  background: var(--woa-surface-muted);
+  color: var(--woa-ink-muted);
+  font-size: var(--woa-font-size-meta);
+  line-height: 1.4;
+  user-select: none;
+}
+.woa-brand + .woa-readonly-badge {
+  margin-left: -6px;
+}
+.woa-brand:has(+ .woa-readonly-badge) {
+  margin-right: 12px;
+}
+
+.woa-icon-button {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--woa-radius-control);
+  color: var(--woa-ink-faint);
+  flex: none;
+}
+.woa-icon-button:hover,
+.woa-icon-button:focus-visible {
+  background: var(--woa-control-hover);
+  color: var(--woa-ink);
+}
+.woa-icon-button {
+  transition: background var(--woa-motion-fast) var(--woa-motion-easing),
+    transform var(--woa-motion-fast) var(--woa-motion-easing);
+}
+.woa-icon-button:active {
+  transform: scale(0.94);
+}
+.woa-titlebar .woa-icon-button {
+  color: var(--woa-ink-muted);
+}
+.woa-titlebar .woa-icon-button:hover,
+.woa-titlebar .woa-icon-button:focus-visible {
+  background: var(--woa-control-hover);
+  color: var(--woa-ink);
+}
+
+/* A control that is only a glyph says what it does when pointed at or reached by keyboard.
+   Drawn here rather than by `title`: the browser's own tip waits a second and looks like no
+   part of the panel. It hangs centred below the control; the corner's cross carries none, so
+   the nearest tip to the window's edge still has room on both sides. */
+.woa-icon-button[data-tip] {
+  position: relative;
+}
+.woa-icon-button[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  z-index: 4;
+  padding: 3px 8px;
+  border-radius: var(--woa-radius-control);
+  background: var(--woa-ink);
+  color: var(--woa-bg);
+  font-size: var(--woa-font-size-meta);
+  line-height: var(--woa-line-height);
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, -2px);
+  transition: opacity var(--woa-motion-fast) var(--woa-motion-easing),
+    transform var(--woa-motion-fast) var(--woa-motion-easing);
+}
+.woa-icon-button[data-tip]:hover::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  transition-delay: 350ms;
+}
+.woa-icon-button[data-tip]:focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}

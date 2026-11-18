@@ -1,0 +1,423 @@
+/* ─────────────────────────────────────────────── outcome cards */
+/* The two endings a person has to act on share the confirmation card's shell: a hairline,
+   the raised surface, and the meaning carried by the icon's tinted disc, not by a wash of
+   colour over the whole card. */
+.woa-outcome {
+  border-radius: var(--woa-radius-card);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--woa-surface-raised);
+  border: 1px solid var(--woa-line);
+}
+.woa-answer-targets {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 16px 0 4px;
+  padding-left: 10px;
+  border-left: 2px solid var(--woa-line);
+  font-size: var(--woa-font-size-small);
+}
+.woa-answer-targets > span {
+  color: var(--woa-ink-muted);
+  font-size: var(--woa-font-size-meta);
+}
+.woa-answer-targets ul {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.woa-answer-targets a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 6px;
+  margin-left: -6px;
+  border-radius: var(--woa-radius-inline);
+  color: var(--woa-accent);
+  text-decoration: none;
+  transition: background var(--woa-motion-fast) var(--woa-motion-easing);
+}
+.woa-answer-targets a > span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.woa-answer-targets a > svg {
+  flex: none;
+  color: var(--woa-ink-muted);
+}
+.woa-answer-targets a:hover {
+  background: var(--woa-accent-soft);
+}
+.woa-answer-targets a:hover > span {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.woa-outcome h3 {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--woa-font-size);
+  font-weight: 600;
+}
+.woa-outcome h3 > svg {
+  flex: none;
+  box-sizing: content-box;
+  padding: 5px;
+  border-radius: 50%;
+}
+.woa-outcome > .woa-md {
+  margin: 0;
+  color: var(--woa-ink-muted);
+  font-size: var(--woa-font-size-small);
+  line-height: var(--woa-line-height);
+}
+.woa-outcome[data-kind="indeterminate"] h3 > svg {
+  color: var(--woa-warning);
+  background: var(--woa-warning-soft);
+}
+.woa-outcome[data-kind="refused"] h3 > svg {
+  color: var(--woa-danger);
+  background: var(--woa-danger-soft);
+}
+.woa-outcome__reconcile {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--woa-radius-control);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--woa-font-size-meta);
+  line-height: var(--woa-line-height);
+  background: var(--woa-surface-muted);
+  color: var(--woa-ink);
+}
+.woa-outcome__reconcile > svg {
+  flex: none;
+}
+.woa-outcome__reconcile[data-outcome="completed"] {
+  background: var(--woa-success-soft);
+  color: var(--woa-success);
+}
+.woa-outcome__reconcile[data-outcome="unknown"] {
+  background: var(--woa-warning-soft);
+  color: var(--woa-warning);
+}
+.woa-outcome__reconcile-msg {
+  flex-basis: 100%;
+  color: var(--woa-ink-muted);
+}
+.woa-outcome__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.woa-outcome__reconcile-btn {
+  height: 30px;
+  padding: 0 12px;
+  font-size: var(--woa-font-size-meta);
+}
+
+/* ─────────────────────────────────────────────── approval */
+/* A confirmation is the one moment a write can happen, so it keeps a frame nothing in an
+   answer can draw -- but a small one: a header line, what will happen, to what, and two
+   answers at its foot. In the conversation, as the last thing in the one box that scrolls,
+   so what led to it stays readable above it. */
+.woa-approval {
+  position: relative;
+  margin: 4px 0;
+  border-radius: var(--woa-radius-card);
+  background: var(--woa-surface-raised);
+  /* A real border, not an inset shadow: an inset shadow is painted beneath the card's
+     children, so the answers pinned to its foot covered the edge beside and below them. */
+  border: 1px solid var(--woa-line-strong);
+  box-shadow: var(--woa-shadow-1);
+  overflow: hidden;
+  animation: woa-rise var(--woa-motion-base) var(--woa-motion-easing);
+}
+@keyframes woa-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.woa-approval__inner {
+  padding: 12px 14px;
+}
+.woa-approval__details {
+  margin: 10px 0 0;
+  padding: 0;
+}
+.woa-approval__detail {
+  display: grid;
+  grid-template-columns: 6.5em minmax(0, 1fr);
+  column-gap: 12px;
+  align-items: baseline;
+  padding: 6px 0;
+  font-size: var(--woa-font-size-small);
+  line-height: var(--woa-line-height);
+}
+.woa-approval__detail + .woa-approval__detail:not([data-kind="side_effect"]) {
+  border-top: 1px solid var(--woa-line);
+}
+.woa-approval__detail[data-kind="side_effect"] + .woa-approval__detail:not([data-kind="side_effect"]) {
+  border-top: 0;
+  margin-top: 4px;
+}
+.woa-approval__detail-label {
+  font-size: var(--woa-font-size-meta);
+  font-weight: 500;
+  color: var(--woa-ink-muted);
+  overflow-wrap: anywhere;
+}
+.woa-approval__detail-label strong {
+  font: inherit;
+}
+.woa-approval__detail-value {
+  margin: 0;
+  min-width: 0;
+  color: var(--woa-ink);
+}
+.woa-approval__detail-value pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+.woa-approval__detail[data-kind="change"] .woa-approval__detail-value {
+  font-weight: 500;
+}
+.woa-approval__detail[data-kind="side_effect"] {
+  margin: 4px -8px 0;
+  padding: 7px 8px;
+  border-radius: var(--woa-radius-control);
+  background: var(--woa-warning-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--woa-warning) 24%, transparent);
+}
+.woa-approval__detail[data-kind="side_effect"] .woa-approval__detail-label {
+  color: var(--woa-warning);
+  font-weight: 600;
+}
+.woa-approval__detail[data-layout="block"] {
+  display: block;
+}
+.woa-approval__detail[data-layout="block"] .woa-approval__detail-label {
+  display: block;
+  margin-bottom: 4px;
+}
+.woa-approval__detail[data-layout="block"]:not([data-kind="side_effect"]) .woa-approval__detail-value pre {
+  padding: 6px 10px;
+  border-radius: var(--woa-radius-control);
+  background: var(--woa-surface-muted);
+  box-shadow: inset 0 0 0 1px var(--woa-line);
+  font-size: var(--woa-font-size-meta);
+  line-height: var(--woa-line-height-code);
+}
+
+/* The header is a caption, not a headline: the effect below it is what is being asked. */
+.woa-approval h2 {
+  margin: 0 0 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--woa-font-size-meta);
+  font-weight: 500;
+  line-height: var(--woa-line-height);
+  color: var(--woa-warning);
+}
+.woa-approval h2 > svg {
+  flex: none;
+}
+.woa-approval__time {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 400;
+  color: var(--woa-ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.woa-approval__time[data-urgent] {
+  color: var(--woa-warning);
+}
+
+.woa-approval__effect {
+  margin: 0;
+  font-size: var(--woa-font-size);
+  font-weight: 600;
+  line-height: var(--woa-line-height);
+  overflow-wrap: anywhere;
+}
+/* Record identifiers, not prose: a monospaced block is harder to pass a sentence off as. */
+.woa-approval__targets {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border-radius: var(--woa-radius-control);
+  background: var(--woa-surface-muted);
+  /* The dark theme's muted surface is within a shade of the card's; the hairline keeps the
+     record a block of its own in both. */
+  box-shadow: inset 0 0 0 1px var(--woa-line);
+}
+.woa-approval__targets:empty {
+  display: none;
+}
+.woa-approval__targets li {
+  font-family: var(--woa-mono-stack);
+  font-size: var(--woa-font-size-meta);
+  line-height: var(--woa-line-height-code);
+  letter-spacing: -0.01em;
+  color: var(--woa-ink-muted);
+  overflow-wrap: anywhere;
+}
+.woa-approval__fine {
+  margin: 8px 0 0;
+  font-size: var(--woa-font-size-meta);
+  line-height: var(--woa-line-height);
+  color: var(--woa-ink-faint);
+}
+/* Read to a screen reader, not shown: it restates what the two buttons already mean. */
+.woa-approval__fine[data-quiet] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.woa-approval__blocked {
+  margin: 8px 0 0;
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  font-size: var(--woa-font-size-meta);
+  line-height: var(--woa-line-height);
+  color: var(--woa-warning);
+}
+.woa-approval__blocked svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.woa-approval__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  /* When the card is taller than the window can show -- a narrow or zoomed one -- the two
+     answers stay pinned at its foot. Focusing the first one then has nothing to scroll to,
+     so the header and the time left are not pushed out of view to reach it. */
+  position: sticky;
+  bottom: 0;
+  margin: 10px -14px -12px;
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--woa-line);
+  background: var(--woa-surface-raised);
+}
+.woa-approval__actions .woa-btn {
+  height: 32px;
+  padding: 0 14px;
+}
+.woa-approval__spacer {
+  display: none;
+}
+
+.woa-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: var(--woa-radius-control);
+  font-weight: 500;
+  font-size: var(--woa-font-size-small);
+  white-space: nowrap;
+  transition: background var(--woa-motion-fast) var(--woa-motion-easing),
+    transform var(--woa-motion-fast) var(--woa-motion-easing);
+}
+.woa-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+.woa-btn--primary {
+  background: var(--woa-accent);
+  color: var(--woa-accent-ink);
+}
+.woa-btn--primary:hover:not(:disabled) {
+  background: var(--woa-accent-hover);
+}
+/* A hairline as well as the fill: in the dark theme the muted fill is within a shade of the
+   card it sits on, and the button read as loose text. */
+.woa-btn--ghost {
+  background: var(--woa-surface-muted);
+  box-shadow: inset 0 0 0 1px var(--woa-line);
+  color: var(--woa-ink);
+}
+.woa-btn--ghost:hover:not(:disabled) {
+  background: var(--woa-line);
+}
+.woa-btn:disabled {
+  opacity: 0.42;
+}
+
+/* ─────────────────────────────────────────────── inline error */
+/* "Can I keep going?" is answered right above the composer, on a small raised card rather
+   than a band across the window: it belongs to the conversation, not to the frame. */
+.woa-inline-error {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 14px 6px;
+  padding: 10px 12px;
+  border-radius: var(--woa-radius-card);
+  font-size: var(--woa-font-size-small);
+  line-height: var(--woa-line-height);
+  color: var(--woa-ink-muted);
+  background: var(--woa-surface-raised);
+  border: 1px solid var(--woa-line);
+  box-shadow: var(--woa-shadow-2);
+  animation: woa-arrive var(--woa-motion-base) var(--woa-motion-easing);
+}
+.woa-inline-error > svg {
+  flex: none;
+  color: var(--woa-warning);
+}
+.woa-inline-error[data-terminal] > svg {
+  color: var(--woa-danger);
+}
+.woa-inline-error__text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.woa-inline-error__retry {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--woa-radius-pill);
+  background: var(--woa-surface-muted);
+  color: var(--woa-ink);
+  font-weight: 500;
+  transition: background var(--woa-motion-fast) var(--woa-motion-easing);
+}
+.woa-inline-error__retry:hover {
+  background: var(--woa-line);
+}
