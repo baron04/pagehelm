@@ -6,6 +6,8 @@ A model finish does not certify that it covered the person's complete request.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 import json
 import re
 import hashlib
@@ -15,15 +17,21 @@ from urllib.parse import urlsplit
 from ..business.errors import (BusinessToolRequestError, BusinessToolPermissionError,
                                BusinessToolAuthenticationError, BusinessToolUnavailableError)
 from ..state.identity import PrincipalError
+from ..state.conversation import ConversationState
+from ..state.ledger import SessionLedger
 from ..business.tools.registry import validate_input
-from ..goal.executor import GoalTurnExecutor
+from ..composition.binding import BoundApplication
 from ..goal.skill_writes import SkillWrites
 from ..business.convention_writes import normalize_changes_argument
 from ..goal.ports import capabilities_of
 from ..goal.data import DataRefused
+from ..modeling.chat import require_chat_port
+from ..modeling.spend import BudgetExhausted
 from ..privacy import SessionHandoffPolicy
 from ..transport.panel_view import describe_step, step_facts
 from ..modeling.egress import AuditedChat
+from .events import observed_turn
+from .harness import ModelTurnState, TurnHarness
 from .receipt import MeasuredChat
 from .turn_trace import TurnTrace
 from .model_loop_contracts import DeliveryFeedback, ModelLoopProfile, PageProcedureContext
@@ -31,7 +39,7 @@ import time
 from pathlib import Path
 from ..modeling.provider import ProviderError
 from ..schemas import ActionReceipt, PageObservation
-from .model_loop_contracts import LoopToolResult, VerificationResult, PageActionOutcome
+from .model_loop_contracts import LoopToolResult, PageActionOutcome
 from .navigation import BoundAnswerTarget, answer_targets_for
 from .action_admission import (ADMITTED_ACTIONS, ActionAdmission,
                                ActionIntent, ActionPermit, ActionAdmissionRefused, ActionResultPending)
@@ -40,8 +48,8 @@ from .model_sources import TurnSources, SOURCE_TOOLS, SOURCE_NAMES, SOURCE_INSTR
 from .native_submit import NativeSubmitMixin, REQUEST_SUBMIT_TOOL
 from .value_source import note_candidates
 from .draft_handoff import unrestorable_form
-from ..transport.browser import TransportError
-from .product import page_observation_failure
+from ..transport.browser import TransportError, TurnCancelled
+from .product import AgentTurnError, AgentTurnErrorCode, AgentTurnExecution, page_observation_failure
 from ..answer.answering import render_structured_query_answer
 from .read_summary import SummaryResult, render_summary
 from . import answer_check, loop_guard
@@ -139,7 +147,7 @@ class _ProcedurePage:
         return self.execute("handoff_form", {"fields": fields, "submit": submit})
 
 
-class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
+class ModelDrivenTurnExecutor(NativeSubmitMixin):
     """The common decision strategy; adapters retain their application procedures."""
 
     decision_strategy = "model-driven"
@@ -172,17 +180,184 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
     def permits_offline_start(self):
         return self.config.source.runtime_source
 
-    def __init__(self, *, profile: ModelLoopProfile, model_steps=24, verify=True,
-                 skill_knowledge=True, turn_traces=False, **kwargs):
-        super().__init__(**kwargs)
+    def _ensure_harness(self) -> TurnHarness:
+        harness = getattr(self, "harness", None)
+        if harness is None:
+            harness = TurnHarness.detached()
+            self.harness = harness
+        if getattr(self, "channel", None) is not None and harness.channel is not self.channel:
+            harness.channel = self.channel
+        if getattr(self, "config", None) is not None and harness.config is not self.config:
+            harness.config = self.config
+        if getattr(self, "disabled_page_actions", None) is not None:
+            harness.disabled_page_actions = frozenset(self.disabled_page_actions)
+        return harness
+
+    @property
+    def _tool_receipts(self):
+        return self._ensure_harness().tool_receipts
+
+    @_tool_receipts.setter
+    def _tool_receipts(self, value):
+        self._ensure_harness().tool_receipts = value
+
+    @property
+    def _verified_action_commands(self):
+        return self._ensure_harness().verified_action_commands
+
+    @_verified_action_commands.setter
+    def _verified_action_commands(self, value):
+        self._ensure_harness().verified_action_commands = value
+
+    @property
+    def _admission(self):
+        return self._ensure_harness().admission
+
+    @_admission.setter
+    def _admission(self, value):
+        self._ensure_harness().admission = value
+
+    @property
+    def _draft_admission(self):
+        return self._ensure_harness().draft_admission
+
+    @_draft_admission.setter
+    def _draft_admission(self, value):
+        self._ensure_harness().draft_admission = value
+
+    @property
+    def _admission_turn(self):
+        return self._ensure_harness().admission_turn
+
+    @_admission_turn.setter
+    def _admission_turn(self, value):
+        self._ensure_harness().admission_turn = value
+
+    @property
+    def _held_handoff(self):
+        return self._ensure_harness().held_handoff
+
+    @_held_handoff.setter
+    def _held_handoff(self, value):
+        self._ensure_harness().held_handoff = value
+
+    @property
+    def _page_action_outcome(self):
+        return self._ensure_harness().page_action_outcome
+
+    @_page_action_outcome.setter
+    def _page_action_outcome(self, value):
+        self._ensure_harness().page_action_outcome = value
+
+    @property
+    def _uncertain_page_dispatch(self):
+        return self._ensure_harness().uncertain_page_dispatch
+
+    @_uncertain_page_dispatch.setter
+    def _uncertain_page_dispatch(self, value):
+        self._ensure_harness().uncertain_page_dispatch = value
+
+    def __init__(
+        self,
+        *,
+        channel,
+        config,
+        chat,
+        application: BoundApplication,
+        goal_port,
+        control,
+        run_id_factory,
+        profile: ModelLoopProfile,
+        model_steps=24,
+        verify=True,
+        skill_knowledge=True,
+        turn_traces=False,
+        ledger_factory=SessionLedger,
+        conversation_state: ConversationState | None = None,
+        disabled_page_actions: frozenset[str] = frozenset(),
+        turn_events=None,
+        **_compat_kwargs,
+    ):
         if not isinstance(profile, ModelLoopProfile):
             raise TypeError("model-driven turns require an application profile")
         if type(model_steps) is not int or not 2 <= model_steps <= 64:
             raise ValueError("model_steps must be between 2 and 64")
+        self.channel = channel
+        self.config = config
+        self.chat = require_chat_port(chat, role="executor chat")
+        self.application = application
+        self.goal_port = goal_port
+        self.control = control
+        self.run_id_factory = run_id_factory
+        self.ledger_factory = ledger_factory
+        self.conversation_state = conversation_state or ConversationState()
+        self.disabled_page_actions = frozenset(disabled_page_actions)
+        self.turn_events = turn_events
+        self.harness = TurnHarness(
+            channel=channel,
+            config=config,
+            chat=self.chat,
+            application=application,
+            control=control,
+            run_id_factory=run_id_factory,
+            ledger_factory=ledger_factory,
+            conversation_state=self.conversation_state,
+            disabled_page_actions=self.disabled_page_actions,
+            turn_events=turn_events,
+            permits_offline_start=self.permits_offline_start,
+        )
         self.profile, self.model_steps, self.verify = profile, model_steps, bool(verify)
         self.skill_knowledge, self.turn_traces = bool(skill_knowledge), bool(turn_traces)
         self._trace, self._trace_steps = None, []
         self._messages, self._earlier_words, self._carried_skills = [], [], ()
+
+    @observed_turn
+    def execute(self, message: dict) -> AgentTurnExecution:
+        """Execute one already-dequeued wire turn via composed `TurnHarness`."""
+        harness = self._ensure_harness()
+        harness.permits_offline_start = self.permits_offline_start
+        state, current = harness.bind_turn(message)
+        try:
+            text = self._run(state)
+            if state.skill_limit:
+                text = state.skill_limit.strip() + ("\n\n" + text if text else "")
+        except TurnCancelled:
+            state.terminal_reason = "user_cancelled"
+            harness.set_stop_reason(state, "user_cancelled", trace=self._trace)
+            text = "操作已停止。" if state.chinese else "The task was stopped."
+        except BudgetExhausted as exc:
+            reason = (
+                exc.kind
+                if exc.kind in {"token_budget", "wall_budget", "step_budget"}
+                else "batch_cost_stop"
+            )
+            state.terminal_reason = reason
+            state.detail = str(exc)[:200]
+            harness.set_stop_reason(state, reason, trace=self._trace)
+            text = (
+                "本次任务已达到模型使用限额，未继续执行。"
+                if state.chinese
+                else "The model budget was reached; the task did not continue."
+            )
+        except AgentTurnError:
+            raise
+        except Exception as exc:
+            state.ledger.append("turn_execution_failed", error_type=type(exc).__name__)
+            state.writes.end_control()
+            raise AgentTurnError(
+                AgentTurnErrorCode.EXECUTION_FAILED,
+                "the model turn failed before it produced a terminal result",
+                retryable=False,
+                run_id=state.run_id,
+            ) from exc
+        finally:
+            state.model_stop.set()
+            for future in state.model_futures:
+                try:
+                    future.result(timeout=max(1.0, state.budget.remaining()))
+                except Exception:
+                    pass
+        return self._settle(state, current, text)
 
     def _procedure_context(self, s, name, *, page_actions=True, operation_context=None,
                            turn=None):
@@ -316,20 +491,18 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                 carried.append(self._skill_text(s, writes, writes.load(skill_id, step=s.step)))
             except ValueError:
                 pass
-        turn = {"reads": [], "marked": "", "trace": [], "touched": [],
-                "done": set(), "stalled": 0, "writes": writes, "written": [], "corrections": 0,
-                "final": "", "skills": set(), "observation_cache": None,
-                "sources": sources, "prepared": s.obs is not None, "runtime_used": False,
-                "issued_targets": [], "read_sequence": 0,
-                # Without business writes nothing a turn does can change the application:
-                # program checks there help the answer and never end the turn.
-                "read_only": not s.approvals.mutations_enabled}
-        self._trace_steps = turn["trace"]
+        turn = ModelTurnState(
+            writes=writes,
+            sources=sources,
+            prepared=s.obs is not None,
+            read_only=not s.approvals.mutations_enabled,
+        )
+        self._trace_steps = turn.trace
         prompt = s.message.text
         starting_page = self._page(s, turn)
         # The initial observation reaches the model in the user message rather
         # than a tool result. It is still a source the closing value check saw.
-        turn["tool_texts"] = [found, starting_page] if s.obs is not None else []
+        turn.tool_texts = [found, starting_page] if s.obs is not None else []
         self._messages.append({"role": "user", "_user_text": prompt, "_observation": True,
             "content": prompt + ("\n" + found if found else "")
             + ("\n上一轮用到的 Skill（已加载）：\n" + "\n\n".join(carried) if carried else "")
@@ -337,27 +510,19 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
         try:
             return self._loop(s, prompt, turn, verified=not self.verify)
         finally:
-            self._carried_skills = tuple(sorted(turn["skills"]))
+            self._carried_skills = tuple(sorted(turn.skills))
 
     def _settle(self, s, current, text):
-        execution = super()._settle(s, current, text)
         trace, self._trace = self._trace, None
-        if trace is not None:
-            principal = s.approvals.principal
-            identity = principal.audit_projection() if principal is not None else {}
-            try:
-                trace.write(run_id=s.run_id, turn_id=s.message.message_id, prompt=s.message.text,
-                            start_route=urlsplit(current.observation.url).path if current is not None else "",
-                            terminal_reason=execution.terminal_reason,
-                            wall_seconds=execution.agent.wall_seconds, answer=execution.user_answer,
-                            steps=self._trace_steps,
-                            actor={**{key: identity[key] for key in ("application_id", "tenant_digest", "actor_digest")
-                                      if key in identity},
-                                   **({"actor_authority_digest": principal.actor_authority_digest}
-                                      if principal is not None else {})})
-            except OSError as exc:
-                s.ledger.append("turn_trace_failed", error_type=type(exc).__name__)
-        return execution
+        return self._ensure_harness().settle(
+            s,
+            current,
+            text,
+            decision_strategy=self.decision_strategy,
+            verifies_finish=self.verifies_finish,
+            trace=trace,
+            trace_steps=self._trace_steps,
+        )
 
     def _note(self, s, **facts):
         text = describe_step(facts)
@@ -607,8 +772,13 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
         if admitted is not None and "ref" in command:
             command["epoch"] = admitted[1].observation.epoch
         with s.receipt.stage("action_dispatch"):
-            receipt = super()._dispatch(s, action, command, admitted=admitted is not None and action == "click",
-                                       **kwargs)
+            receipt = self._ensure_harness().dispatch_browser(
+                s,
+                action,
+                command,
+                admitted=admitted is not None and action == "click",
+                **kwargs,
+            )
         state, code, observations = "unavailable", s.terminal_reason or "action_unavailable", []
         if receipt is not None:
             if not hasattr(self, "_tool_receipts"):
@@ -787,20 +957,509 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
     def _program_summary(content):
         return loop_guard.program_summary(content)
 
+    def _route_kind_for(self, name: str, result: LoopToolResult | None = None) -> str:
+        """Application-neutral route category for ARC-08 telemetry."""
+        if name == "finish":
+            return "finish"
+        if name in SOURCE_NAMES:
+            return "source"
+        if result is not None and result.kind:
+            return result.kind
+        return self._procedure_kind(name) or "tool"
+
+    def _supports_concurrent_read(self, name: str, turn) -> bool:
+        """Return True when `name` can prepare pure reads across worker threads."""
+        if (name in SOURCE_NAMES
+                or name in {"finish", "request_submit", "load_skill", "read_skill_resource", "propose_operation"}):
+            return False
+        writes = turn.get("writes")
+        if writes is not None and any(d.name == name for d in writes.definitions()):
+            return False
+        procedures = getattr(getattr(self, "profile", None), "procedures", ())
+        procedure = next((p for p in procedures if p.schema["function"]["name"] == name), None)
+        if procedure is None or procedure.kind not in {"read", "metadata"}:
+            return False
+        return (
+            callable(getattr(procedure.handler, "prepare_read", None))
+            and callable(getattr(procedure.handler, "commit_read", None))
+        )
+
+    def _concurrent_read_prepare(self, s, name: str, args: dict, turn):
+        """Return a thread-safe pure-read prepare callable, or None to run sequentially."""
+        procedures = getattr(getattr(self, "profile", None), "procedures", ())
+        procedure = next((p for p in procedures if p.schema["function"]["name"] == name), None)
+        if procedure is None or procedure.kind not in {"read", "metadata"}:
+            return None
+        prepare_fn = getattr(procedure.handler, "prepare_read", None)
+        commit_fn = getattr(procedure.handler, "commit_read", None)
+        if not callable(prepare_fn) or not callable(commit_fn):
+            return None
+        schema = procedure.schema["function"]["parameters"]
+        try:
+            validate_input(schema, args)
+        except BusinessToolRequestError:
+            return None
+        context = self._procedure_context(s, name, page_actions=False, turn=turn)
+        required = procedure.required_capabilities | (
+            procedure.requirements(args, context.obs) if procedure.requirements else frozenset()
+        )
+        if not required <= capabilities_of(self.goal_port):
+            return None
+        context.page.checkpoint()
+        obs_snapshot = PageObservation.from_json(s.obs.to_json()) if s.obs is not None else None
+        op_context = context.operation
+        args_copy = json.loads(json.dumps(args, ensure_ascii=False))
+        return lambda: prepare_fn(args_copy, observation=obs_snapshot, operation=op_context)
+
+    def _concurrent_read_commit(self, s, name: str, args: dict, prepared, turn) -> LoopToolResult:
+        """Commit one prepared pure-read result sequentially on the main thread."""
+        procedures = getattr(getattr(self, "profile", None), "procedures", ())
+        procedure = next((p for p in procedures if p.schema["function"]["name"] == name), None)
+        if procedure is None:
+            return LoopToolResult("当前应用没有提供这个工具。", state="unavailable", error_code="tool_unavailable")
+        context = self._procedure_context(s, name, page_actions=False, turn=turn)
+        context.operation.require_live(
+            application_id=self.application.descriptor.application_id,
+            required_scope=procedure.scope,
+        )
+        context.page.checkpoint()
+        receipt_obj = getattr(s, "receipt", None)
+        stage_ctx = receipt_obj.stage("business") if receipt_obj is not None else nullcontext()
+        with stage_ctx:
+            result = procedure.handler.commit_read(prepared, args, context=context)
+        context.page.checkpoint()
+        found = turn.pop("prepared_knowledge", "")
+        if isinstance(result, LoopToolResult):
+            turn["touched"].extend(result.entered)
+            turn["trace"].extend(result.trace)
+            if result.read_summary:
+                turn["reads"].append(result.read_summary)
+            if result.marked:
+                turn["marked"] = result.marked
+            if found:
+                result = replace(result, feedback=found + "\n" + result.feedback)
+        return result
+
+    def _run_tool_safely(self, s, runner) -> LoopToolResult:
+        try:
+            result = runner()
+        except (PrincipalError, BusinessToolPermissionError, BusinessToolAuthenticationError):
+            s.terminal_reason = "permission_denied"
+            result = LoopToolResult("当前账号的身份或权限已失效。", state="refused",
+                                    error_code="permission_denied", terminal_reason="permission_denied")
+        except DataRefused as exc:
+            if exc.permission_denied:
+                result = LoopToolResult("当前账号没有读取这项数据的权限。", kind="read", state="refused",
+                                        error_code="permission_denied", terminal_reason="permission_denied")
+            else:
+                result = LoopToolResult("应用读取未能完成。", kind="read", state="unavailable",
+                                        error_code="application_unavailable")
+        except BusinessToolUnavailableError:
+            result = LoopToolResult("应用读取未能完成。", kind="read", state="unavailable",
+                                    error_code="application_unavailable")
+        except (ValueError, TypeError, BusinessToolRequestError):
+            result = LoopToolResult("工具参数有误，请核对工具的参数说明。", state="refused",
+                                    error_code="invalid_arguments")
+        if not isinstance(result, LoopToolResult):
+            raise TypeError("model loop tools must return LoopToolResult")
+        return result
+
+    def _apply_tool_result(
+        self,
+        s,
+        prompt: str,
+        turn,
+        call: dict,
+        name: str,
+        args: dict,
+        target,
+        failure_base,
+        call_key,
+        taken: int,
+        calls: list,
+        position: int,
+        result: LoopToolResult,
+        elapsed_s: float,
+        *,
+        before: str,
+        before_epoch,
+        finish,
+        changed_page: bool,
+        unwritten: bool,
+        unseen: str,
+        observation_delivered: bool,
+        read_observation_available: bool,
+    ):
+        harness = self._ensure_harness()
+        trace = getattr(self, "_trace", None)
+        if result.kind in {"read", "metadata"} and result.state == "completed":
+            turn["read_sequence"] = turn.get("read_sequence", 0) + 1
+            ref = f"read#{turn['read_sequence']}"
+            if result.answer_targets:
+                turn.setdefault("issued_targets", []).extend(
+                    BoundAnswerTarget(ref, item) for item in result.answer_targets)
+        if result.kind == "page":
+            # Dispatch is a transport fact, including earlier steps of a
+            # partially completed procedure; application prose cannot reset it.
+            dispatched = any(r.action not in {"observe", "wait_for", "form_model"}
+                             for r in self._tool_receipts)
+            result = replace(result, dispatch="acknowledged" if dispatched else
+                             "uncertain" if self._uncertain_page_dispatch else "not_dispatched")
+            if result.state != "completed" and result.error_code:
+                failures = turn.setdefault("page_failures", 0) + 1
+                turn["page_failures"] = failures
+                if failures >= 6 and "forced_summary_at" not in turn:
+                    turn["forced_summary_at"] = taken
+                    turn["forced_summary_kind"] = "page"
+                if failure_base is not None:
+                    counts = turn.setdefault("failure_counts", {})
+                    failure = failure_base, result.error_code
+                    counts[failure] = counts.get(failure, 0) + 1
+                    if counts[failure] >= 2:
+                        turn.setdefault("blocked_failures", set()).add(failure_base)
+        text = result.feedback
+        if (call_key is not None and result.state != "completed" and result.error_code
+                and result.error_code not in _TRANSIENT_FAILURES):
+            turn["failed_reads"][call_key] = result.error_code
+        if (turn.get("read_only") and result.kind == "page" and result.state != "completed"
+                and result.dispatch == "not_dispatched" and result.error_code in _NOT_EXECUTED):
+            item = (_ACTION_WORDS.get(name, name), self._action_label(name, args, target), result.error_code)
+            if item not in turn.setdefault("not_executed", []):
+                turn["not_executed"].append(item)
+        if result.query_answer is not None:
+            sequence = turn["query_answer_sequence"] = turn.get("query_answer_sequence", 0) + 1
+            reference = f"read-{sequence}"
+            answers = turn.setdefault("query_answers", {})
+            answers[reference] = result.query_answer
+            sources = turn.setdefault("query_answer_sources", {})
+            sources[reference] = result.read_key
+            while len(answers) > 4:
+                expired = next(iter(answers))
+                del answers[expired]
+                sources.pop(expired, None)
+            text += (f"\n本轮读取交付引用 read_answer={reference}，"
+                     f"记录 {len(result.query_answer.records)} 条，完整={result.query_answer.complete}。"
+                     "用finish(status=done, answer=空字符串, read_answer=此引用)交付程序结果，"
+                     "无需重新抄写；未完整读取或预算不足时不能报完成。"
+                     "此引用只覆盖这份结果；用户另要页面或其它内容时仍须完成，不能漏项称完成。")
+        if result.state == "completed" and result.read_count is not None:
+            empty = turn.setdefault("empty_reads", {})
+            if result.read_count:
+                empty.pop(result.read_key, None)
+            else:
+                attempts = empty[result.read_key] = empty.get(result.read_key, 0) + 1
+                if attempts == 2:
+                    text += ("\n同一数据来源已连续两次返回空列表。检查筛选条件；此前若有较宽查询"
+                             "读到记录，应根据那些记录判断，或用较宽查询和 fields 一次读全所需列。")
+                if attempts >= 4 and "forced_summary_at" not in turn:
+                    turn["forced_summary_at"] = taken
+                    turn["forced_summary_kind"] = "read"
+                    text += "\n连续四次空读，停止尝试这个数据来源；下一步只汇总已核实的事实。"
+        if result.error_code:
+            text += f"\nstate={result.state}; dispatch={result.dispatch}; error_code={result.error_code}"
+        confirmed = result.state == "completed" and self._completion_proved(s, name, args, result, target=target)
+        if result.review_completion:
+            turn["review_completion"] = True
+        if result.terminal_reason:
+            s.terminal_reason = s.terminal_reason or result.terminal_reason
+        receipts = tuple(self._tool_receipts)
+        has_observation = any(r.observation is not None for r in receipts)
+        has_page_action = any(r.action not in {"observe", "wait_for", "form_model"} for r in receipts)
+        if has_page_action:
+            turn.pop("handoff", None)
+        handoff = next((r for r in receipts if r.action == "handoff_form"
+                        and r.command_id == result.completion_command), None)
+        if confirmed and handoff is not None and result.marked:
+            turn["handoff"] = (self._page_fingerprint(s.obs), result.marked)
+        if has_observation:
+            read_observation_available = True
+            if has_page_action:
+                observation_delivered = (self._page_fingerprint(s.obs) == before)
+        if not has_observation and not s.terminal_reason and s.obs is not None:
+            can_reuse = (result.kind in {"metadata", "read"}
+                         and read_observation_available and not has_page_action)
+            if not can_reuse:
+                fresh = self._dispatch(s, "observe", {})
+                if fresh is None or not fresh.ok or fresh.observation is None:
+                    code = (fresh.error_code or "observation_missing") if fresh is not None else "receipt_missing"
+                    s.ledger.append("page_observation_failed", error_code=code)
+                    if not s.terminal_reason:
+                        s.terminal_reason = "page_observation_failed"
+                        s.detail = code
+                else:
+                    read_observation_available = True
+        changed = before_epoch != (s.obs.epoch if s.obs is not None else None)
+        s.ledger.append("model_loop_result", tool=name, kind=result.kind,
+                        state=result.state, dispatch=result.dispatch,
+                        error_code=result.error_code, terminal_reason=result.terminal_reason)
+        s.ledger.append("slim_tool", step=s.step, tool=name, changed=changed,
+                        ok=result.state == "completed")
+        harness.note_first_route(s, self._route_kind_for(name, result), trace=trace)
+        harness.record_tool_timing(
+            s,
+            step=s.step,
+            tool=name,
+            seconds=elapsed_s,
+            ok=result.state == "completed",
+            error_code=result.error_code,
+            trace=trace,
+        )
+        turn["trace"].append(f"{name}{'[' + self._target_name(target) + ']' if target is not None else ''}"
+                             f"({json.dumps(args, ensure_ascii=False)[:120]})"
+                             + (f" 页面随后: {self._query_line(s)}" if changed and name != "observe" else ""))
+        changed_page = changed_page or (changed and name != "observe")
+        unwritten = unwritten or (result.kind == "write" and result.state != "completed")
+        text = self._tool_feedback(s, turn, name, result, text)
+        answer = str(args.get("answer") or "").strip() if (name in ("goto", "highlight", "click")
+                    or result.completion_command) else ""
+        if answer:
+            rest = {(c.get("function") or {}).get("name") for c in calls[position + 1:]}
+            hidden = self._completion_conflict(s.obs, answer)
+            if not self.program_read_delivery and turn.get("read_tables_used"):
+                text += " 此处的 answer 未交付；请先看本次回执，再用 finish 逐项交付。"
+            elif turn.get("query_answers"):
+                text += (" 这一步带的answer没有用上：本轮已有服务端读取交付。页面操作回执返回后，"
+                         "用finish选择完整read_answer；不能通过页面答复省略或改抄这份结果。")
+            elif confirmed and not (unseen or unwritten) and rest <= {"finish"} and not hidden:
+                proposed = {"status": "done", "answer": answer}
+                feedback = self._finish_feedback(s, turn, proposed)
+                if feedback:
+                    finish = self._delivery_correction(s, turn, proposed, feedback)
+                    message = feedback.message if isinstance(feedback, DeliveryFeedback) else feedback
+                    text += " 这一步带的 answer 未交付：" + message
+                else:
+                    turn.pop("pending_delivery", None)
+                    finish = self._closing(s, turn, proposed)
+            elif hidden:
+                unseen = unseen or name
+                text += (f" 这一步带的 answer 没有用上：“{hidden[0]}”页签现在没有选中，"
+                         "先切到它，再结束。")
+            else:
+                text += " 这一步带的 answer 没有用上，本轮还没有结束。"
+        if not confirmed:
+            unseen = unseen or name
+        entry = {"role": "tool", "tool_call_id": call.get("id"), "content": text,
+                 "_tool_feedback": text}
+        if result.kind == "read":
+            entry["_api"] = True
+        if not s.terminal_reason:
+            if observation_delivered and result.kind in {"metadata", "read"}:
+                entry["content"] = text + "\n" + self._page_reference(s)
+            else:
+                entry["content"] = text + "\n" + self._page(s, turn)
+                entry["_observation"] = True
+                observation_delivered = True
+        self._messages.append(entry)
+        turn.setdefault("tool_texts", []).append(entry["content"])
+        self._remember_observation(s, turn, entry)
+        terminal_exit = None
+        if s.terminal_reason:
+            harness.set_stop_reason(s, result.error_code or s.terminal_reason, trace=trace)
+            if s.terminal_reason == "page_observation_failed":
+                terminal_exit = page_observation_failure(chinese=s.chinese)
+            elif s.terminal_reason == "agent_refused" and result.terminal_answer:
+                terminal_exit = result.terminal_answer
+            else:
+                terminal_exit = turn.get("final") or (
+                    text + "本次没有完成。"
+                    if s.terminal_reason == "permission_denied"
+                    else "操作没有完成。"
+                )
+        return (
+            terminal_exit,
+            finish,
+            changed_page,
+            unwritten,
+            unseen,
+            observation_delivered,
+            read_observation_available,
+        )
+
+    def _try_concurrent_read_batch(
+        self,
+        s,
+        prompt: str,
+        turn,
+        calls: list,
+        position: int,
+        taken: int,
+        *,
+        finish,
+        changed_page: bool,
+        unwritten: bool,
+        unseen: str,
+        observation_delivered: bool,
+        read_observation_available: bool,
+    ):
+        """Prepare contiguous pure-read calls across threads and commit sequentially."""
+        if finish is not None or changed_page or len(calls) - position < 2:
+            return None
+        if turn.get("forced_summary_at") and turn.get("forced_summary_kind") in {"read", "tools"} and taken >= turn["forced_summary_at"]:
+            return None
+        candidates = []
+        used_budget = turn.get("tool_calls", 0)
+        for offset, call in enumerate(calls[position:]):
+            if used_budget + len(candidates) >= self.model_steps:
+                break
+            name = (call.get("function") or {}).get("name") or ""
+            try:
+                args = json.loads((call.get("function") or {}).get("arguments") or "{}")
+            except ValueError:
+                break
+            if not isinstance(args, dict) or not self._supports_concurrent_read(name, turn):
+                break
+            call_key = (name, json.dumps(args, sort_keys=True, ensure_ascii=False))
+            if call_key in turn.get("failed_reads", {}):
+                break
+            candidates.append((position + offset, call, name, args, call_key))
+        if len(candidates) < 2:
+            return None
+        if s.obs is None or not turn.get("prepared", True):
+            unavailable = self._bind_page(s, turn)
+            if unavailable is not None:
+                return None
+        if not read_observation_available and not s.terminal_reason and s.obs is not None:
+            self._tool_receipts = []
+            self._uncertain_page_dispatch = False
+            fresh = self._dispatch(s, "observe", {})
+            if fresh is None or not fresh.ok or fresh.observation is None:
+                code = (fresh.error_code or "observation_missing") if fresh is not None else "receipt_missing"
+                s.ledger.append("page_observation_failed", error_code=code)
+                if not s.terminal_reason:
+                    s.terminal_reason = "page_observation_failed"
+                    s.detail = code
+                self._ensure_harness().set_stop_reason(s, "page_observation_failed", trace=getattr(self, "_trace", None))
+                return (
+                    len(candidates),
+                    page_observation_failure(chinese=s.chinese),
+                    finish,
+                    changed_page,
+                    unwritten,
+                    unseen,
+                    observation_delivered,
+                    read_observation_available,
+                )
+            self._tool_receipts = []
+            self._uncertain_page_dispatch = False
+            read_observation_available = True
+        prepared_specs = []
+        for pos, call, name, args, call_key in candidates:
+            try:
+                prep_fn = self._concurrent_read_prepare(s, name, args, turn)
+            except (PrincipalError, BusinessToolPermissionError, BusinessToolAuthenticationError,
+                    DataRefused, BusinessToolUnavailableError, ValueError, TypeError,
+                    BusinessToolRequestError) as exc:
+                prep_fn = lambda e=exc: (_ for _ in ()).throw(e)
+            if prep_fn is None:
+                break
+            prepared_specs.append((pos, call, name, args, call_key, prep_fn))
+        if len(prepared_specs) < 2:
+            return None
+
+        def _exec_prepare(fn):
+            t0 = time.monotonic()
+            try:
+                return True, fn(), time.monotonic() - t0
+            except BaseException as exc:
+                return False, exc, time.monotonic() - t0
+
+        receipt_obj = getattr(s, "receipt", None)
+        stage_ctx = receipt_obj.stage("business") if receipt_obj is not None else nullcontext()
+        with stage_ctx, ThreadPoolExecutor(max_workers=min(len(prepared_specs), 4)) as pool:
+            futures = [pool.submit(_exec_prepare, item[5]) for item in prepared_specs]
+            worker_outcomes = [f.result() for f in futures]
+
+        committed = 0
+        for (pos, call, name, args, call_key, _fn), (ok, payload, prep_s) in zip(prepared_specs, worker_outcomes):
+            if (turn.get("forced_summary_at") and turn.get("forced_summary_kind") in {"read", "tools"}
+                    and taken >= turn["forced_summary_at"]):
+                break
+            if turn.get("tool_calls", 0) >= self.model_steps:
+                break
+            failed_before = turn.setdefault("failed_reads", {}).get(call_key)
+            if failed_before is not None:
+                break
+            self._tool_receipts = []
+            self._uncertain_page_dispatch = False
+            before = self._page_fingerprint(s.obs)
+            before_epoch = s.obs.epoch if s.obs is not None else None
+            t_commit = time.monotonic()
+            turn["tool_calls"] = turn.get("tool_calls", 0) + 1
+            if turn["tool_calls"] >= self.model_steps and "forced_summary_at" not in turn:
+                turn["forced_summary_at"] = taken
+                turn["forced_summary_kind"] = "tools"
+            turn["runtime_used"] = True
+            if ok:
+                result = self._run_tool_safely(
+                    s, lambda n=name, a=args, p=payload: self._concurrent_read_commit(s, n, a, p, turn)
+                )
+            else:
+                def _raise_worker_exc(exc=payload):
+                    raise exc
+                result = self._run_tool_safely(s, _raise_worker_exc)
+            commit_s = time.monotonic() - t_commit
+            committed += 1
+            (
+                terminal_exit,
+                finish,
+                changed_page,
+                unwritten,
+                unseen,
+                observation_delivered,
+                read_observation_available,
+            ) = self._apply_tool_result(
+                s, prompt, turn, call, name, args, None, None, call_key, taken, calls, pos,
+                result, prep_s + commit_s,
+                before=before, before_epoch=before_epoch, finish=finish,
+                changed_page=changed_page, unwritten=unwritten, unseen=unseen,
+                observation_delivered=observation_delivered,
+                read_observation_available=read_observation_available,
+            )
+            if terminal_exit is not None:
+                return (
+                    committed,
+                    terminal_exit,
+                    finish,
+                    changed_page,
+                    unwritten,
+                    unseen,
+                    observation_delivered,
+                    read_observation_available,
+                )
+        if not committed:
+            return None
+        return (
+            committed,
+            None,
+            finish,
+            changed_page,
+            unwritten,
+            unseen,
+            observation_delivered,
+            read_observation_available,
+        )
+
     def _loop(self, s, prompt: str, turn: dict, *, verified: bool) -> str:
+        harness = self._ensure_harness()
+        trace = getattr(self, "_trace", None)
         nudges = 0
         while turn.get("model_calls", 0) < self.model_steps and not s.terminal_reason:
             # Completion correction shares the original decision allowance.
             taken = turn["model_calls"] = turn.get("model_calls", 0) + 1
+            if hasattr(s, "model_calls"):
+                s.model_calls = max(s.model_calls, taken)
             forced_at = turn.get("forced_summary_at")
             if forced_at and taken > forced_at + 2:
                 if turn.get("forced_summary_kind") == "read":
                     s.terminal_reason, s.detail = "agent_refused", "empty reads exceeded the summary allowance"
+                    harness.set_stop_reason(s, "empty_reads_exceeded", trace=trace)
                     return "连续查询没有读到新记录，已停止重复读取；本次未能确认完整结果。"
                 if turn.get("forced_summary_kind") == "tools":
                     s.terminal_reason, s.detail = "agent_refused", "tool executions exceeded the summary allowance"
+                    harness.set_stop_reason(s, "tool_calls_exceeded", trace=trace)
                     return "工具执行次数已用完，本次未能确认完整结果。"
                 s.terminal_reason, s.detail = "agent_refused", "page failures exceeded the summary allowance"
+                harness.set_stop_reason(s, "page_failures_exceeded", trace=trace)
                 return "多次页面操作未完成；已停止尝试，请核对已查到的结果并手动处理剩余部分。"
             if forced_at and taken == forced_at + 1:
                 if turn.get("forced_summary_kind") == "read":
@@ -834,14 +1493,17 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                 if pending is not None:
                     failed = self._delivery_correction(s, turn, *pending, terminal=True)
                     s.terminal_reason, s.detail = "agent_refused", "delivery correction unavailable"
+                    harness.set_stop_reason(s, "delivery_correction_unavailable", trace=trace)
                     return self._with_not_executed(s, turn, failed["answer"])
                 numeric = turn.pop("pending_numeric_finish", None)
                 if numeric is not None:
                     failed = self._finalize_untraced(s, turn, *numeric)
                     if failed["status"] != "done":
                         s.terminal_reason, s.detail = "agent_refused", "numeric delivery correction unavailable"
+                        harness.set_stop_reason(s, "numeric_delivery_correction_unavailable", trace=trace)
                     return self._with_not_executed(s, turn, failed["answer"])
                 s.terminal_reason, s.detail = "agent_refused", "the model request failed"
+                harness.set_stop_reason(s, "model_request_failed", trace=trace)
                 return "模型请求失败，本次没有完成。"
             calls = message.get("tool_calls") or []
             keep = {"role": "assistant", "content": message.get("content") or ""}
@@ -862,6 +1524,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                 if nudges > 2:
                     s.terminal_reason = "agent_refused"
                     s.detail = "answer protocol unresolved"
+                    harness.set_stop_reason(s, "answer_protocol_unresolved", trace=trace)
                     return ("模型未返回可核验的最终答复，本次没有完成。" if getattr(s, "chinese", True)
                             else "The model did not return a verifiable final answer. This turn is incomplete.")
                 self._messages.append({"role": "user", "content":
@@ -879,7 +1542,30 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
             # and repeated page text.
             observation_delivered = self._observation_cache_valid(s, turn)
             read_observation_available = observation_delivered
-            for position, call in enumerate(calls):
+            position = 0
+            while position < len(calls):
+                batch_outcome = self._try_concurrent_read_batch(
+                    s, prompt, turn, calls, position, taken,
+                    finish=finish, changed_page=changed_page, unwritten=unwritten,
+                    unseen=unseen, observation_delivered=observation_delivered,
+                    read_observation_available=read_observation_available,
+                )
+                if batch_outcome is not None:
+                    (
+                        consumed,
+                        terminal_exit,
+                        finish,
+                        changed_page,
+                        unwritten,
+                        unseen,
+                        observation_delivered,
+                        read_observation_available,
+                    ) = batch_outcome
+                    if terminal_exit is not None:
+                        return terminal_exit
+                    position += consumed
+                    continue
+                call = calls[position]
                 name = (call.get("function") or {}).get("name") or ""
                 try:
                     args = json.loads((call.get("function") or {}).get("arguments") or "{}")
@@ -889,6 +1575,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                     unseen = unseen or name
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
                                            "content": "未执行：工具参数必须是合法的 JSON 对象。"})
+                    position += 1
                     continue
                 if (turn.get("forced_summary_at") and turn.get("forced_summary_kind") in {"read", "tools"}
                         and taken >= turn["forced_summary_at"] and name != "finish"):
@@ -897,11 +1584,13 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                                            "content": ("未执行：工具执行次数已达上限，只允许用 finish 汇总已核实的结果。"
                                                        if turn["forced_summary_kind"] == "tools" else
                                                        "未执行：连续空读后只允许用 finish 汇总已核实的结果。")})
+                    position += 1
                     continue
                 if name == "finish" and unwritten:
                     # Written before the proposal's refusal could be read: not an ending.
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content":
                                            "没有结束：同一次回复里的写入提案没有执行。先按它返回的原因处理，再决定怎么结束。"})
+                    position += 1
                     continue
                 if name == "finish" and unseen:
                     # Written before that step's result could be read. Only a page the
@@ -909,6 +1598,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                     # can be ended on unseen; a step it skipped or refused cannot.
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content":
                                            f"没有结束：同一次回复里 {unseen} 的结果你还没有看到。先看它返回了什么，再决定怎么结束。"})
+                    position += 1
                     continue
                 if name == "finish":
                     try:
@@ -920,6 +1610,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                                 message = feedback.message if isinstance(feedback, DeliveryFeedback) else feedback
                                 self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
                                                        "content": "没有结束：" + message})
+                                position += 1
                                 continue
                             args = corrected
                         else:
@@ -946,7 +1637,6 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                             args = {**args, "answer": rendering.text}
                             s.ledger.append("read_answer_selected", ref=selected,
                                 records=len(projection.records), digest=projection.content_digest)
-                            trace = getattr(self, "_trace", None)
                             if trace is not None:
                                 trace.record_delivery(reference=selected, projection=projection.to_json(),
                                     rendered_text=rendering.text, presented_records=rendering.presented_records,
@@ -966,6 +1656,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                             finish = corrected
                             self._messages.append({"role":"tool", "tool_call_id":call.get("id"),
                                                    "content":"本轮以未完成结束。"})
+                            position += 1
                             continue
                         self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
                             "content": "没有结束：结束参数不符合工具定义。" + (
@@ -973,6 +1664,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                                 "所选结果须完整并能在最终文本预算内全部显示。不完整或超出预算时用cannot如实说明，"
                                 "不可压缩为规律后声称全部列出。" if self.program_read_delivery
                                 else "请按 finish 的定义提供交付项、状态和回执。")})
+                        position += 1
                         continue
                     except (ValueError, KeyError):
                         feedback = DeliveryFeedback("source_conclusion_refused",
@@ -982,19 +1674,24 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                             finish = corrected
                             self._messages.append({"role":"tool", "tool_call_id":call.get("id"),
                                                    "content":"本轮以未完成结束。"})
+                            position += 1
                             continue
                         self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
                             "content": "没有结束：source_conclusions 必须引用本轮同类型证据，support 必须是原文，"
                                        "statement 不得包含代码、路径或哈希。请核对工具结果。"
                                        " error_code=source_conclusion_refused"})
+                        position += 1
                         continue
                     finish = self._closing(s, turn, args)
+                    harness.note_first_route(s, "finish", trace=trace)
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content": "已收到。"})
+                    position += 1
                     continue
                 if turn.get("tool_calls", 0) >= self.model_steps:
                     unseen = unseen or name
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content":
                                            "未执行：本轮工具执行次数已达上限，只能汇总已核实结果。"})
+                    position += 1
                     continue
                 # A step that names an element by its number was chosen on a page that is no
                 # longer there; one that names a path, a field or a record was not.
@@ -1004,6 +1701,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                     unseen = unseen or name
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
                                            "content": "未执行：页面已变化，请根据新的观察重新决定。"})
+                    position += 1
                     continue
                 acts = name in ("click", "input", "select", "scroll", "fill_fields")
                 target = (self._element(s, args.get("index")) if name in ("click", "input", "select", "highlight")
@@ -1013,6 +1711,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                     unseen = unseen or name
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content":
                         "未执行：同一目标和值此前已连续失败两次；请换方法或如实说明做不到。"})
+                    position += 1
                     continue
                 call_key = ((name, json.dumps(args, sort_keys=True, ensure_ascii=False))
                              if self._procedure_kind(name) in {"read", "metadata"} else None)
@@ -1026,11 +1725,13 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                                     repeats=repeats[call_key])
                     if repeats[call_key] >= 2:
                         s.terminal_reason, s.detail = "agent_refused", "a failed read was repeated unchanged"
+                        harness.set_stop_reason(s, "failed_read_repeated", trace=trace)
                         return self._repeat_fallback(s, prompt, turn, name, failed_before)
                     unseen = unseen or name
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content":
                         f"未执行：同一调用（参数完全相同）此前已失败（error_code={failed_before}），程序不会再执行。"
                         "按上次的错误说明改正参数、换用其它已发布的接口，或如实说明做不到。"})
+                    position += 1
                     continue
                 where = (name, json.dumps(args, sort_keys=True, ensure_ascii=False), self._page_fingerprint(s.obs))
                 if acts and where in turn["done"]:
@@ -1038,11 +1739,13 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                     turn["stalled"] += 1
                     if turn["stalled"] > 3:
                         s.terminal_reason, s.detail = "agent_refused", "the same page step was repeated without effect"
+                        harness.set_stop_reason(s, "same_step_stalled", trace=trace)
                         return "同一步重复了几次都没有效果，本次没有完成。"
                     unseen = unseen or name
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content":
                                            "未执行：这一步在同样的页面状态下已经做过，没有带来进展。换一种做法"
                                            "（用 input 直接填值、用 select 选、先 scroll 找控件），或者如实说明做不到。"})
+                    position += 1
                     continue
                 if acts:
                     turn["done"].add(where)
@@ -1050,202 +1753,32 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                 self._uncertain_page_dispatch = False
                 before = self._page_fingerprint(s.obs)
                 before_epoch = s.obs.epoch if s.obs is not None else None
-                try:
-                    turn["tool_calls"] = turn.get("tool_calls", 0) + 1
-                    if turn["tool_calls"] >= self.model_steps and "forced_summary_at" not in turn:
-                        turn["forced_summary_at"] = taken
-                        turn["forced_summary_kind"] = "tools"
-                    result = self._invoke_tool(s, name, args, turn)
-                except (PrincipalError, BusinessToolPermissionError, BusinessToolAuthenticationError):
-                    s.terminal_reason = "permission_denied"
-                    result = LoopToolResult("当前账号的身份或权限已失效。", state="refused",
-                                            error_code="permission_denied", terminal_reason="permission_denied")
-                except DataRefused as exc:
-                    if exc.permission_denied:
-                        result = LoopToolResult("当前账号没有读取这项数据的权限。", kind="read", state="refused",
-                                                error_code="permission_denied", terminal_reason="permission_denied")
-                    else:
-                        result = LoopToolResult("应用读取未能完成。", kind="read", state="unavailable",
-                                                error_code="application_unavailable")
-                except BusinessToolUnavailableError:
-                    result = LoopToolResult("应用读取未能完成。", kind="read", state="unavailable",
-                                            error_code="application_unavailable")
-                except (ValueError, TypeError, BusinessToolRequestError):
-                    result = LoopToolResult("工具参数有误，请核对工具的参数说明。", state="refused",
-                                            error_code="invalid_arguments")
-                if not isinstance(result, LoopToolResult):
-                    raise TypeError("model loop tools must return LoopToolResult")
-                if result.kind in {"read", "metadata"} and result.state == "completed":
-                    turn["read_sequence"] = turn.get("read_sequence", 0) + 1
-                    ref = f"read#{turn['read_sequence']}"
-                    if result.answer_targets:
-                        turn.setdefault("issued_targets", []).extend(
-                            BoundAnswerTarget(ref, target) for target in result.answer_targets)
-                if result.kind == "page":
-                    # Dispatch is a transport fact, including earlier steps of a
-                    # partially completed procedure; application prose cannot reset it.
-                    dispatched = any(r.action not in {"observe", "wait_for", "form_model"}
-                                     for r in self._tool_receipts)
-                    result = replace(result, dispatch="acknowledged" if dispatched else
-                                     "uncertain" if self._uncertain_page_dispatch else "not_dispatched")
-                    if result.state != "completed" and result.error_code:
-                        failures = turn.setdefault("page_failures", 0) + 1
-                        turn["page_failures"] = failures
-                        if failures >= 6 and "forced_summary_at" not in turn:
-                            turn["forced_summary_at"] = taken
-                            turn["forced_summary_kind"] = "page"
-                        if failure_base is not None:
-                            counts = turn.setdefault("failure_counts", {})
-                            failure = failure_base, result.error_code
-                            counts[failure] = counts.get(failure, 0) + 1
-                            if counts[failure] >= 2:
-                                turn.setdefault("blocked_failures", set()).add(failure_base)
-                text = result.feedback
-                if (call_key is not None and result.state != "completed" and result.error_code
-                        and result.error_code not in _TRANSIENT_FAILURES):
-                    turn["failed_reads"][call_key] = result.error_code
-                if (turn.get("read_only") and result.kind == "page" and result.state != "completed"
-                        and result.dispatch == "not_dispatched" and result.error_code in _NOT_EXECUTED):
-                    item = (_ACTION_WORDS.get(name, name), self._action_label(name, args, target), result.error_code)
-                    if item not in turn.setdefault("not_executed", []):
-                        turn["not_executed"].append(item)
-                if result.query_answer is not None:
-                    sequence = turn["query_answer_sequence"] = turn.get("query_answer_sequence", 0) + 1
-                    reference = f"read-{sequence}"
-                    answers = turn.setdefault("query_answers", {})
-                    answers[reference] = result.query_answer
-                    sources = turn.setdefault("query_answer_sources", {})
-                    sources[reference] = result.read_key
-                    while len(answers) > 4:
-                        expired = next(iter(answers))
-                        del answers[expired]
-                        sources.pop(expired, None)
-                    text += (f"\n本轮读取交付引用 read_answer={reference}，"
-                             f"记录 {len(result.query_answer.records)} 条，完整={result.query_answer.complete}。"
-                             "用finish(status=done, answer=空字符串, read_answer=此引用)交付程序结果，"
-                             "无需重新抄写；未完整读取或预算不足时不能报完成。"
-                             "此引用只覆盖这份结果；用户另要页面或其它内容时仍须完成，不能漏项称完成。")
-                if result.state == "completed" and result.read_count is not None:
-                    empty = turn.setdefault("empty_reads", {})
-                    if result.read_count:
-                        empty.pop(result.read_key, None)
-                    else:
-                        attempts = empty[result.read_key] = empty.get(result.read_key, 0) + 1
-                        if attempts == 2:
-                            text += ("\n同一数据来源已连续两次返回空列表。检查筛选条件；此前若有较宽查询"
-                                     "读到记录，应根据那些记录判断，或用较宽查询和 fields 一次读全所需列。")
-                        if attempts >= 4 and "forced_summary_at" not in turn:
-                            turn["forced_summary_at"] = taken
-                            turn["forced_summary_kind"] = "read"
-                            text += "\n连续四次空读，停止尝试这个数据来源；下一步只汇总已核实的事实。"
-                if result.error_code:
-                    text += f"\nstate={result.state}; dispatch={result.dispatch}; error_code={result.error_code}"
-                confirmed = result.state == "completed" and self._completion_proved(s, name, args, result, target=target)
-                if result.review_completion:
-                    turn["review_completion"] = True
-                if result.terminal_reason:
-                    s.terminal_reason = s.terminal_reason or result.terminal_reason
-                receipts = tuple(self._tool_receipts)
-                has_observation = any(r.observation is not None for r in receipts)
-                has_page_action = any(r.action not in {"observe", "wait_for", "form_model"} for r in receipts)
-                if has_page_action:
-                    turn.pop("handoff", None)
-                handoff = next((r for r in receipts if r.action == "handoff_form"
-                                and r.command_id == result.completion_command), None)
-                if confirmed and handoff is not None and result.marked:
-                    turn["handoff"] = (self._page_fingerprint(s.obs), result.marked)
-                if has_observation:
-                    # Page actions and explicit observe both carry the runtime's fresh
-                    # observation. It is safe to reuse that receipt for a later read in
-                    # this response; only a procedure with no observation needs a new
-                    # browser round trip.
-                    read_observation_available = True
-                    if has_page_action:
-                        # A changed page invalidates the previous full-page message.
-                        # The action's own result will append the new page below.
-                        observation_delivered = (self._page_fingerprint(s.obs) == before)
-                # API and Skill reads have no browser receipt; obtain the current page
-                # before returning their result to the same decision conversation. A
-                # consecutive read in this response may reuse the already fresh page.
-                if not has_observation and not s.terminal_reason and s.obs is not None:
-                    can_reuse = (result.kind in {"metadata", "read"}
-                                 and read_observation_available and not has_page_action)
-                    if not can_reuse:
-                        fresh = self._dispatch(s, "observe", {})
-                        if fresh is None or not fresh.ok or fresh.observation is None:
-                            code = (fresh.error_code or "observation_missing") if fresh is not None else "receipt_missing"
-                            s.ledger.append("page_observation_failed", error_code=code)
-                            if not s.terminal_reason:
-                                s.terminal_reason = "page_observation_failed"
-                                s.detail = code
-                        else:
-                            read_observation_available = True
-                changed = before_epoch != (s.obs.epoch if s.obs is not None else None)
-                s.ledger.append("model_loop_result", tool=name, kind=result.kind,
-                                state=result.state, dispatch=result.dispatch,
-                                error_code=result.error_code, terminal_reason=result.terminal_reason)
-                s.ledger.append("slim_tool", step=s.step, tool=name, changed=changed,
-                                ok=result.state == "completed")
-                turn["trace"].append(f"{name}{'[' + self._target_name(target) + ']' if target is not None else ''}"
-                                     f"({json.dumps(args, ensure_ascii=False)[:120]})"
-                                     + (f" 页面随后: {self._query_line(s)}" if changed and name != "observe" else ""))
-                changed_page = changed_page or (changed and name != "observe")
-                unwritten = unwritten or (result.kind == "write" and result.state != "completed")
-                text = self._tool_feedback(s, turn, name, result, text)
-                answer = str(args.get("answer") or "").strip() if (name in ("goto", "highlight", "click")
-                            or result.completion_command) else ""
-                if answer:
-                    # The turn ends on it only if nothing written earlier in the reply is
-                    # still unread and nothing but a finish comes after it.
-                    rest = {(c.get("function") or {}).get("name") for c in calls[position + 1:]}
-                    hidden = self._completion_conflict(s.obs, answer)
-                    if not self.program_read_delivery and turn.get("read_tables_used"):
-                        text += " 此处的 answer 未交付；请先看本次回执，再用 finish 逐项交付。"
-                    elif turn.get("query_answers"):
-                        text += (" 这一步带的answer没有用上：本轮已有服务端读取交付。页面操作回执返回后，"
-                                 "用finish选择完整read_answer；不能通过页面答复省略或改抄这份结果。")
-                    elif confirmed and not (unseen or unwritten) and rest <= {"finish"} and not hidden:
-                        proposed = {"status": "done", "answer": answer}
-                        feedback = self._finish_feedback(s, turn, proposed)
-                        if feedback:
-                            finish = self._delivery_correction(s, turn, proposed, feedback)
-                            message = feedback.message if isinstance(feedback, DeliveryFeedback) else feedback
-                            text += " 这一步带的 answer 未交付：" + message
-                        else:
-                            turn.pop("pending_delivery", None)
-                            finish = self._closing(s, turn, proposed)
-                    elif hidden:
-                        # It was written before the page was seen: the page shows another tab.
-                        unseen = unseen or name
-                        text += (f" 这一步带的 answer 没有用上：“{hidden[0]}”页签现在没有选中，"
-                                 "先切到它，再结束。")
-                    else:
-                        text += " 这一步带的 answer 没有用上，本轮还没有结束。"
-                if not confirmed:
-                    unseen = unseen or name
-                entry = {"role": "tool", "tool_call_id": call.get("id"), "content": text,
-                         "_tool_feedback": text}
-                if result.kind == "read":
-                    entry["_api"] = True
-                if not s.terminal_reason:
-                    if observation_delivered and result.kind in {"metadata", "read"}:
-                        entry["content"] = text + "\n" + self._page_reference(s)
-                    else:
-                        entry["content"] = text + "\n" + self._page(s, turn)
-                        entry["_observation"] = True
-                        observation_delivered = True
-                self._messages.append(entry)
-                # Keep the result as delivered for the closing text checks, even
-                # after older observations are elided from the decision context.
-                turn.setdefault("tool_texts", []).append(entry["content"])
-                self._remember_observation(s, turn, entry)
-                if s.terminal_reason:
-                    if s.terminal_reason == "page_observation_failed":
-                        return page_observation_failure(chinese=s.chinese)
-                    if s.terminal_reason == "agent_refused" and result.terminal_answer:
-                        return result.terminal_answer
-                    return turn.get("final") or (text + "本次没有完成。"
-                        if s.terminal_reason == "permission_denied" else "操作没有完成。")
+                tool_started = time.monotonic()
+                turn["tool_calls"] = turn.get("tool_calls", 0) + 1
+                if turn["tool_calls"] >= self.model_steps and "forced_summary_at" not in turn:
+                    turn["forced_summary_at"] = taken
+                    turn["forced_summary_kind"] = "tools"
+                result = self._run_tool_safely(s, lambda: self._invoke_tool(s, name, args, turn))
+                tool_elapsed = time.monotonic() - tool_started
+                (
+                    terminal_exit,
+                    finish,
+                    changed_page,
+                    unwritten,
+                    unseen,
+                    observation_delivered,
+                    read_observation_available,
+                ) = self._apply_tool_result(
+                    s, prompt, turn, call, name, args, target, failure_base, call_key, taken,
+                    calls, position, result, tool_elapsed,
+                    before=before, before_epoch=before_epoch, finish=finish,
+                    changed_page=changed_page, unwritten=unwritten, unseen=unseen,
+                    observation_delivered=observation_delivered,
+                    read_observation_available=read_observation_available,
+                )
+                if terminal_exit is not None:
+                    return terminal_exit
+                position += 1
             if finish is None:
                 continue
             status, answer = str(finish.get("status") or "done"), str(finish.get("answer") or "").strip()
@@ -1280,6 +1813,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                 s.ledger.append("completion_review", state=review.state, attempt=count)
                 if review.state == "unavailable" or review.state == "disputed" and count >= 2:
                     s.terminal_reason, s.detail = "agent_refused", "completion verification unresolved"
+                    harness.set_stop_reason(s, "completion_review_unresolved", trace=trace)
                     return ("尚未核对到用户要求的完整结果，请核对当前记录后重新发起。"
                             if getattr(s, "chinese", True) else
                             "The complete requested result could not be verified. Check the current record and try again.")
@@ -1295,6 +1829,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                 verification = self._verify(s, prompt, answer, turn)
                 if verification.state == "unavailable":
                     s.terminal_reason, s.detail = "agent_refused", "completion verification unavailable"
+                    harness.set_stop_reason(s, "completion_verification_unavailable", trace=trace)
                     s.ledger.append("model_loop_verification_unavailable")
                     return "结果复核未能完成，请核对当前页面；已执行的操作不会重发。"
                 problems = verification.problems
@@ -1311,17 +1846,22 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                     return self._loop(s, prompt, turn, verified=True)
             if status == "need_input":
                 s.terminal_reason = "needs_clarification"
+                harness.set_stop_reason(s, "needs_clarification", trace=trace)
                 cleaned_question = self._clean_answer(answer or "请补充信息。")
                 s.clarification = {"schema_version": 1, "clarification_id": f"{s.run_id}-ask"[:100],
                                    "task_id": s.run_id[:100], "question": (cleaned_question or "请补充信息。")[:500],
                                    "response_kind": "free_text", "choices": []}
             elif status == "cannot":
                 s.terminal_reason = "agent_refused"
+                harness.set_stop_reason(s, "agent_refused", trace=trace)
             elif s.mutation_outcomes:
                 # Said outright, as the goal turn's Skill path says it: settlement names
                 # the verified writes ahead of the answer of any turn it is not told
                 # finished, which is for a turn that stopped part-way.
                 s.terminal_reason = "agent_finished"
+                harness.set_stop_reason(s, "agent_finished", trace=trace)
+            else:
+                harness.set_stop_reason(s, "agent_finished", trace=trace)
             answer = answer or "已完成。"
             handoff = turn.get("handoff")
             form_handed_over = bool(handoff and handoff[0] == self._page_fingerprint(s.obs))
@@ -1336,6 +1876,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
             return self._with_not_executed(s, turn, answer)
         if not s.terminal_reason:
             s.terminal_reason, s.detail = "agent_refused", "the turn's model steps were used up"
+            harness.set_stop_reason(s, "model_steps_exhausted", trace=trace)
         return "步骤用完，没有完成。"
 
     def _unsaid(self, prompt: str, turn: dict) -> list[str]:
