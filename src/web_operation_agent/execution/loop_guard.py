@@ -6,6 +6,21 @@ import json
 import re
 
 from ..schemas import PageObservation
+from .checks import ProgramCheckSpec
+
+FAILED_READ_REPEATED_SPEC = ProgramCheckSpec(
+    name="failed_read_repeated",
+    checks_what="a non-transiently failed read/metadata tool call is not re-executed with identical arguments",
+    retry_guidance="skip re-execution on first repeat and instruct the model to fix parameters or switch tools",
+    terminal_delivery="stop on repeated unchanged failure and deliver already-read complete actor-bound results or status note",
+)
+
+SAME_STEP_STALLED_SPEC = ProgramCheckSpec(
+    name="same_step_stalled",
+    checks_what="the model does not repeat the identical page action with unchanged arguments on an unchanged observation",
+    retry_guidance="skip duplicate page action up to three times and tell the model to try a different step or report cannot",
+    terminal_delivery="stop turn as agent_refused once stalled count exceeds three and notify user the repeated step had no effect",
+)
 
 #: Read failures that may not recur on an identical call; every other code does.
 _TRANSIENT_FAILURES = frozenset({
