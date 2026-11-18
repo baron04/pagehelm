@@ -228,6 +228,44 @@ class EquivalenceHarnessTests(unittest.TestCase):
         if single["backend_http_reads"] != next(s for s in self.capture_a["scenarios"] if s["scenario"] == "yudao_table_read_single")["backend_http_reads"]:
             self.assertFalse(ce.compare_captures(self.capture_a, bad_other, allow={"arc-09"})[0])
 
+        # Swapping yudao_api_read ahead of observe block (simulating sequential baseline vs ARC-09 pre-batch observe) passes ONLY with arc-09
+        seq_like = copy.deepcopy(self.capture_a)
+        batch = next(s for s in seq_like["scenarios"] if s["scenario"] == "yudao_table_read_multi_batch")
+        audit = batch["audit_records"]
+        obs_start = next(
+            i for i, r in enumerate(audit)
+            if isinstance(r, dict) and r.get("event") == "tool_call" and r.get("tool") == "observe"
+        )
+        read_idx = next(
+            i for i in range(obs_start + 1, len(audit))
+            if isinstance(audit[i], dict) and audit[i].get("event") == "yudao_api_read"
+        )
+        audit[obs_start : read_idx + 1] = [audit[read_idx], *audit[obs_start:read_idx]]
+        receipt = next(r for r in audit if isinstance(r, dict) and r.get("event") == "goal_run_receipt")
+        receipt["stages"]["business"]["operations"] += 2
+        for idx, rec in enumerate(audit, 1):
+            if isinstance(rec, dict) and "seq" in rec:
+                rec["seq"] = idx
+        self.assertFalse(ce.compare_captures(self.capture_a, seq_like)[0])
+        self.assertTrue(ce.compare_captures(self.capture_a, seq_like, allow={"arc-09"})[0])
+
+        # Changing business operations on a non-batch scenario or action_dispatch operations STILL fails
+        bad_stage = copy.deepcopy(self.capture_a)
+        single_receipt = next(
+            r for r in next(s for s in bad_stage["scenarios"] if s["scenario"] == "yudao_table_read_single")["audit_records"]
+            if isinstance(r, dict) and r.get("event") == "goal_run_receipt"
+        )
+        single_receipt["stages"]["business"]["operations"] += 1
+        self.assertFalse(ce.compare_captures(self.capture_a, bad_stage, allow={"arc-09"})[0])
+
+        bad_dispatch = copy.deepcopy(seq_like)
+        b_receipt = next(
+            r for r in next(s for s in bad_dispatch["scenarios"] if s["scenario"] == "yudao_table_read_multi_batch")["audit_records"]
+            if isinstance(r, dict) and r.get("event") == "goal_run_receipt"
+        )
+        b_receipt["stages"]["action_dispatch"]["operations"] += 1
+        self.assertFalse(ce.compare_captures(self.capture_a, bad_dispatch, allow={"arc-09"})[0])
+
     def test_allow_registered_ops03_scoping(self):
         modified = copy.deepcopy(self.capture_a)
         scen = next(

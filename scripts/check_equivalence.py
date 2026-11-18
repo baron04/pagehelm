@@ -345,7 +345,9 @@ def apply_registered_allowances(capture: dict[str, Any], allow: set[str]) -> dic
     if not allow:
         return capture
     projected = copy.deepcopy(capture)
+    arc09_batch_scenarios = {"yudao_table_read_multi_batch", "yudao_table_read_multi_early_exit"}
     for scenario in projected.get("scenarios", []):
+        scen_name = scenario.get("scenario", "")
         audit = scenario.get("audit_records")
         if isinstance(audit, list):
             filtered_audit = []
@@ -366,10 +368,43 @@ def apply_registered_allowances(capture: dict[str, Any], allow: set[str]) -> dic
                         match = _CLN08_POLICY_MODULE_RE.match(pm)
                         if match:
                             rec = {**rec, "policy_module": f"web_operation_agent_yudao.{match.group(1)}"}
+                if "arc-09" in allow and scen_name in arc09_batch_scenarios and ev == "goal_run_receipt":
+                    stages = rec.get("stages")
+                    if isinstance(stages, dict):
+                        new_stages = dict(stages)
+                        for st_name in ("business", "ui"):
+                            st_val = new_stages.get(st_name)
+                            if isinstance(st_val, dict) and "operations" in st_val:
+                                new_stages[st_name] = {**st_val, "operations": "<BATCHED_OPS>"}
+                        rec = {**rec, "stages": new_stages}
                 if "arc-08" in allow:
                     rec = {k: v for k, v in rec.items() if k not in _ARC08_KEYS}
                 filtered_audit.append(rec)
-            if "arc-08" in allow or "arc-12" in allow:
+            if "arc-09" in allow:
+                idx = 0
+                while idx < len(filtered_audit):
+                    rec = filtered_audit[idx]
+                    if (isinstance(rec, dict) and rec.get("event") == "tool_call"
+                            and rec.get("tool") == "observe"):
+                        end = idx + 1
+                        while (end < len(filtered_audit)
+                               and isinstance(filtered_audit[end], dict)
+                               and filtered_audit[end].get("event") == "write_outcome"):
+                            end += 1
+                        if (end + 1 < len(filtered_audit)
+                                and isinstance(filtered_audit[end], dict)
+                                and filtered_audit[end].get("event") == "action_receipt"
+                                and filtered_audit[end].get("tool") == "observe"
+                                and filtered_audit[end].get("step") == rec.get("step")
+                                and isinstance(filtered_audit[end + 1], dict)
+                                and filtered_audit[end + 1].get("event") == "yudao_api_read"):
+                            api_rec = filtered_audit[end + 1]
+                            observe_block = filtered_audit[idx : end + 1]
+                            filtered_audit[idx : end + 2] = [api_rec, *observe_block]
+                            idx = end + 2
+                            continue
+                    idx += 1
+            if "arc-08" in allow or "arc-09" in allow or "arc-12" in allow:
                 for idx, rec in enumerate(filtered_audit, 1):
                     if isinstance(rec, dict) and "seq" in rec:
                         rec["seq"] = idx

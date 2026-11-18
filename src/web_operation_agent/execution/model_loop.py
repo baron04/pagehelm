@@ -1069,7 +1069,8 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
         )
         context.page.checkpoint()
         receipt_obj = getattr(s, "receipt", None)
-        stage_ctx = receipt_obj.stage("business") if receipt_obj is not None else nullcontext()
+        stage_name = "business" if procedure.kind == "read" else "ui"
+        stage_ctx = receipt_obj.stage(stage_name) if receipt_obj is not None else nullcontext()
         with stage_ctx:
             result = procedure.handler.commit_read(prepared, args, context=context)
         context.page.checkpoint()
@@ -1363,6 +1364,9 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             unavailable = self._bind_page(s, turn)
             if unavailable is not None:
                 return None
+        pre_batch_before = self._page_fingerprint(s.obs)
+        pre_batch_epoch = s.obs.epoch if s.obs is not None else None
+        did_pre_observe = False
         if not read_observation_available and not s.terminal_reason and s.obs is not None:
             self._tool_receipts = []
             self._uncertain_page_dispatch = False
@@ -1387,6 +1391,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             self._tool_receipts = []
             self._uncertain_page_dispatch = False
             read_observation_available = True
+            did_pre_observe = True
         prepared_specs = []
         for pos, call, name, args, call_key in candidates:
             try:
@@ -1426,8 +1431,11 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                 break
             self._tool_receipts = []
             self._uncertain_page_dispatch = False
-            before = self._page_fingerprint(s.obs)
-            before_epoch = s.obs.epoch if s.obs is not None else None
+            if committed == 0 and did_pre_observe:
+                before, before_epoch = pre_batch_before, pre_batch_epoch
+            else:
+                before = self._page_fingerprint(s.obs)
+                before_epoch = s.obs.epoch if s.obs is not None else None
             t_commit = time.monotonic()
             turn["tool_calls"] = turn.get("tool_calls", 0) + 1
             if turn["tool_calls"] >= self.model_steps and "forced_summary_at" not in turn:
