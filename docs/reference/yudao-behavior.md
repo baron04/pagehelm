@@ -10,11 +10,11 @@
 
 原生宿主只用应用无关 `ModelDrivenTurnExecutor`（`slim`）；旧 `goal/page-agent` 参数拒绝，不回退。启动须版本匹配的 v2 方法围栏及带审核路由/处理器的 `--native-page-policy`，live forms 与应用只读窗口始终启用；缺失/不兼容在模型和网络启动前拒绝。接口工具也不调用围栏拒绝的 GET，浏览器提交始终关闭，业务写默认关闭。
 
-模型逐步选当前账号菜单、只读 API、Runtime 页面工具；`--native-writes` 开启后才可 `load_skill`，加载操作成为带安装 schema 的工具。写入沿共享链路：同账号只读准备、登记字面输入逐字对照用户原话、准备效果核对、完整可见审批、单次派发、同账号回读。审批前拒绝可在同一对话内有限纠正；取消审批、应用拒绝或不确定写入结束本轮，不重发。目标式 Skill 选择/单提案/让渡不用于 slim。
+模型逐步选当前账号菜单、只读 API、Runtime 页面工具；`--native-writes` 开启后可经 `propose_operation` 直接提出已安装写操作或约定写操作 `update_record` / `toggle_record_status`（程序自动加载唯一关联的支撑 Skill，仍保留 `load_skill` 按需阅读完整领域规则）。写入沿共享链路：同账号只读准备、登记字面输入逐字对照用户原话、准备效果核对、完整可见审批、单次派发、同账号回读。审批前拒绝可在同一对话内有限纠正；取消审批、应用拒绝或不确定写入结束本轮，不重发。目标式 Skill 选择/单提案/让渡不用于 slim。
 
 | 配置 | 效果与边界 |
 | --- | --- |
-| `native_writes=True` / `--native-writes` | 开启原生类型化写，仍须匹配 Skill、审批及同 actor 回读，不开放浏览器提交。 |
+| `native_writes=True` / `--native-writes` | 开启原生类型化写（`propose_operation` 直提 Skill 操作、`load_skill` 及 `YudaoConventionWritePort` 扁平对称 `update_record` / 两态 `toggle_record_status`），仍须审批及同 actor 回读，不开放浏览器提交。 |
 | `location_bindings=True` / `--location-bindings` | 默认关闭。提供一次导航、切页签、填查询条件并搜索的 `filter_page`，以及 `page_section`、`page_number`、按当前表格编号或精确列值认行的 `open_record`。不能同时开启业务写，不填业务表单。每个底层动作仍经过已有页面同意、准入和交付核对。 |
 | `native_page_admission="method-fence"` / `--native-page-admission method-fence` | 普通控件可以在缺少逐页登记时操作。仍核对当前账号、可见目标、观察时效与应用页面状态，遵守显式禁用与扫描排除。助手拒绝点击已识别的提交、审核、删除等写控件，页面守卫拒绝写方法和扫描登记的全部写型 GET。默认 `reviewed` 保持审核准入。 |
 | `native_page_admission="read-only-window"` / `--native-page-admission read-only-window` | 隔离只读窗口准入档（`./local` 与开启 `--native-submit` 的写入部署均使用本档）：须运行并验证方法围栏，默认拒绝写方法和全部登记写型 GET；页面同意、账号/会话、同源、最新实际控件及已识别写控件的拒绝仍生效。仅在同开 `--native-writes --native-submit` 且用户当轮批准卡片后，按单次许可放行卡上列出的确切请求；未开写入时保持纯只读，面板展示“只读模式”标识。默认 `reviewed` 与已有 `method-fence` 行为不变。 |
@@ -118,7 +118,7 @@ slim 的确切 API 拒绝只归该接口，不结束整轮或推断其它接口/
 
 ## 原生写入
 
-三十九项原生操作分二十四个业务 Skill 包：客户创建/资料、既有客户下联系人创建/资料、公海释放/领取/锁定/成交状态、线索维护、复合跟进、回款计划、ERP 供应商/客户、ERP 仓库与结算账户及十二类单据状态审批/反审批、ERP 产品与计量单位、系统部门创建与修改、系统岗位创建与修改、系统通知、商城品牌维护与优惠券启停及秒杀关闭、商城分类创建、会员标签/分组、流程分类、OA 公告发布。另提供八份只读业务域口径包（`load_domain_guide`）与全模块编译期源码规则查询（`entity_rules`），以及基于框架无关 ARIA/DOM 结构的树型下拉选择（兼容 `ElTreeSelect` 与标准 ARIA `tree`）。用户要求在备注/说明等文本字段追加或补充内容时，更新链路（含类型化写入 `EffectProjection.before_json` 与原生表单提交 `append_overwrite`）要求保留该目标记录当前原值后再追加，阻止只填新增片段覆盖原值或混用其他记录文本；不可逆关闭秒杀活动与单据反审批须先经对话披露影响并取得用户确认，已存在下游出入库/退货单或已核销收付款金额的 ERP 单据在出卡前直接拒绝反审批。消歧、层级、单位、实体区分共用应用资产并装配为受控按需 references，完成条件留正文。关系名/层级路径经 actor 读取绑定外键，CRM 与 ERP 价格金额均为元（商城/会员/支付域为分）、ERP 重量为 kg；当前字典约束提案，准备和派发复查；静态解释引已加载确切段落。
+三十九项原生操作分二十四个业务 Skill 包：客户创建/资料、既有客户下联系人创建/资料、公海释放/领取/锁定/成交状态、线索维护、复合跟进、回款计划、ERP 供应商/客户、ERP 仓库与结算账户及十二类单据状态审批/反审批、ERP 产品与计量单位、系统部门创建与修改、系统岗位创建与修改、系统通知、商城品牌维护与优惠券启停及秒杀关闭、商城分类创建、会员标签/分组、流程分类、OA 公告发布。对于未专门建 Skill 但满足扁平 1:1 对称 `PUT …/update` + `GET …/get` 或两态互逆 `PUT …/update-status` 条件的实体，另由 `YudaoConventionWritePort` 经接口公开文档与源码编译规则推导出 `update_record` 与 `toggle_record_status` 经同一 `BusinessWriteService` 审批与全字段回读派发（与 `testapps/contacts` 共测约定写入合同）。另提供八份只读业务域口径包（`load_domain_guide`）与全模块编译期源码规则查询（`entity_rules`），以及基于框架无关 ARIA/DOM 结构的树型下拉选择（兼容 `ElTreeSelect` 与标准 ARIA `tree`）。用户要求在备注/说明等文本字段追加或补充内容时，更新链路（含类型化写入 `EffectProjection.before_json` 与原生表单提交 `append_overwrite`）要求保留该目标记录当前原值后再追加，阻止只填新增片段覆盖原值或混用其他记录文本；不可逆关闭秒杀活动与单据反审批须先经对话披露影响并取得用户确认，已存在下游出入库/退货单或已核销收付款金额的 ERP 单据在出卡前直接拒绝反审批。消歧、层级、单位、实体区分共用应用资产并装配为受控按需 references，完成条件留正文。关系名/层级路径经 actor 读取绑定外键，CRM 与 ERP 价格金额均为元（商城/会员/支付域为分）、ERP 重量为 kg；当前字典约束提案，准备和派发复查；静态解释引已加载确切段落。
 
 新建定义记录不分配用户、会员或权限，不部署/发起流程；系统通知仅建记录不推消息。公海/状态、回款计划及 OA 发布用专用合同展示/验连带效果；OA 用动态下属，不支持固定接收名单。原生接口未暴露的负责人时间/历史元数据不声称独立核验完成。芋道与 Contacts REST 实现同一效果合同，合同测试不证明模型准确率或速度。
 

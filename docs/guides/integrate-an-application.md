@@ -63,6 +63,8 @@ Adapter 与 turn policy 默认都关闭写入。启用写入的 Adapter 在生�
 
 原生表单提交由 `SubmitPort` 适配器承担，并由其 `contract()` 声明应用的提交约定 `SubmitConventions`：应用自行维护、回写时忽略的字段集合 `volatile_keys`；请求里命名目标记录的键 `record_key`；明细行的身份键 `line_key`；确认卡上给目标记录命名的字段 `name_key`；毫秒时间值解读时区 `epoch_zone`；以及把一次写响应判定为接受并取回新建编号的 `decode_write`。核心不给这些约定默认值；适配器未声明时，提交以类型化拒绝关闭。接入时要让共享提交合同测试在本适配器和另一个声明结构不同的应用上各跑一遍。
 
+扁平对称约定更新由声明 `"updates"` 能力的 `ConventionWritePort` 承担，与 `convention_tool_definitions` 配合生成应用无关的 `update_record`（仅准入扁平 1:1 对称更新+详情读取且剥离密码与独立状态开关）与 `toggle_record_status`（仅准入两态互逆状态切换），同样经 `BusinessWriteService` 履行批准、派发前全字段重读与派发后全字段回读，并由共享合同测试（`testapps/contacts` 与芋道 `test_convention_writes.py`）覆盖两个结构不同的适配器。
+
 ## 临时表单交接
 
 表单预填是可选能力，不是通用的浏览器权限。专用 typed tool 仍可为特定流程返回`FormDraft`。作为无 Skill 兜底时，由 Adapter 实现 `ApplicationFormPort`：`describe_form`返回当前路由下同 actor 的可写字段元数据，`prepare_form` 校验选定值并返回准确草稿。用`AgentTurnConfig.allow_form_prefill=True` 启用。
