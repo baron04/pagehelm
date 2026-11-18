@@ -17,7 +17,7 @@ import {anyRadioGroup, observedSelectedRadio, radioChoices, radioLabel, radioEna
 /** Maximum live controls one observation may expose across the browser boundary. */
 export const MAX_OBSERVATION_ELEMENTS = browserContract.observation.max_elements
 
-export interface BoundedPageContent {
+interface BoundedPageContent {
   content: string
   truncated: boolean
 }

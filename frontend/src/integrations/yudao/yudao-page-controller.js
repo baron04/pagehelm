@@ -1,6 +1,9 @@
 /** Application-owned wrapper around the pinned generic controller, never a new harness. */
 import {PageController as GenericPageController, getElementByIndex as controllerElement,
   scrollIntoViewIfNeeded} from './page-controller.js'
+import {isElDateRangeInput} from '../element-plus/date-picker.js'
+import {findElSelectWrapperForClick, isElSubMenuContainer,
+  shouldAvoidSelectInnerInput} from '../element-plus/select.js'
 import {lineControls, nativeControlElement, nativeRangeDateCell, nativeRangeDateStep,
   withLineControls, withTreeQueryControls, withUserStatusControls, withObservedRowColumns} from './page-facts.js'
 import {boundClick, boundInput, boundRecord, readElementPageControl as ordinaryControl} from './page-facts.js'
@@ -31,8 +34,7 @@ export async function clickElement(element, invoked = () => {}) {
   const rect = element.getBoundingClientRect()
   const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2
   const hit = element.ownerDocument.elementFromPoint(x, y)
-  const avoidInnerInput = element instanceof HTMLElement && element.classList.contains('el-select__wrapper') &&
-    hit instanceof HTMLInputElement && hit.classList.contains('el-select__input')
+  const avoidInnerInput = shouldAvoidSelectInnerInput(element, hit)
   const target = hit instanceof HTMLElement && element.contains(hit) && !avoidInnerInput ? hit : element
   const pointer = {bubbles: true, cancelable: true, clientX: x, clientY: y, pointerType: 'mouse'}
   const mouse = {bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0}
@@ -80,7 +82,7 @@ export class PageController extends GenericPageController {
       const trace_id = Array.from(crypto.getRandomValues(new Uint8Array(16)), n => n.toString(16).padStart(2, '0')).join('')
       trace = {trace_id, events: []}
     } catch { /* Unavailable diagnostics leave the ordinary action intact. */ }
-    notify(() => { this.bindingTrace = trace ?? {trace_id:null, events:[]} })
+    notify(() => { this.bindingTrace = trace ?? {trace_id: null, events: []} })
     return {
       record: path => {
         if (!trace) return
@@ -115,14 +117,13 @@ export class PageController extends GenericPageController {
     }
   }
 
-
   async inputText(index, text) {
     const {record, finish} = this.executionTrace('fill')
     const element = controllerElement(this.selectorMap, index)
     if (bindings && await boundInput(element, text, () => record('binding'))) {
       return finish({success: true, message: 'component input binding'})
     }
-    const range = element instanceof HTMLInputElement && element.matches('.el-date-editor--daterange > .el-range-input')
+    const range = isElDateRangeInput(element)
     const result = await this.typed(index, element, text, () => record('ordinary'))
     if (!range || result?.success !== true) return finish(result)
     let cell = nativeRangeDateCell(element, text)
@@ -163,20 +164,13 @@ export class PageController extends GenericPageController {
     if (bindings && await boundClick(target, () => record('binding'))) {
       return finish({success: true, message: 'component click binding'})
     }
-    if (target instanceof HTMLInputElement &&
-        ((element instanceof HTMLLabelElement && element !== target) ||
-         (element === target && target.getAttribute('role') === 'combobox' &&
-          target.getAttribute('aria-expanded') !== 'true'))) {
-      // Label focus or inner combobox input click (@click.stop in Element Plus) does not
-      // open Element Plus's select. Click its exact owned wrapper through the controller.
-      const wrapper = target.closest('.el-select__wrapper')
-      if (wrapper && nativeControlElement(wrapper) === target) {
-        await clickElement(wrapper, () => record('ordinary'))
-        return finish({success: true})
-      }
+    const wrapper = findElSelectWrapperForClick(element, target, nativeControlElement)
+    if (wrapper) {
+      await clickElement(wrapper, () => record('ordinary'))
+      return finish({success: true})
     }
     // The indexed submenu container's handler lives on its owned title.
-    if (element !== target && element.matches('li.el-sub-menu')) {
+    if (isElSubMenuContainer(element, target)) {
       record('ordinary')
       target.click()
       return finish({success: true})

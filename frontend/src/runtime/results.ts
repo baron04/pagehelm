@@ -37,7 +37,7 @@ export function executionTraceOf(result: unknown, action: string): ExecutionTrac
   } catch { return undefined }
 }
 
-export type ResultStatus = 'completed' | 'rejected' | 'indeterminate'
+type ResultStatus = 'completed' | 'rejected' | 'indeterminate'
 
 /** An error message with credentials and the value the action typed removed, and bounded. */
 export function safeErrorDetail(detail: unknown, command: ActionCommand | null | undefined,
@@ -59,7 +59,7 @@ export function safeErrorDetail(detail: unknown, command: ActionCommand | null |
   return out.slice(0, 800)
 }
 
-export function resultEnvelope(action: ActionEnvelope, status: ResultStatus,
+function resultEnvelope(action: ActionEnvelope, status: ResultStatus,
                                observation: ObservationEnvelope | null,
                                {receipt = null, code = '', detail = ''}:
                                {receipt?: ActionReceipt | null; code?: string; detail?: string} = {},
@@ -88,7 +88,7 @@ export function completed(action: ActionEnvelope, receipt: ActionReceipt,
   return resultEnvelope(action, 'completed', observation, {receipt})
 }
 
-export interface ReceiptFacts {
+interface ReceiptFacts {
   ok: boolean
   code: string
   detail: unknown

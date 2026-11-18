@@ -43,7 +43,7 @@ export function radioEnabled(element: HTMLElement): boolean {
     !element.closest('[aria-disabled="true"],fieldset[disabled]')
 }
 
-export function radioChecked(element: HTMLElement): boolean {
+function radioChecked(element: HTMLElement): boolean {
   return element instanceof HTMLInputElement ? element.checked : element.getAttribute('aria-checked') === 'true'
 }
 

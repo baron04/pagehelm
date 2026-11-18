@@ -13,38 +13,46 @@
  * Method names prefixed with `_` are this class's internal steps. Several are also the
  * seams the conformance tests reach through, so they stay methods on the instance.
  */
-import {contained, detach, later, listen, sleep, soon, type Cancel} from './contain'
 import browserContract from '@contract/browser_contract.json'
+import type {ApprovalRequest, PanelConfiguration, PanelState, ReconciliationStatus} from '../contract/panel'
+import {postApprovalDecision, type ApprovalContext} from './approvalController'
+import {contained, detach, listen, soon, type Cancel} from './contain'
 import {
-  executeCommand, mayNavigate, navigationExpectation, waitForNavigation,
-  type CommandOutcome, type NavigationExpectation,
+  mayNavigate, navigationExpectation, type NavigationExpectation,
 } from './executor'
 import {
-  absoluteUrl, armChildFrameNavigation, canonicalUrl, documentNavigation, navigationWal,
-  recoveryProvesNavigation,
-} from './navigation'
-import {tryOpenAnswerInPlace} from './answerNavigation'
-import {Page, loadPageController, formFieldMatches, type FormHandoffField,
-  type FormSubmitTarget, type PageControllerApi, type PageFacetReader,
-  type PageHighlight, type PageRecordRouteReader, type PageBlockerReader,
-  type ActiveViewReader, type FacetCandidateReader, type FacetApplier,
-  type PageRouteReader, type PageQueryReader, type ElementNavigationReader, type PageOpener} from './page'
+  armSessionExpiry, canRenewRuntimeSession, expireSession, handleSessionLapse,
+  performHello, renewRuntimeSession, type LeaseSyncContext,
+} from './leaseSync'
+import {
+  Page, loadPageController, type ActiveViewReader, type ElementNavigationReader,
+  type FacetApplier, type FacetCandidateReader, type PageBlockerReader,
+  type PageControllerApi, type PageFacetReader, type PageHighlight, type PageOpener,
+  type PageQueryReader, type PageRecordRouteReader, type PageRouteReader,
+} from './page'
 import type {ElementLookup} from './pageModel'
-import {createShell, type PanelShell} from './shell'
-import {DEFAULT_CONFIGURATION} from '../contract/panel'
-import {backoffAfter, classifyTransportError, type PanelHost, type TransportVerdict} from './panelHost'
+import type {PanelHost, TransportVerdict} from './panelHost'
 import {createRedactor, type Redactor} from './redaction'
-import * as results from './results'
-import {ChoiceUnavailable} from './combobox'
-import {renderState, type PendingView} from './renderState'
+import type {PendingView} from './renderState'
+import {createShell, type PanelShell} from './shell'
 import {clearStored, loadSession, writeStored, type SessionState} from './storage'
-import {IdleHandshakeClosed, SessionClient, TransportError, sseBatches} from './transport'
-import {closeWriteGuard, openWriteGuard, releaseWriteGuard} from './writeGuard'
-import {pressConfirmButton, readConfirmBox, sameControlText, waitForSubmitToSettle} from './formModel'
-import type {ApprovalRequest, PanelConfiguration, PanelState, ReconciliationStatus} from '../contract/panel'
-import {activityPoint} from './activityPoint'
-import {WIRE_VERSION, type ActionCommand, type ActionEnvelope, type ActionResultEnvelope,
-  type JsonObject, type ObservationEnvelope, type RuntimeConfig} from './types'
+import {IdleHandshakeClosed, SessionClient, TransportError} from './transport'
+import {
+  consumeEventStream, deliverResultEnvelope, loadOlderTimeline, postWithLeaseRecovery,
+  raiseTransportError, refreshTimelineLoop, resumeDeferredResultLoop, retryCachedResultLoop,
+  runEventLoop, sendResultEnvelope, type TransportClientContext, type WireEvent,
+} from './transportClient'
+import {
+  bindAnswerOpener, cancelTurn, checkActionFreshness, clearPageHighlight, dispatchAction,
+  executeActionCommand, executePageCommand, handleActionEnvelope, handleUserActed,
+  handleWireEvent, observePage, openInApplication, prepareAction, reconcileRuntimeTurn,
+  recoverActionAfterNavigation, settleAction, submitOrReplaceTurn, submitTurn,
+  type DispatchOutcome, type Freshness, type TurnControllerContext,
+} from './turnController'
+import type {
+  ActionCommand, ActionEnvelope, ActionResultEnvelope, JsonObject,
+  ObservationEnvelope, RuntimeConfig,
+} from './types'
 
 // The build this Runtime is qualified against. It is stated once in
 // `policies/page_controller.json`; `test_page_controller.py` fails if this string drifts.
@@ -61,52 +69,157 @@ const CAPABILITIES = [
 /** Used where a Runtime was assembled without its constructor -- in conformance tests. */
 const defaultRedactor = createRedactor()
 
-/** One event on the server's stream. */
-export interface WireEvent {
-  kind: string
-  payload: JsonObject
-  turn_id?: string
+function leaseContextOf(runtime: EmbeddedWebRuntime): LeaseSyncContext {
+  return {
+    get endpoint() { return runtime.endpoint },
+    get sessionId() { return runtime.sessionId },
+    get token() { return runtime.token },
+    get applicationId() { return runtime.applicationId },
+    get principalBinding() { return runtime.principalBinding },
+    set principalBinding(v) { runtime.principalBinding = v },
+    get runtimeInstanceId() { return runtime.runtimeInstanceId },
+    get guardWindow() { return runtime.guardWindowValue() },
+    get config() { return runtime.config },
+    set config(v) { runtime.config = v },
+    get leaseId() { return runtime.leaseId },
+    set leaseId(v) { runtime.leaseId = v },
+    get panelConfiguration() { return runtime.panelConfiguration },
+    set panelConfiguration(v) { runtime.panelConfiguration = v },
+    get stored() { return runtime.stored },
+    get endState() { return runtime.endState },
+    set endState(v) { runtime.endState = v },
+    get stopped() { return runtime.stopped },
+    set stopped(v) { runtime.stopped = v },
+    get cancelExpiry() { return runtime.cancelExpiryHandle },
+    set cancelExpiry(v) { runtime.cancelExpiryHandle = v },
+    get eventAbortController() { return runtime.eventAbortController },
+    get panelHost() { return runtime.panelHost },
+    post: (path, body, options) => runtime._post(path, body, options),
+    panelState: state => runtime._panelState(state),
+    armExpiry: () => runtime._armExpiry(),
+    expire: code => runtime._expire(code),
+    lapsed: code => runtime._lapsed(code),
+  }
 }
 
-interface Freshness { fresh: boolean; reason: string }
-
-/** Commands that only look at the page: they leave it as the person has it. */
-const PASSIVE_ACTIONS = new Set(['observe', 'wait_for', 'scroll', 'form_model'])
-
-/** How long an application is given to open one of its own pages before it is loaded. */
-const APPLICATION_OPEN_MS = 6_000
-
-function createAbortError(): Error {
-  const error = new Error('The operation was aborted.')
-  error.name = 'AbortError'
-  return error
+function approvalContextOf(runtime: EmbeddedWebRuntime): ApprovalContext {
+  return {
+    get sessionId() { return runtime.sessionId },
+    get stored() { return runtime.stored },
+    get panelHost() { return runtime.panelHost },
+    get panelConfiguration() { return runtime.panelConfiguration },
+    save: () => runtime._save(),
+    panelState: state => runtime._panelState(state),
+    post: (path, body, options) => runtime._post(path, body, options),
+    postApproval: (request, decision) => runtime._postApproval(request, decision),
+  }
 }
 
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'AbortError'
+function transportContextOf(runtime: EmbeddedWebRuntime): TransportClientContext {
+  return {
+    get client() { return runtime.sessionClient() },
+    get stored() { return runtime.stored },
+    get panelHost() { return runtime.panelHost },
+    get panelConfiguration() { return runtime.panelConfiguration },
+    get panelCursor() { return runtime.panelCursor },
+    set panelCursor(v) { runtime.panelCursor = v },
+    get timelineRefresh() { return runtime.timelineRefreshHandle },
+    set timelineRefresh(v) { runtime.timelineRefreshHandle = v },
+    get currentObservation() { return runtime.currentObservation },
+    set currentObservation(v) { runtime.currentObservation = v },
+    get endState() { return runtime.endState },
+    set endState(v) { runtime.endState = v },
+    get stopped() { return runtime.stopped },
+    set stopped(v) { runtime.stopped = v },
+    get eventAbortController() { return runtime.eventAbortController },
+    set eventAbortController(v) { runtime.eventAbortController = v },
+    save: () => runtime._save(),
+    panelState: state => runtime._panelState(state),
+    lapsed: code => runtime._lapsed(code),
+    raise: (error, fallback) => runtime._raise(error, fallback),
+    post: (path, body, options) => runtime._post(path, body, options),
+    timeline: query => runtime._timeline(query),
+    refreshTimeline: () => runtime._refreshTimeline(),
+    handleEvent: event => runtime._handleEvent(event),
+    sendResult: result => runtime._sendResult(result),
+    observe: (causedByActionId, signal) => runtime.observe(causedByActionId, signal),
+    eventLoop: () => runtime._eventLoop(),
+  }
 }
 
-function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) return promise
-  if (signal.aborted) return Promise.reject(createAbortError())
-  return new Promise<T>((resolve, reject) => {
-    const cancel = listen('submit abort', signal, 'abort', () => {
-      reject(createAbortError())
-    }, {once: true})
-    promise.then(
-      value => { cancel(); resolve(value) },
-      error => { cancel(); reject(error) },
-    )
-  })
+function turnContextOf(runtime: EmbeddedWebRuntime): TurnControllerContext {
+  return {
+    ...approvalContextOf(runtime),
+    get config() { return runtime.config },
+    get documentId() { return runtime.documentId },
+    get runtimeInstanceId() { return runtime.runtimeInstanceId },
+    get redactor() { return runtime.redactor },
+    get page() { return runtime.page },
+    get openPage() { return runtime.openPage },
+    get panelContainer() { return runtime.panelContainer },
+    get beforeSubmit() { return runtime.beforeSubmit },
+    get confirmBoxReader() { return runtime.confirmBoxReader },
+    get confirmButtonPresser() { return runtime.confirmButtonPresser },
+    get submitBusyReader() { return runtime.submitBusyReader },
+    get restoreElementFormModel() { return runtime.restoreElementFormModel },
+    get guardWindow() { return runtime.guardWindowValue() },
+    get stopped() { return runtime.stopped },
+    set stopped(v) { runtime.stopped = v },
+    get endState() { return runtime.endState },
+    set endState(v) { runtime.endState = v },
+    get preparingSubmission() { return Boolean(runtime.preparingSubmission) },
+    set preparingSubmission(v) { runtime.preparingSubmission = v },
+    get preparingMessageId() { return String(runtime.preparingMessageId || '') },
+    set preparingMessageId(v) { runtime.preparingMessageId = v },
+    get submitAbortController() { return runtime.submitAbortController ?? null },
+    set submitAbortController(v) { runtime.submitAbortController = v },
+    get messagePostStarted() { return Boolean(runtime.messagePostStarted) },
+    set messagePostStarted(v) { runtime.messagePostStarted = v },
+    get replacementText() { return String(runtime.replacementText || '') },
+    set replacementText(v) { runtime.replacementText = v },
+    get writeGuardUntil() { return Number(runtime.writeGuardUntil || 0) },
+    set writeGuardUntil(v) { runtime.writeGuardUntil = v },
+    get highlightHandle() { return runtime.highlightHandle ?? null },
+    set highlightHandle(v) { runtime.highlightHandle = v },
+    get pendingView() { return runtime.pendingView ?? null },
+    set pendingView(v) { runtime.pendingView = v },
+    get currentObservation() { return runtime.currentObservation },
+    set currentObservation(v) { runtime.currentObservation = v },
+    get observationFingerprints() { return runtime.observationFingerprints },
+    set observationFingerprints(v) { runtime.observationFingerprints = v },
+    get observedUrl() { return runtime.observedUrl },
+    set observedUrl(v) { runtime.observedUrl = v },
+    raise: (error, fallback) => runtime._raise(error, fallback),
+    lapsed: code => runtime._lapsed(code),
+    observe: (causedByActionId, signal) => runtime.observe(causedByActionId, signal),
+    submitTask: text => runtime.submitTask(text),
+    cancelTask: options => runtime.cancelTask(options),
+    actionFreshness: command => runtime._actionFreshness(command),
+    mayNavigate: command => runtime._mayNavigate(command),
+    navigationExpectation: command => runtime._navigationExpectation(command),
+    prepare: (action, before, navigation) => runtime._prepare(action, before, navigation),
+    execute: command => runtime._execute(command),
+    executePageCommand: command => typeof runtime._executePageCommand === 'function'
+      ? runtime._executePageCommand(command)
+      : executePageCommand(turnContextOf(runtime), command),
+    deliver: result => runtime._deliver(result),
+    sendResult: result => runtime._sendResult(result),
+    recoverAfterNavigation: observation => runtime._recoverAfterNavigation(observation),
+    openInApplication: url => runtime._openInApplication(url),
+  }
 }
 
 export class EmbeddedWebRuntime {
   /** The session host reauthenticates while idle, before any observation or message is sent. */
   beforeSubmit?: () => Promise<void>
-  private preparingSubmission = false
-  private preparingMessageId = ''
-  private submitAbortController: AbortController | null = null
-  private messagePostStarted = false
+  /** @internal */
+  preparingSubmission = false
+  /** @internal */
+  preparingMessageId = ''
+  /** @internal */
+  submitAbortController: AbortController | null = null
+  /** @internal */
+  messagePostStarted = false
   config!: RuntimeConfig
   endpoint = ''
   sessionId = ''
@@ -128,7 +241,8 @@ export class EmbeddedWebRuntime {
   currentObservation: ObservationEnvelope | null = null
   observationFingerprints = new Map<string, string>()
   observedUrl = ''
-  private pendingView: PendingView | null = null
+  /** @internal */
+  pendingView: PendingView | null = null
   eventAbortController: AbortController | null = null
   /** Set once PageController is loaded; conformance tests set both directly. */
   controller: PageControllerApi | null = null
@@ -167,11 +281,12 @@ export class EmbeddedWebRuntime {
   private stopListening: Cancel[] = []
   private redactorInstance: Redactor | null = null
   /** When the application's read-only window expires, in epoch milliseconds; 0 if none. */
-  private writeGuardUntil = 0
-  private highlightHandle: PageHighlight | null = null
+  writeGuardUntil = 0
+  /** @internal */
+  highlightHandle: PageHighlight | null = null
   private clientInstance: SessionClient | null = null
   /** A message the person sent in place of an unanswered confirmation. */
-  private replacementText = ''
+  replacementText = ''
   /** The guard window name this page's assistant work carries; '' until resolved. */
   private guardWindow = ''
 
@@ -292,6 +407,24 @@ export class EmbeddedWebRuntime {
   }
   private heldPage: {controller: PageControllerApi; lookup: ElementLookup; page: Page} | undefined
 
+  /** @internal */
+  sessionClient(): SessionClient {
+    return this.client
+  }
+
+  /** @internal */
+  guardWindowValue(): string {
+    return this.guardWindow
+  }
+
+  /** @internal */
+  get cancelExpiryHandle(): Cancel | null { return this.cancelExpiry }
+  set cancelExpiryHandle(value: Cancel | null) { this.cancelExpiry = value }
+
+  /** @internal */
+  get timelineRefreshHandle(): Promise<void> | null { return this.timelineRefresh }
+  set timelineRefreshHandle(value: Promise<void> | null) { this.timelineRefresh = value }
+
   _save(): void { writeStored(this.sessionId, this.stored) }
 
   _panelState(state: PanelState): void { this.panelHost?.setConnection({state}) }
@@ -302,34 +435,12 @@ export class EmbeddedWebRuntime {
 
   _post<T = JsonObject>(path: string, body: unknown,
                         options: {includeLease?: boolean; signal?: AbortSignal} = {}): Promise<T> {
-    return this.client.post<T>(path, body, options).catch(async (error: unknown) => {
-      if (options.signal?.aborted || isAbortError(error)) throw error
-      // Registry pressure may evict a quiet page's lease where a taken-over one is
-      // terminal: the session is still this page's, so hello again for a fresh lease
-      // and retry the request once.
-      if ((error as {code?: unknown})?.code !== 'lease_evicted'
-          || options.includeLease === false) throw error
-      await this._hello()
-      return this.client.post<T>(path, body, options)
-    })
+    return postWithLeaseRecovery<T>(this.client, path, body, options, () => this._hello())
   }
 
   /** One place where a failed request becomes a panel state and a stop-or-retry decision. */
   _raise(error: unknown, fallback = 'submit_failed'): TransportVerdict {
-    const failure = error as {code?: unknown; status?: unknown} | null | undefined
-    const verdict = classifyTransportError(failure, this.panelConfiguration)
-    if (verdict.terminal && this._lapsed(verdict.code)) return verdict
-    if (verdict.terminal) {
-      this.endState = verdict.state
-      this.stopped = true
-      this.eventAbortController?.abort()
-      this._panelState(verdict.state)
-      this.panelHost?.raise(verdict.code, {retryable: false})
-    } else {
-      this._panelState(verdict.state)
-      this.panelHost?.raise(String(failure?.code || fallback), {retryable: verdict.retryable})
-    }
-    return verdict
+    return raiseTransportError(transportContextOf(this), error, fallback)
   }
 
   // -- starting ------------------------------------------------------------------------
@@ -432,26 +543,7 @@ export class EmbeddedWebRuntime {
   }
 
   async _hello(): Promise<void> {
-    const reply = await this._post<{lease_id?: string; panel?: PanelConfiguration}>('/hello', {
-      schema_version: WIRE_VERSION,
-      session_id: this.sessionId,
-      client_id: this.stored.clientId,
-      runtime_instance_id: this.runtimeInstanceId,
-      runtime: RUNTIME_NAME,
-      capabilities: CAPABILITIES,
-      page_origin: location.origin,
-      application_id: this.applicationId,
-      principal_digest: this.principalBinding,
-      last_event_id: this.stored.lastEventId,
-      ...(this.guardWindow ? {window_id: this.guardWindow} : {}),
-    }, {includeLease: false})
-    if (!reply.lease_id) throw new Error('hello response did not include a runtime lease')
-    this.leaseId = String(reply.lease_id)
-    if (!reply.panel || typeof reply.panel.protocol !== 'number') {
-      throw new Error('hello response did not include the panel configuration')
-    }
-    this.panelConfiguration = reply.panel
-    this._armExpiry()
+    return performHello(leaseContextOf(this), RUNTIME_NAME, CAPABILITIES)
   }
 
   _attachPanel(): void {
@@ -482,99 +574,23 @@ export class EmbeddedWebRuntime {
         detach('load older', this._loadOlder(before).catch(error => this._raise(error)))
       },
       reconcile: (turnId, proposalDigest) => this.reconcileTurn(turnId, proposalDigest),
-      openAnswerTarget: url => Boolean(this.openPage)
-        && tryOpenAnswerInPlace(url, target => this._openInApplication(target)),
+      openAnswerTarget: bindAnswerOpener(this.openPage, target => this._openInApplication(target)),
       panelVisibility: open => { if (!open) this._clearHighlight() },
     })
   }
 
   // -- how long this session may live ---------------------------------------------------
 
-  /**
-   * Stop pretending a session is live past its own deadline: it ends, and says which
-   * deadline it was, rather than looking like a network fault that reconnects forever.
-   */
-  _armExpiry(): void {
-    this.cancelExpiry?.()
-    this.cancelExpiry = null
-    const deadlines = ([
-      [Number(this.config.principalExpiresAt || 0)
-        || Number(this.panelConfiguration?.principal_expires_at || 0), 'principal_expired'],
-      [Number(this.config.sessionExpiresAt || 0)
-        || Number(this.panelConfiguration?.session_expires_at || 0), 'session_expired'],
-    ] as Array<[number, string]>).filter(([at]) => at > 0)
-    const soonest = deadlines.reduce<[number, string] | null>(
-      (best, next) => (best && best[0] <= next[0] ? best : next), null)
-    if (!soonest) return
-    const [at, code] = soonest
-    const delay = at - Date.now()
-    if (delay <= 0) {
-      this._expire(code)
-      return
-    }
-    this.cancelExpiry = later('session expiry', delay, () => this._expire(code))
-  }
+  _armExpiry(): void { armSessionExpiry(leaseContextOf(this)) }
 
-  _expire(code: string): void {
-    if (this.stopped || this._lapsed(code)) return
-    this.endState = 'ended'
-    this.stopped = true
-    this.eventAbortController?.abort()
-    this._panelState('ended')
-    this.panelHost?.raise(code, {retryable: false})
-  }
+  _expire(code: string): void { expireSession(leaseContextOf(this), code) }
 
-  /**
-   * End quietly when the session lapsed rather than failed -- its sign-in ran out while
-   * nobody was using it, the page went quiet, the host restarted. The person's session comes
-   * back as it was on their next message, so there is nothing to tell them.
-   */
-  _lapsed(code: string): boolean {
-    const lapses = this.panelConfiguration?.lapse_codes ?? DEFAULT_CONFIGURATION.lapse_codes
-    if (!lapses.includes(code)) return false
-    if (!this.stopped) {
-      this.endState = 'lapsed'
-      this.stopped = true
-      this.cancelExpiry?.()
-      this.cancelExpiry = null
-      this.eventAbortController?.abort()
-    }
-    return true
-  }
+  _lapsed(code: string): boolean { return handleSessionLapse(leaseContextOf(this), code) }
 
-  canRenewSession(): boolean {
-    return !this.stopped && !this.stored.taskInFlight && !this.stored.inFlight
-      && !this.panelHost?.snapshot().pendingApproval
-  }
+  canRenewSession(): boolean { return canRenewRuntimeSession(leaseContextOf(this)) }
 
   renewSession(config: RuntimeConfig): this {
-    if (!this.canRenewSession()) throw new Error('session renewal requires an idle runtime')
-    const stable: Array<[string, string, string]> = [
-      ['endpoint', this.endpoint, String(config?.endpoint || '').replace(/\/$/, '')],
-      ['sessionId', this.sessionId, String(config?.sessionId || '')],
-      ['clientToken', this.token, String(config?.clientToken || '')],
-      ['sessionGeneration', String(this.config.sessionGeneration || ''),
-        String(config?.sessionGeneration || '')],
-      ['applicationId', this.applicationId, String(config?.applicationId || '')],
-    ]
-    const changed = stable.find(([, before, after]) => before !== after)
-    if (changed) throw new Error(`session renewal changed ${changed[0]}`)
-    const principalBinding = String(config?.principalBinding || '')
-    const principalExpiresAt = Number(config?.principalExpiresAt || 0)
-    const sessionExpiresAt = Number(config?.sessionExpiresAt || 0)
-    if (!principalBinding || principalExpiresAt <= Date.now() || sessionExpiresAt <= Date.now()) {
-      throw new Error('session renewal did not provide a live principal')
-    }
-    this.config = {...this.config, ...config}
-    this.principalBinding = principalBinding
-    if (this.panelConfiguration) {
-      this.panelConfiguration = {
-        ...this.panelConfiguration,
-        principal_expires_at: principalExpiresAt,
-        session_expires_at: sessionExpiresAt,
-      }
-    }
-    this._armExpiry()
+    renewRuntimeSession(leaseContextOf(this), config)
     return this
   }
 
@@ -624,277 +640,26 @@ export class EmbeddedWebRuntime {
 
   // -- the person's intents ---------------------------------------------------------------
 
-  async submitOrReplaceTask(text: string): Promise<JsonObject> {
-    const goal = String(text || '').trim()
-    if (!goal || goal.length > 2000) throw new Error('task must contain 1-2000 characters')
-    if (!this.stored.taskInFlight) return this.submitTask(goal)
-
-    // The composer exposes this only when an unanswered card arrived after the person had
-    // already written a draft. Queue the new intent first, then cancel the old turn. The
-    // terminal progress event drains the queue; the server therefore never has two active
-    // messages, and the unanswered approval can never authorize the replacement.
-    this.replacementText = goal
-    try {
-      await this.cancelTask()
-    } catch (error) {
-      this.replacementText = ''
-      throw error
-    }
-    return {replacement_queued: true}
+  submitOrReplaceTask(text: string): Promise<JsonObject> {
+    return submitOrReplaceTurn(turnContextOf(this), text)
   }
 
-  async submitTask(text: string): Promise<JsonObject> {
-    if (this.stopped) throw new Error('embedded runtime is stopped')
-    if (this.stored.taskInFlight) throw new Error('another task is still running')
-    if (this.preparingSubmission) throw new Error('a task is being prepared')
-    const goal = String(text || '').trim()
-    if (!goal || goal.length > 2000) throw new Error('task must contain 1-2000 characters')
-    this._clearHighlight()
-    const messageId = crypto.randomUUID()
-    const abortController = new AbortController()
-    this.preparingSubmission = true
-    this.preparingMessageId = messageId
-    this.submitAbortController = abortController
-    this.messagePostStarted = false
-    // Show the optimistic echo and observing/sending state synchronously before any renewal
-    // or observation round-trip, while keeping stored.taskInFlight false so renewal stays allowed.
-    this.panelHost?.setConnection({busy: true, stopping: false, state: 'observing'})
-    this.panelHost?.setOptimistic({turnId: messageId, text: goal, failed: false})
-    try {
-      if (this.beforeSubmit) {
-        await abortable(this.beforeSubmit(), abortController.signal)
-      }
-      if (abortController.signal.aborted) {
-        this._cleanupAbortedSubmit(messageId)
-        return {cancelled: true}
-      }
-      if (this.stopped || this.stored.taskInFlight) throw new Error('runtime is no longer idle')
-    } catch (error) {
-      if (this.submitAbortController === abortController) {
-        this.preparingSubmission = false
-        this.preparingMessageId = ''
-      }
-      if (abortController.signal.aborted || isAbortError(error)) {
-        if (this.submitAbortController === abortController) {
-          this.submitAbortController = null
-          this.messagePostStarted = false
-        }
-        this._cleanupAbortedSubmit(messageId)
-        return {cancelled: true}
-      }
-      if (this.submitAbortController === abortController) {
-        this.submitAbortController = null
-        this.messagePostStarted = false
-      }
-      this.panelHost?.setConnection({busy: false, stopping: false})
-      if (this.panelHost?.snapshot().optimistic?.turnId === messageId) {
-        this.panelHost.failOptimistic()
-      } else {
-        this.panelHost?.setOptimistic({turnId: messageId, text: goal, failed: true})
-      }
-      this._raise(error)
-      throw error
-    }
-    if (this.submitAbortController === abortController) {
-      this.preparingSubmission = false
-      this.preparingMessageId = ''
-    }
-    this.stored.taskInFlight = true
-    this.stored.pageWorked = false
-    this.stored.activeMessageId = messageId
-    this.stored.cancellationPending = false
-    this._save()
-    try {
-      // A first-party SPA can change route without replacing this Runtime. Bind every new
-      // task to a fresh observation, so the server does not plan from a stale route.
-      const observation = await abortable(
-        this.observe('', abortController.signal),
-        abortController.signal,
-      )
-      if (abortController.signal.aborted) {
-        if (!this.stored.cancellationPending) this._cleanupAbortedSubmit(messageId)
-        return {cancelled: true}
-      }
-      await this._post('/observations', observation, {signal: abortController.signal})
-      if (abortController.signal.aborted) {
-        if (!this.stored.cancellationPending) this._cleanupAbortedSubmit(messageId)
-        return {cancelled: true}
-      }
-      this.messagePostStarted = true
-      const response = await this._post('/messages', {
-        message_id: messageId, text: this.redactor.redactString(goal),
-        page_url: observation.observation.url,
-      }, {signal: abortController.signal})
-      if (!this.stopped && !abortController.signal.aborted) {
-        this._panelState('queued')
-      }
-      return response
-    } catch (error) {
-      if (abortController.signal.aborted || isAbortError(error)) {
-        if (!this.stored.cancellationPending) this._cleanupAbortedSubmit(messageId)
-        return {cancelled: true}
-      }
-      this.stored.taskInFlight = false
-      this.stored.activeMessageId = ''
-      this.stored.cancellationPending = false
-      this._save()
-      this.panelHost?.setConnection({busy: false, stopping: false})
-      this.panelHost?.failOptimistic()
-      this._raise(error)
-      throw error
-    } finally {
-      if (this.submitAbortController === abortController) {
-        this.submitAbortController = null
-        this.messagePostStarted = false
-      }
-    }
+  submitTask(text: string): Promise<JsonObject> {
+    return submitTurn(turnContextOf(this), text)
   }
 
-  private _cleanupAbortedSubmit(messageId: string): void {
-    this.stored.taskInFlight = false
-    if (this.stored.activeMessageId === messageId) this.stored.activeMessageId = ''
-    this.stored.cancellationPending = false
-    this._save()
-    if (this.stopped) return
-    this.panelHost?.clearOptimisticOnce(messageId)
-    this.panelHost?.setConnection({busy: false, stopping: false, state: 'ready'})
-  }
-
-  async cancelTask({retry = false}: {retry?: boolean} = {}): Promise<void> {
-    if (this.stopped) return
-    const controller = this.submitAbortController
-    const messageWasDispatched = this.messagePostStarted
-    const targetMessageId = this.stored.activeMessageId || this.preparingMessageId
-    if (controller && !messageWasDispatched) {
-      controller.abort()
-      this.preparingSubmission = false
-      this.preparingMessageId = ''
-      this.submitAbortController = null
-      this.messagePostStarted = false
-      if (targetMessageId) this._cleanupAbortedSubmit(targetMessageId)
-      return
-    }
-    if (!this.stored.taskInFlight || !this.stored.activeMessageId) return
-    if (this.stored.cancellationPending && !retry) return
-    const wasAborted = Boolean(controller)
-    if (controller) controller.abort()
-    const messageId = this.stored.activeMessageId
-    this._panelState('stopping')
-    this.stored.cancellationPending = true
-    this._save()
-    this.panelHost?.setConnection({stopping: true})
-    try {
-      const reply = await this._post<{pre_cancelled?: boolean}>('/cancellations', {
-        schema_version: WIRE_VERSION,
-        session_id: this.sessionId,
-        message_id: messageId,
-      })
-      if (reply?.pre_cancelled) {
-        this._cleanupAbortedSubmit(messageId)
-      }
-    } catch (error) {
-      const verdict = classifyTransportError(
-        error as {code?: unknown; status?: unknown}, this.panelConfiguration)
-      if (verdict.terminal) {
-        this.stored.cancellationPending = false
-        this._save()
-        this.panelHost?.setConnection({stopping: false})
-        this._raise(error, 'cancel_failed')
-        throw error
-      }
-      if (verdict.code === 'unknown_message' || (wasAborted && verdict.code !== 'submit_failed')) {
-        this._cleanupAbortedSubmit(messageId)
-        return
-      }
-      this.stored.cancellationPending = false
-      this._save()
-      this.panelHost?.setConnection({stopping: false})
-      this._panelState('error')
-      this.panelHost?.raise('cancel_failed', {retryable: true})
-      throw error
-    }
+  cancelTask(options: {retry?: boolean} = {}): Promise<void> {
+    return cancelTurn(turnContextOf(this), options)
   }
 
   /** Trigger a read-only reconciliation check for an indeterminate write turn. Never retries writes. */
-  async reconcileTurn(turnId: string, proposalDigest?: string): Promise<ReconciliationStatus> {
-    if (this.stopped) throw new Error('embedded runtime is stopped')
-    const cleanTurnId = String(turnId || '').trim()
-    const cleanDigest = String(proposalDigest || '').trim()
-    if (!cleanTurnId && !cleanDigest) {
-      throw new Error('reconciliation requires turnId or proposalDigest')
-    }
-    try {
-      const raw = await this._post<Record<string, unknown>>('/reconciliations', {
-        schema_version: WIRE_VERSION,
-        session_id: this.sessionId,
-        ...(cleanTurnId ? {turn_id: cleanTurnId} : {}),
-        ...(cleanDigest ? {proposal_digest: cleanDigest} : {}),
-      })
-      const source = (raw?.reconciliation && typeof raw.reconciliation === 'object'
-        ? raw.reconciliation : raw) as Record<string, unknown>
-      const rawOutcome = source?.outcome
-      const outcome: ReconciliationStatus['outcome'] =
-        rawOutcome === 'completed' || rawOutcome === 'failed' || rawOutcome === 'unknown'
-          ? rawOutcome : 'unknown'
-      const settled = typeof source?.settled === 'boolean'
-        ? source.settled : outcome !== 'unknown'
-      const message = typeof source?.message === 'string' && source.message.trim()
-        ? source.message.trim() : undefined
-      const status: ReconciliationStatus = {
-        outcome,
-        settled,
-        ...(message !== undefined ? {message} : {}),
-      }
-      this.panelHost?.setReconciliation(cleanTurnId, status, cleanDigest || undefined)
-      return status
-    } catch (error) {
-      const verdict = classifyTransportError(
-        error as {code?: unknown; status?: unknown}, this.panelConfiguration)
-      const failure = error as {code?: unknown} | null | undefined
-      if (failure?.code === 'unknown_reconciliation' && !verdict.terminal) {
-        const status: ReconciliationStatus = {outcome: 'unknown', settled: false}
-        this.panelHost?.setReconciliation(cleanTurnId, status, cleanDigest || undefined)
-        return status
-      }
-      if (verdict.terminal) {
-        this._raise(error)
-      } else {
-        this.panelHost?.raise(String(failure?.code || verdict.code || 'unexpected'), {retryable: false})
-      }
-      throw error
-    }
+  reconcileTurn(turnId: string, proposalDigest?: string): Promise<ReconciliationStatus> {
+    return reconcileRuntimeTurn(turnContextOf(this), turnId, proposalDigest)
   }
 
   /** Record the decision before dispatching it, so a reload replays rather than re-asks. */
-  async _postApproval(request: ApprovalRequest, decision: 'approved' | 'denied' | 'prefill'): Promise<void> {
-    this.stored.approvals[request.approval_id] = decision
-    this._save()
-    try {
-      await this._post('/approvals', {
-        schema_version: WIRE_VERSION,
-        session_id: this.sessionId,
-        approval_id: request.approval_id,
-        decision,
-        principal_digest: String(request.principal_digest || ''),
-        turn_id: String(request.turn_id || ''),
-        operation_id: String(request.operation_id || ''),
-      })
-    } catch (error) {
-      const verdict = classifyTransportError(
-        error as {code?: unknown; status?: unknown}, this.panelConfiguration)
-      if (!verdict.approvalClosed) throw error
-      // Nothing can be answered here any more. Forget the decision -- replaying it after a
-      // reload fails the same way -- take the card down, and say what happened. The
-      // hand-written Runtime set the panel to `'idle'` here, a state the contract never had.
-      delete this.stored.approvals[request.approval_id]
-      this._save()
-      this.panelHost?.setPendingApproval(null)
-      this.panelHost?.raise(verdict.code, {retryable: false})
-      this._panelState('ready')
-      return
-    }
-    this.panelHost?.setPendingApproval(null)
-    this._panelState(decision === 'denied' ? 'cancelled' : 'acting')
+  _postApproval(request: ApprovalRequest, decision: 'approved' | 'denied' | 'prefill'): Promise<void> {
+    return postApprovalDecision(approvalContextOf(this), request, decision)
   }
 
   // -- the timeline the panel shows ------------------------------------------------------
@@ -903,720 +668,78 @@ export class EmbeddedWebRuntime {
     return this.client.timeline<Parameters<PanelHost['applyTimeline']>[0]>(query)
   }
 
-  async _refreshTimeline(): Promise<void> {
-    if (this.timelineRefresh) return this.timelineRefresh
-    const refresh = async () => {
-      const host = this.panelHost
-      if (!host) return
-      let more = true
-      while (more && !this.stopped && this.panelHost === host) {
-        const version = host.timelineVersion
-        const page = await this._timeline({after: this.panelCursor})
-        if (this.stopped || this.panelHost !== host
-            || !host.applyTimeline(page, {version})) return
-        const cursor = String(page?.cursor || '')
-        more = Boolean(page?.has_newer) && cursor !== this.panelCursor
-        this.panelCursor = cursor || this.panelCursor
-      }
-    }
-    this.timelineRefresh = refresh()
-    try {
-      await this.timelineRefresh
-    } finally {
-      this.timelineRefresh = null
-    }
+  _refreshTimeline(): Promise<void> {
+    return refreshTimelineLoop(transportContextOf(this))
   }
 
-  async _loadOlder(before: string): Promise<void> {
-    const host = this.panelHost
-    if (!host) return
-    const version = host.timelineVersion
-    try {
-      const page = await this._timeline({before})
-      if (!this.stopped && this.panelHost === host) {
-        host.applyTimeline(page, {prepend: true, version})
-      }
-    } catch (error) {
-      if (!this.stopped && this.panelHost === host && version === host.timelineVersion) {
-        const verdict = classifyTransportError(
-          error as {code?: unknown; status?: unknown}, this.panelConfiguration)
-        if (verdict.terminal) this._raise(error)
-        else host.setHistoryError(true)
-      }
-    } finally {
-      if (version === host.timelineVersion) host.setLoadingOlder(false)
-    }
+  _loadOlder(before: string): Promise<void> {
+    return loadOlderTimeline(transportContextOf(this), before)
   }
 
   // -- the server's event stream ---------------------------------------------------------
 
-  async _eventLoop(): Promise<void> {
-    let backoff = 0
-    while (!this.stopped) {
-      const abortController = new AbortController()
-      this.eventAbortController = abortController
-      try {
-        const stream = await this.client.events(this.stored.lastEventId, abortController.signal)
-        backoff = 0
-        this.panelHost?.clearNotice()
-        await this._readEventStream(stream)
-      } catch (error) {
-        if (this.stopped) return
-        if (this._raise(error, 'reconnecting').terminal) return
-        backoff = backoffAfter(backoff)
-        await sleep(backoff)
-      } finally {
-        if (this.eventAbortController === abortController) this.eventAbortController = null
-      }
-    }
+  _eventLoop(): Promise<void> {
+    return runEventLoop(transportContextOf(this))
   }
 
-  async _readEventStream(stream: ReadableStream<Uint8Array>): Promise<void> {
-    for await (const batch of sseBatches(stream, () => this.stopped)) {
-      for (const frame of batch) {
-        // Frames that were parsed before a stop may still sit in the current batch. Do not
-        // handle them, and above all never `_save` after a terminal stop: the session's
-        // storage was just cleared, and saving would resurrect what it said goodbye to.
-        // Breaking (not returning) still lets the batch's final timeline fetch run -- that
-        // is how the panel shows the last message of a session that ended mid-batch.
-        if (this.stopped) break
-        const event = JSON.parse(frame.data) as WireEvent
-        await this._handleEvent(event)
-        if (this.stopped) break
-        this.stored.lastEventId = frame.id
-        this._save()
-        if (event.kind === 'action') {
-          const actionId = event.payload.action_id
-          if (this.stored.cachedResult?.action_id === actionId) this.stored.cachedResult = null
-          if (this.stored.inFlight?.action_id === actionId) this.stored.inFlight = null
-          this._save()
-        }
-      }
-      // One projection fetch per delivered batch, not per event: the panel renders the
-      // server's timeline, so it has to come from the server.
-      await this._refreshTimeline().catch(() => {})
-    }
+  _readEventStream(stream: ReadableStream<Uint8Array>): Promise<void> {
+    return consumeEventStream(transportContextOf(this), stream)
   }
 
-  async _handleEvent(event: WireEvent): Promise<void> {
-    const turnId = String(event.turn_id || event.payload?.turn_id || this.stored.activeMessageId || '')
-    switch (event.kind) {
-      case 'action':
-        await this._handleAction(event.payload as unknown as ActionEnvelope)
-        return
-      case 'progress': {
-        const mapped = this.panelConfiguration?.progress_states?.[String(event.payload.state || '')]
-        // A session may be open on several pages. While this page waits on a turn of its
-        // own, another page's turn moving or ending is that page's, not this one's.
-        const own = this.stored.activeMessageId
-        if (own && turnId !== own) return
-        if (mapped?.terminal) {
-          this._finishTurn(turnId)
-          // A confirmation whose turn is over can never be answered. Leaving it up is how a
-          // person ends up pressing a dead button with the composer locked behind it.
-          const stale = this.panelHost?.snapshot().pendingApproval
-          if (stale && (!stale.turn_id || stale.turn_id === turnId)) {
-            delete this.stored.approvals[stale.approval_id]
-            this._save()
-            this.panelHost?.setPendingApproval(null)
-          }
-        }
-        // The panel state each progress state maps to is the server's table; an unmapped
-        // state means the contract moved and must be noticed, not papered over here.
-        this._panelState(mapped ? mapped.panel_state : 'acting')
-        return
-      }
-      case 'terminal':
-        if (this._lapsed(String(event.payload?.reason || ''))) return
-        this._finishTurn(turnId)
-        this._panelState('ended')
-        // The terminal cursor is durable once this returns. A closed server session has no
-        // future events, and another GET would only turn the final UI into a reconnect loop.
-        this.endState = 'ended'
-        this.stopped = true
-        return
-      case 'approval_required': {
-        this._panelState('awaiting_confirmation')
-        const request = event.payload as unknown as ApprovalRequest
-        const decided = this.stored.approvals[request.approval_id] as 'approved' | 'denied' | 'prefill' | undefined
-        if (decided) {
-          // A document that reloaded between deciding and posting finishes the POST rather
-          // than asking again: the decision is already recorded and idempotent.
-          await this._postApproval(request, decided)
-          return
-        }
-        if (!this.panelHost) {
-          // No panel means nobody can be asked, and an unanswered write must not proceed.
-          await this._postApproval(request, 'denied')
-          return
-        }
-        this.panelHost.setPendingApproval(request)
-      }
-    }
-  }
-
-  private _finishTurn(turnId: string): void {
-    const guard = this.config?.pageWriteGuard
-    if (guard && this.writeGuardUntil > 0 && this.stored.activeMessageId === turnId) {
-      this.writeGuardUntil = 0
-      detach('close page write guard', closeWriteGuard(guard, fetch, this.guardWindow))
-    }
-    this.stored.taskInFlight = false
-    this.stored.activeMessageId = ''
-    this.stored.cancellationPending = false
-    // A terminal receipt settles this turn's decisions too. Keeping consumed
-    // approvals would make every later closed handshake look like live recovery.
-    // Unfinished turns retain their decisions until the server settles them.
-    this.stored.approvals = {}
-    this._save()
-    this.panelHost?.setConnection({busy: false, stopping: false})
-    this.panelHost?.clearOptimisticOnce(turnId)
-    const replacement = this.replacementText
-    this.replacementText = ''
-    if (replacement && !this.stopped) {
-      soon('submit replacement', () => {
-        if (!this.stopped) detach('submit replacement', this.submitTask(replacement))
-      })
-    }
+  _handleEvent(event: WireEvent): Promise<void> {
+    return handleWireEvent(turnContextOf(this), event)
   }
 
   private _clearHighlight(): void {
-    this.highlightHandle?.clear()
-    this.highlightHandle = null
+    clearPageHighlight(turnContextOf(this))
   }
 
-  /**
-   * A person's real gesture on the page is theirs: it is never held back, never swallowed
-   * and never stops the assistant. Two things follow from it. The marker the assistant
-   * left on a control is cleared; a form guide instead follows scrolling and review. The
-   * read-only window the assistant opened for its own page work is closed at once, before
-   * the application handles the gesture, so what the person does is not refused as if
-   * the assistant had done it. The assistant opens
-   * the window again before its next action, and the server checks that action against a
-   * fresh observation either way.
-   */
   _userActed(event: Event): void {
-    if (!event.isTrusted) return
-    if (event.composedPath().includes(this.panelContainer as EventTarget)) return
-    if (!this.highlightHandle?.preserveOnInteraction) this._clearHighlight()
-    const guard = this.config?.pageWriteGuard
-    if (guard && this.writeGuardUntil > Date.now()) {
-      this.writeGuardUntil = 0
-      detach('close page write guard for the person', closeWriteGuard(guard, fetch, this.guardWindow))
-    }
+    handleUserActed(turnContextOf(this), event)
   }
 
   // -- observing the page ------------------------------------------------------------------
 
-  async observe(causedByActionId = '', signal?: AbortSignal): Promise<ObservationEnvelope> {
-    if (signal?.aborted) throw createAbortError()
-    const page = this.page
-    const state = await abortable(page.read(), signal)
-    if (signal?.aborted) throw createAbortError()
-    const epoch = ++this.stored.epoch
-    this._save()
-    const reading = page.describe(state, epoch)
-    const applicationState = page.readiness()
-    const readiness = renderState(this.currentObservation?.observation ?? null,
-      reading.observation, this.pendingView, applicationState.blocked, applicationState.pending)
-    this.pendingView = readiness.pendingView
-    reading.observation.render_state = readiness.state
-    const envelope: ObservationEnvelope = {
-      schema_version: WIRE_VERSION,
-      session_id: this.sessionId,
-      observation_id: `${this.stored.clientId}:${epoch}`,
-      page_epoch: epoch,
-      observation: reading.observation,
-      events: [],
-      caused_by_action_id: causedByActionId,
-    }
-    this.currentObservation = envelope
-    this.observationFingerprints = reading.fingerprints
-    this.observedUrl = reading.canonicalUrl
-    return envelope
+  observe(causedByActionId = '', signal?: AbortSignal): Promise<ObservationEnvelope> {
+    return observePage(turnContextOf(this), causedByActionId, signal)
   }
 
-  /**
-   * Whether an action is still about the page the server planned it against: the same
-   * route, and -- for anything that touches an element -- the same element, by everything
-   * its meaning depends on.
-   */
   _actionFreshness(command: ActionCommand): Freshness {
-    if (command?.action === 'observe') return {fresh: true, reason: ''}
-    const observedUrl = this.observedUrl || canonicalUrl(
-      this.currentObservation?.observation?.url || location.href)
-    if (canonicalUrl(location.href) !== observedUrl) {
-      return {fresh: false, reason: 'the page URL changed after the last observation'}
-    }
-    if (command?.action === 'apply_facet') {
-      const ref = command.args?.ref
-      const expected = this.currentObservation?.observation?.facet_candidates
-        ?.find(item => item.ref === ref)
-      let actual: typeof expected
-      try { actual = this.page.facetCandidate(ref) } catch { /* unavailable stays stale */ }
-      if (!expected || !actual || expected.kind !== actual.kind ||
-          expected.name !== actual.name || expected.active !== actual.active) {
-        return {fresh: false, reason: 'the page facet changed after the last observation'}
-      }
-      return {fresh: true, reason: ''}
-    }
-    if (command?.action === 'handoff_form') {
-      const fields = command.args?.fields
-      if (!Array.isArray(fields) || !fields.length) {
-        return {fresh: false, reason: 'the form handoff fields are invalid'}
-      }
-      for (const field of fields) {
-        const ref = String((field as {ref?: unknown})?.ref || '')
-        if (!ref) {
-          if (!this.page.verifyFormFields([field], this.currentObservation?.observation.elements || [])) {
-            return {fresh: false, reason: 'an entered form control changed or lost its current instance'}
-          }
-          continue
-        }
-        const expected = this.observationFingerprints.get(ref)
-        if (expected === undefined || this.page.fingerprint(ref) !== expected) {
-          return {fresh: false, reason: 'a form field changed after the last observation'}
-        }
-      }
-      const submit = command.args?.submit as FormSubmitTarget | undefined
-      if (submit) {
-        const expected = this.observationFingerprints.get(submit.ref)
-        if (expected === undefined || this.page.fingerprint(submit.ref) !== expected) {
-          return {fresh: false, reason: 'the form submit control changed after observation'}
-        }
-      }
-      return {fresh: true, reason: ''}
-    }
-    if (!['click', 'fill', 'select', 'submit', 'highlight', 'reveal', 'form_model', 'form_submit']
-        .includes(command?.action)) {
-      return {fresh: true, reason: ''}
-    }
-    // Old constructed test shells have no map. Every real Runtime replaces this map during
-    // observe(), before it can receive an action.
-    if (!(this.observationFingerprints instanceof Map)) return {fresh: true, reason: ''}
-    const ref = String(command?.args?.ref || '')
-    const expected = this.observationFingerprints.get(ref)
-    let actual = 'missing'
-    try { actual = this.page.fingerprint(ref) } catch { /* missing stays fail-closed */ }
-    if (expected === undefined || actual !== expected) {
-      return {fresh: false, reason: 'the target element changed after the last observation'}
-    }
-    return {fresh: true, reason: ''}
+    return checkActionFreshness(turnContextOf(this), command)
   }
 
   // -- one action, from the server's request to the result it counts -------------------
 
-  async _handleAction(action: ActionEnvelope): Promise<void> {
-    if (await this._replayOrRecover(action)) return
-    if (await this._rejectIfNotCurrent(action)) return
-    if (await this._rejectWithoutWriteGuard(action)) return
-    const before = this.currentObservation
-    if (!before) return
-    const navigation = this._navigationExpectation(action.command)
-    const executing = await this._prepare(action, before, navigation)
-    if (!await this._claim(action, executing)) return
-    const outcome = await this._dispatch(action, executing, navigation)
-    await this._settle(executing, before, outcome)
+  _handleAction(action: ActionEnvelope): Promise<void> {
+    return handleActionEnvelope(turnContextOf(this), action)
   }
 
-  /** A result already written for this action is resent; an interrupted one is recovered. */
-  private async _replayOrRecover(action: ActionEnvelope): Promise<boolean> {
-    if (this.stored.cachedResult?.action_id === action.action_id) {
-      await this._sendResult(this.stored.cachedResult)
-      return true
-    }
-    const inFlight = this.stored.inFlight
-    if (inFlight?.action_id === action.action_id
-        && (inFlight.phase !== 'prepared' || inFlight.runtime_instance_id !== this.runtimeInstanceId)) {
-      const observation = await this.observe(action.action_id)
-      await this._post('/observations', observation)
-      await this._recoverAfterNavigation(observation)
-      return true
-    }
-    return false
+  _prepare(action: ActionEnvelope, before: ObservationEnvelope,
+           navigation: NavigationExpectation): Promise<ActionEnvelope> {
+    return prepareAction(turnContextOf(this), action, before, navigation)
   }
 
-  /** Refuse an action planned against a page that has since changed, or whose time is up. */
-  private async _rejectIfNotCurrent(action: ActionEnvelope): Promise<boolean> {
-    const current = this.currentObservation
-    const expired = Date.now() > action.deadline
-    if (!current || action.based_on_observation_id !== current.observation_id
-        || action.page_epoch !== current.page_epoch || expired) {
-      await this._reject(action, expired ? 'deadline_expired' : 'stale_observation',
-        'Action was not executed because its page observation is no longer current.')
-      return true
-    }
-    const freshness = this._actionFreshness(action.command)
-    if (!freshness.fresh) {
-      await this._reject(action, 'stale_observation',
-        `Action was not executed because ${freshness.reason}.`)
-      return true
-    }
-    return false
+  _dispatch(action: ActionEnvelope, executing: ActionEnvelope,
+            navigation: NavigationExpectation): Promise<DispatchOutcome> {
+    return dispatchAction(turnContextOf(this), action, executing, navigation)
   }
 
-  /**
-   * An application that names a page write guard gets no page interaction without the guard
-   * open: the action is refused, before anything is written ahead or claimed, rather than
-   * run on a session that could still change data.
-   */
-  private async _rejectWithoutWriteGuard(action: ActionEnvelope): Promise<boolean> {
-    // Observation only reads the controller's projection. Opening a write window for it
-    // made a successful API query fail whenever that unrelated endpoint was unavailable.
-    if (action.command.action === 'observe' || action.command.action === 'form_model') return false
-    const path = this.config?.pageWriteGuard
-    if (path === undefined || path === '') return false
-    this.writeGuardUntil = 0
-    const expiresAt = await openWriteGuard(path, fetch, this.guardWindow)
-    if (expiresAt !== null) {
-      // Kept so the receipt can say whether the window still covered the action when it
-      // settled. A window that lapsed mid-action proves nothing about what the action did.
-      this.writeGuardUntil = expiresAt * 1000
-      return false
-    }
-    await this._reject(action, 'capability_refused',
-      'page_write_guard_unavailable: the application could not make this session read-only, '
-      + 'so the action was not executed.')
-    return true
-  }
-
-  private async _reject(action: ActionEnvelope, code: string, detail: string): Promise<void> {
-    const observation = await this.observe(action.action_id)
-    await this._deliver(results.rejected(action, observation, code, detail))
-  }
-
-  /**
-   * Write the action ahead of running it: everything after this may destroy the JavaScript
-   * context, and the next document recovers from exactly what is written here.
-   */
-  private async _prepare(action: ActionEnvelope, before: ObservationEnvelope,
-                         navigation: NavigationExpectation): Promise<ActionEnvelope> {
-    const prior = this.stored.inFlight?.action_id === action.action_id ? this.stored.inFlight : null
-    const startedUrl = absoluteUrl(location.href)
-    const wal = prior || await navigationWal(startedUrl, navigation.url, navigation.kind, this.redactor)
-    const executing: ActionEnvelope = {...action, phase: 'prepared',
-      started_at: prior?.started_at || Date.now(),
-      started_url_raw: startedUrl,
-      started_url_digest: wal.started_url_digest,
-      started_url_display: prior?.started_url_display || before.observation.url,
-      expected_url_digest: wal.expected_url_digest,
-      expected_url_display: wal.expected_url_display,
-      navigation_kind: wal.navigation_kind || navigation.kind,
-      write_guard_path: this.config?.pageWriteGuard || '',
-      write_guard_expires_at_ms: this.writeGuardUntil,
-      document_id: prior?.document_id || this.documentId,
-      runtime_instance_id: this.runtimeInstanceId}
-    // Refresh a same-runtime prepared replay with the window confirmed before this dispatch.
-    const durable: Partial<ActionEnvelope> = {...executing}
-    delete durable.started_url_raw
-    this.stored.inFlight = {
-      ...durable,
-      command: {...executing.command, args: this.redactor.safeArgs(executing.command.args)},
-    } as ActionEnvelope
-    this._save()
-    return executing
-  }
-
-  /** Take the action for this Runtime; one another Runtime took can no longer be vouched for. */
-  private async _claim(action: ActionEnvelope, executing: ActionEnvelope): Promise<boolean> {
-    const claim = await this._post<{claimed?: boolean}>('/claims', {action_id: action.action_id})
-    if (!claim.claimed) {
-      const observation = await this.observe(action.action_id)
-      await this._post('/observations', observation)
-      await this._deliver(results.indeterminate(action, observation,
-        'Another runtime claimed this action; its execution state cannot be trusted after takeover.'))
-      return false
-    }
-    executing.phase = 'claimed'
-    if (this.stored.inFlight) this.stored.inFlight.phase = 'claimed'
-    this._save()
-    this._panelState('acting')
-    return true
-  }
-
-  /** Run the command, and wait for the navigation it was expected to cause. */
-  private async _dispatch(action: ActionEnvelope, executing: ActionEnvelope,
-                          navigation: NavigationExpectation,
-  ): Promise<{ok: boolean; code: string; detail: string; candidate_labels?: string[]; no_effect?: boolean;
-              execution_trace?: unknown; form_data?: unknown}> {
-    // Claiming is a network round trip. Neither the action deadline nor the application's
-    // confirmed window may have lapsed while it was pending; reject before page dispatch.
-    if (Date.now() >= action.deadline) {
-      return {ok: false, code: 'deadline_expired',
-        detail: 'the action deadline expired before page dispatch'}
-    }
-    // Reading the form data or the confirmation box changes nothing, so it needs no window either.
-    if (action.command.action !== 'observe' && action.command.action !== 'form_model' && this.config?.pageWriteGuard
-        && !(this.writeGuardUntil > Date.now())) {
-      return {ok: false, code: 'capability_refused',
-        detail: 'page_write_guard_unavailable: the confirmed window expired before page dispatch'}
-    }
-    if (action.command.action === 'highlight' && this.config?.pageWriteGuard) {
-      if (!await releaseWriteGuard(this.config.pageWriteGuard, fetch, this.guardWindow)) {
-        return {ok: false, code: 'capability_refused',
-          detail: 'the application did not acknowledge release of its read-only window'}
-      }
-      this.writeGuardUntil = 0
-    }
-    if (!PASSIVE_ACTIONS.has(action.command.action) && !this.stored.pageWorked) {
-      this.stored.pageWorked = true
-      this._save()
-    }
-    // A native submit can commit a child-frame navigation before execution returns. Arm the
-    // stable iframe element first so a fast server response cannot escape observation.
-    const signal = armChildFrameNavigation(navigation.frameElement)
-    try {
-      // The successor document must have started after this exact claimed command reached
-      // dispatch. Persist before execution, which can destroy this JavaScript context.
-      executing.dispatched_at = Date.now()
-      if (this.stored.inFlight?.action_id === executing.action_id) {
-        this.stored.inFlight.dispatched_at = executing.dispatched_at
-      }
-      this._save()
-      const result = await this._execute(action.command) as CommandOutcome | null
-      if (result?.native_navigation_expected || this._mayNavigate(action.command)) {
-        // What the expectation did not name is left to the wait's defaults: the top-level
-        // window and document.
-        const outcome = await waitForNavigation({
-          urlBefore: navigation.startedUrl || String(executing.started_url_raw || ''),
-          deadline: action.deadline, guardMs: this.config?.navigationGuardMs, signal,
-          ...(navigation.context === undefined ? {} : {context: navigation.context}),
-          ...(navigation.document === undefined ? {} : {documentBefore: navigation.document}),
-          ...(navigation.frameElement === undefined ? {} : {frameElement: navigation.frameElement}),
-        })
-        if (!outcome.navigated) {
-          throw new Error('navigation_timeout: expected navigation did not commit before deadline')
-        }
-      }
-      const ok = result?.success !== false
-      const execution_trace = results.executionTraceOf(result, action.command.action)
-      if (ok && action.command.action === 'handoff_form' && this.config?.pageWriteGuard) {
-        if (!await releaseWriteGuard(this.config.pageWriteGuard, fetch, this.guardWindow)) {
-          return {ok: false, code: 'capability_refused',
-            detail: 'the application did not acknowledge release of its read-only window'}
-        }
-        this.writeGuardUntil = 0
-      }
-      if (action.command.action === 'form_submit') {
-        await waitForSubmitToSettle(document, sleep,
-          {readSubmitBusy: this.submitBusyReader, readConfirmBox: this.confirmBoxReader})
-      }
-      if (action.command.action === 'form_submit' && this.config?.pageWriteGuard) {
-        // The permit covered this one click. Ending it is what returns the page to its
-        // ordinary, read-only window; an application that does not confirm is reported.
-        const released = await releaseWriteGuard(this.config.pageWriteGuard, fetch, this.guardWindow)
-        this.writeGuardUntil = 0
-        if (!released) {
-          return {ok: false, code: 'capability_refused',
-            detail: 'the application did not acknowledge the end of the approved click'}
-        }
-      }
-      const formData = (result as {form_data?: unknown} | null)?.form_data
-      return {
-        ok,
-        code: ok ? '' : 'element_not_actionable',
-        detail: ok ? '' : results.safeErrorDetail(result?.message || '', action.command, this.redactor),
-        ...(execution_trace ? {execution_trace} : {}),
-        ...(formData ? {form_data: formData} : {}),
-      }
-    } catch (error) {
-      if (error instanceof ChoiceUnavailable) {
-        return {ok: false, code: error.code, detail: error.message,
-          no_effect: error.no_effect,
-          candidate_labels: error.candidate_labels}
-      }
-      const detail = results.safeErrorDetail(
-        String((error as Error)?.message || error), action.command, this.redactor)
-      const code = ['origin_refused', 'bad_arguments', 'navigation_timeout', 'option_unavailable']
-        .find(prefix => detail.startsWith(prefix)) ?? 'page_error'
-      return {ok: false, code, detail}
-    } finally {
-      signal?.dispose()
-    }
-  }
-
-  /** Observe what the action left behind and report it. */
-  private async _settle(executing: ActionEnvelope, before: ObservationEnvelope,
-                        outcome: {ok: boolean; code: string; detail: string; candidate_labels?: string[]; no_effect?: boolean;
-                                  execution_trace?: unknown; form_data?: unknown}): Promise<void> {
-    const observation = await this.observe(executing.action_id)
-    if (executing.command.action === 'highlight' && outcome.ok &&
-        (!this.highlightHandle?.active() ||
-         before.observation.url !== observation.observation.url)) {
-      this._clearHighlight()
-      outcome = {ok: false, code: 'stale_observation',
-        detail: 'the highlighted control was no longer current at handoff'}
-    }
-    if (executing.command.action === 'handoff_form' && outcome.ok) {
-      const fields = executing.command.args?.fields
-      const rebound = Array.isArray(fields) ? fields.map((field: unknown) => {
-        const binding = field as FormHandoffField
-        const matches = observation.observation.elements.filter(element =>
-          formFieldMatches(element, binding))
-        return matches.length === 1 ? {...binding, ref: matches[0]!.ref}
-          : matches.length === 0 ? {...binding, ref: undefined} : null
-      }) : []
-      const submit = executing.command.args?.submit as FormSubmitTarget | undefined
-      const buttons = submit ? observation.observation.elements.filter(element =>
-        element.role === 'button' && element.name === submit.label &&
-        element.attrs.form_scope === submit.scope) : []
-      const submitReady = !submit || (buttons.length === 1 &&
-        this.highlightHandle?.active() && this.page.verifyFormSubmit(
-          {...submit, ref: buttons[0]!.ref}, rebound, observation.observation.elements))
-      if (before.observation.url !== observation.observation.url ||
-          before.observation.record_route !== observation.observation.record_route ||
-          observation.observation.render_state !== 'ready' ||
-          rebound.some(field => field === null) || !submitReady ||
-          !this.page.verifyFormFields(rebound, observation.observation.elements)) {
-        outcome = {ok: false, code: 'stale_observation',
-          detail: 'the form fields were no longer ready at handoff'}
-      }
-    }
-    if (executing.command.action === 'handoff_form' && !outcome.ok) {
-      this._clearHighlight()
-    }
-    // `navigated` is a change in the observed top-level URL. A child-frame commit satisfies
-    // the action guard, and its new content travels in the fresh observation instead.
-    const receipt = results.receipt(executing, {
-      ok: outcome.ok, code: outcome.code, detail: outcome.detail, observation,
-      navigated: before.observation.url !== observation.observation.url,
-      elapsedMs: Date.now() - Number(executing.started_at || 0),
-      urlBefore: this.currentObservation?.observation.url || '',
-      writeGuardHeld: this.writeGuardUntil > Date.now(),
-      ...(outcome.candidate_labels ? {candidateLabels: outcome.candidate_labels} : {}),
-      ...(outcome.no_effect ? {noEffect: true} : {}),
-      ...(outcome.execution_trace ? {execution_trace: outcome.execution_trace} : {}),
-      ...(outcome.form_data ? {form_data: outcome.form_data} : {}),
-    }, this.redactor)
-    await this._deliver(results.completed(executing, receipt, observation))
+  _settle(executing: ActionEnvelope, before: ObservationEnvelope,
+          outcome: DispatchOutcome): Promise<void> {
+    return settleAction(turnContextOf(this), executing, before, outcome)
   }
 
   _execute(command: ActionCommand): Promise<unknown> {
-    const showTarget = () => {
-      if (!this.panelHost) return
-      try {
-        const ref = command.action === 'click' ? command.args?.ref : undefined
-        this.panelHost.setActivityPoint(ref === undefined ? null
-          : activityPoint(this.page.element(ref) as Element | null))
-      } catch { /* A visual hint must never change a command's outcome. */ }
-    }
-    showTarget()
-    // Keep synchronous validation failures synchronous. PageController can scroll the
-    // target into view during execution, so refresh geometry when its promise settles.
-    return this._executePageCommand(command).finally(showTarget)
+    return executeActionCommand(turnContextOf(this), command)
   }
 
-  private _executePageCommand(command: ActionCommand): Promise<unknown> {
-    if (command.action === 'highlight') {
-      this._clearHighlight()
-      this.highlightHandle = this.page.highlight(command.args?.ref,
-        this.stored?.inFlight?.turn_id ?? this.stored?.activeMessageId ?? '')
-      return Promise.resolve({success: true, message: 'control highlighted for the person'})
-    }
-    if (command.action === 'handoff_form') {
-      if (!this.currentObservation || !this.page.verifyFormFields(
-        command.args?.fields, this.currentObservation.observation.elements)) {
-        throw new Error('bad_arguments: form fields do not match the current page')
-      }
-      if (command.args?.submit) {
-        if (!this.page.verifyFormSubmit(command.args.submit, command.args.fields,
-          this.currentObservation.observation.elements)) {
-          throw new Error('bad_arguments: form submit control does not match the current page')
-        }
-        this._clearHighlight()
-        this.highlightHandle = this.page.guideSubmit(command.args.submit.ref,
-          this.stored?.inFlight?.turn_id ?? this.stored?.activeMessageId ?? '')
-      }
-      return Promise.resolve({success: true, message: 'form fields verified for handoff'})
-    }
-    if (command.action === 'form_model') {
-      // Kind `row` reads the table row a control belongs to, `confirm` the application's
-      // own confirmation box; anything else reads the form.
-      if (command.args?.kind === 'confirm') {
-        if (!this.confirmBoxReader) {
-          return Promise.resolve({success: false, message: 'confirmation box reading unavailable'})
-        }
-        return Promise.resolve({success: true,
-          form_data: readConfirmBox(document, {readConfirmBox: this.confirmBoxReader}),
-          message: 'confirmation box read'})
-      }
-      if (command.args?.kind === 'restore' || command.args?.kind === 'validate') {
-        const element = this.page.element(command.args?.ref)
-        if (!this.restoreElementFormModel) throw new Error('bad_arguments: form restoration unavailable')
-        const validating = command.args?.kind === 'validate'
-        const request = validating ? {expected: this.page.formModel(command.args?.ref)?.model, values: {}} : command.args
-        return this.restoreElementFormModel(element, request).then(ok => {
-          if (!ok && !validating) throw new Error('bad_arguments: form restoration or validation failed')
-          const form = this.page.formModel(command.args?.ref)
-          if (!form) throw new Error('bad_arguments: restored form unreadable')
-          return {success: true, form_data: {...form, validation: ok}, message: validating ? 'application validation checked' : 'page opening changes restored'}
-        })
-      }
-      if (command.args?.kind === 'row') {
-        const row = this.page.rowRecord(command.args?.ref)
-        if (!row) throw new Error('bad_arguments: the table row is not readable')
-        return Promise.resolve({success: true, form_data: row, message: 'row record read'})
-      }
-      const form = this.page.formModel(command.args?.ref)
-      if (!form) throw new Error(`bad_arguments: the form data is not readable (${this.page.formUnreadable || 'unknown'})`)
-      return Promise.resolve({success: true, form_data: form, message: 'form data read'})
-    }
-    if (command.action === 'form_submit') {
-      // The one click an approved card allows. What was approved must still be what is
-      // on the page: the same form data, or the same table row.
-      if (command.args?.kind === 'confirm') {
-        if (!pressConfirmButton(String(command.args?.label ?? ''), document,
-            {pressConfirmButton: this.confirmButtonPresser})) {
-          throw new Error('bad_arguments: the confirmation box does not offer that button')
-        }
-        return sleep(300).then(() => ({success: true, message: 'confirmation button pressed'}))
-      }
-      // The control itself must still be the one the card named, by its own text.
-      const target = this.page.element(command.args?.ref) as {textContent?: string | null} | null | undefined
-      if (!sameControlText(command.args?.label, target?.textContent)) {
-        throw new Error('bad_arguments: the control is no longer the one that was approved')
-      }
-      if (command.args?.kind === 'row') {
-        const row = this.page.rowRecord(command.args?.ref)
-        if (row?.record_id !== String(command.args?.record_id ?? '') || row?.check !== command.args?.row_check) {
-          throw new Error('bad_arguments: the table row changed after approval')
-        }
-      } else if (this.page.formModel(command.args?.ref)?.check !== String(command.args?.check ?? '')) {
-        throw new Error('bad_arguments: the form data changed after approval')
-      }
-      return executeCommand({...command, action: 'click'}, () => this.page, this.config ?? {},
-        this.openPage ? url => this._openInApplication(url) : undefined)
-    }
-    if (command.action === 'apply_facet' && !this._actionFreshness(command).fresh) {
-      throw new Error('bad_arguments: page facet changed before dispatch')
-    }
-    return executeCommand(command, () => this.page, this.config ?? {},
-      this.openPage ? url => this._openInApplication(url) : undefined)
+  /** @internal */
+  _executePageCommand(command: ActionCommand): Promise<unknown> {
+    return executePageCommand(turnContextOf(this), command)
   }
 
-  /**
-   * Ask the application to open one of its own pages in this document. An application
-   * that throws, answers anything but true, or does not answer in time has not opened it:
-   * the page is then loaded, which is right whatever the application went on to do.
-   */
-  async _openInApplication(url: string): Promise<boolean> {
-    const opener = this.openPage
-    if (!opener) return false
-    let stopWaiting: (() => void) | undefined
-    try {
-      // The losing side of the race must not leave its timer running: a cancelled wait
-      // does not hold the host's event loop (or a Node VM contract) for the full timeout.
-      return await new Promise<boolean>(resolve => {
-        stopWaiting = later('application open', APPLICATION_OPEN_MS, () => resolve(false))
-        Promise.resolve(opener(url)).then(
-          opened => resolve(opened === true),
-          () => resolve(false))
-      })
-    } catch {
-      return false
-    } finally {
-      stopWaiting?.()
-    }
+  _openInApplication(url: string): Promise<boolean> {
+    return openInApplication(this.openPage, url)
   }
 
   /** Whether `command` can leave the page. Kept as a method: it is a conformance seam. */
@@ -1631,86 +754,38 @@ export class EmbeddedWebRuntime {
 
   // -- results ---------------------------------------------------------------------------
 
-  /** Cache a result durably, then send it: a crash in between resends, never re-executes. */
-  private async _deliver(result: ActionResultEnvelope): Promise<void> {
-    this.stored.cachedResult = result
-    this._save()
-    await this._sendResult(result)
+  _deliver(result: ActionResultEnvelope): Promise<void> {
+    return deliverResultEnvelope(transportContextOf(this), result)
   }
 
-  async _sendResult(result: ActionResultEnvelope): Promise<void> {
-    await this._post('/results', result)
-    // Keep both records until the SSE cursor is durably advanced. A crash after the POST
-    // response but before that write would otherwise replay and execute again.
-    const after = result.observation_after
-    if (after && (!this.currentObservation || after.page_epoch >= this.currentObservation.page_epoch)) {
-      this.currentObservation = after
-    }
-    this._panelState('observing')
+  _sendResult(result: ActionResultEnvelope): Promise<void> {
+    return sendResultEnvelope(transportContextOf(this), result)
   }
 
-  async _recoverAfterNavigation(observation: ObservationEnvelope): Promise<void> {
-    const action = this.stored.inFlight
-    if (!action || action.page_epoch >= observation.page_epoch) return
-    let result: ActionResultEnvelope
-    if (action.phase === 'prepared') {
-      result = results.rejected(action, observation, 'runtime_replaced',
-        'The previous runtime ended before the action was dispatched.')
-    } else if (await recoveryProvesNavigation(
-      action, location.href, this.documentId, documentNavigation())) {
-      const guardExpiry = action.write_guard_expires_at_ms
-      const receipt = results.receipt(action, {
-        ok: true, code: '', detail: '', observation,
-        navigated: action.started_url_display !== observation.observation.url,
-        elapsedMs: Date.now() - Number(action.started_at || 0),
-        urlBefore: this.currentObservation?.observation.url || '',
-        writeGuardHeld: Boolean(this.config?.pageWriteGuard &&
-          action.write_guard_path === this.config.pageWriteGuard &&
-          typeof guardExpiry === 'number' && Number.isFinite(guardExpiry) &&
-          guardExpiry > Date.now()),
-      }, this.redactor)
-      result = results.completed(action, receipt, observation)
-    } else {
-      result = results.indeterminate(action, observation,
-        'The prior page ended without a trustworthy receipt; the action will not be retried.')
-    }
-    await this._deliver(result)
+  _recoverAfterNavigation(observation: ObservationEnvelope): Promise<void> {
+    return recoverActionAfterNavigation(turnContextOf(this), observation)
   }
 
-  async _retryCachedResult(): Promise<boolean> {
-    let backoff = 0
-    while (!this.stopped && this.stored.cachedResult) {
-      try {
-        await this._sendResult(this.stored.cachedResult)
-        return true
-      } catch (error) {
-        if (this._raise(error, 'reconnecting').terminal) return false
-        await sleep(backoff)
-        backoff = backoffAfter(backoff)
-      }
-    }
-    return false
+  _retryCachedResult(): Promise<boolean> {
+    return retryCachedResultLoop(transportContextOf(this))
   }
 
-  async _resumeAfterDeferredResult(): Promise<void> {
-    if (!await this._retryCachedResult() || this.stopped) return
-    // The cached result can describe the document that just navigated away. Refresh the
-    // selector map and server observation before consuming another action here.
-    let backoff = 0
-    while (!this.stopped) {
-      try {
-        const observation = await this.observe(this.stored.inFlight?.action_id || '')
-        await this._post('/observations', observation)
-        this._panelState('ready')
-        if (!this.stopped) detach('event loop', this._eventLoop())
-        return
-      } catch (error) {
-        if (this._raise(error, 'reconnecting').terminal) return
-        await sleep(backoff)
-        backoff = backoffAfter(backoff)
-      }
-    }
+  _resumeAfterDeferredResult(): Promise<void> {
+    return resumeDeferredResultLoop(transportContextOf(this))
   }
+}
+
+/**
+ * What the page around a Runtime supplies when it knows more than the Runtime does.
+ *
+ * `windowToken` names the page's window to the application's write guard, so two pages
+ * of one person hold -- and end -- theirs independently. `onNewConversation` lets the
+ * page switch to a fresh session entirely; it answers whether it did, and a `false`
+ * falls back to asking the session to renew its conversation in place.
+ */
+interface RuntimeHooks {
+  windowToken?: () => Promise<string>
+  onNewConversation?: () => boolean
 }
 
 /**
@@ -1721,19 +796,6 @@ export class EmbeddedWebRuntime {
  * page's shell stays and says why (`boot.ts`), and a shell of the Runtime's own goes with it,
  * since one left behind would be a second assistant root the next attempt cannot see.
  */
-/**
- * What the page around a Runtime supplies when it knows more than the Runtime does.
- *
- * `windowToken` names the page's window to the application's write guard, so two pages
- * of one person hold -- and end -- theirs independently. `onNewConversation` lets the
- * page switch to a fresh session entirely; it answers whether it did, and a `false`
- * falls back to asking the session to renew its conversation in place.
- */
-export interface RuntimeHooks {
-  windowToken?: () => Promise<string>
-  onNewConversation?: () => boolean
-}
-
 export async function startEmbeddedRuntime(config: RuntimeConfig,
                                            shell: PanelShell | null = null,
                                            hooks: RuntimeHooks = {}): Promise<EmbeddedWebRuntime | null> {

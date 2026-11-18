@@ -1,6 +1,12 @@
 /** Yudao/Element Plus form surface: the read sources the application vouches for and its
- * own confirmation and submit-busy indicators. These conventions belong to the
- * application; the core Runtime holds no default for them. */
+ * own confirmation and submit-busy indicators. Generic Element Plus helpers live in
+ * `../element-plus/form.js`; Yudao API paths and style identifiers stay here. */
+import {
+  hasElBusyIndicator,
+  installElOverlayOffset,
+  pressElConfirmButton,
+  readElConfirmBox,
+} from '../element-plus/form.js'
 
 const FORM_SOURCE = /^\/admin-api\/(?:[A-Za-z0-9_-]+\/)+(?:get|page|list)(?:-[a-z0-9-]+)?$/
 const ROW_SOURCE = /^\/admin-api\/(?:[A-Za-z0-9_-]+\/)+(?:page|list)(?:-[a-z0-9-]+)?$/
@@ -12,36 +18,8 @@ export function acceptReadSource(source, kind) {
     (kind === 'row' ? ROW_SOURCE : FORM_SOURCE).test(source)
 }
 
-const BOX = '.el-message-box'
+export {readElConfirmBox as readConfirmBox, pressElConfirmButton as pressConfirmButton}
 
-const shown = node => {
-  const rect = node.getBoundingClientRect()
-  return rect.width > 0 && rect.height > 0
-}
-
-/** The open Element Plus message box, if one is on the page. Raw read; the Runtime
- * bounds the text like any other page fact. */
-export function readConfirmBox(doc = document) {
-  const box = Array.from(doc.querySelectorAll(BOX)).find(shown)
-  if (!box) return {open: false}
-  return {open: true,
-    title: (box.querySelector('.el-message-box__title')?.textContent ?? '').trim(),
-    text: (box.querySelector('.el-message-box__message')?.textContent ?? '').trim(),
-    buttons: Array.from(box.querySelectorAll('.el-message-box__btns button'))
-      .map(button => (button.textContent ?? '').trim()).filter(Boolean)}
-}
-
-/** Press one button of the open message box by its exact label; false if not offered. */
-export function pressConfirmButton(label, doc = document) {
-  const box = Array.from(doc.querySelectorAll(BOX)).find(shown)
-  const matches = Array.from(box?.querySelectorAll('.el-message-box__btns button') ?? [])
-    .filter(button => (button.textContent ?? '').replace(/\s+/g, ' ').trim() === label && !button.disabled)
-  if (matches.length !== 1) return false
-  matches[0].click()
-  return true
-}
-
-const BUSY_SELECTORS = '.el-loading-mask, .el-button.is-loading, [aria-busy="true"]'
 let submitRequestsInFlight = 0
 
 function installSubmitTracker(win) {
@@ -107,77 +85,10 @@ if (typeof window !== 'undefined') installSubmitTracker(window)
 /** Element Plus's own submit-in-flight indicators and active admin-api write requests. */
 export function readSubmitBusy(doc = document) {
   installSubmitTracker(doc?.defaultView)
-  return submitRequestsInFlight > 0 || Array.from(doc.querySelectorAll(BUSY_SELECTORS)).some(shown)
-}
-
-const OVERLAY_OFFSET_STYLE_ID = 'woa-yudao-overlay-offset'
-const OVERLAY_OFFSET_CSS = '.el-overlay, .el-drawer__wrapper { right: var(--woa-drawer-offset, 0px); }'
-const overlayOffsetOwners = new WeakMap()
-
-function discoverCspNonce(doc) {
-  const withNonce = doc.querySelector?.('style[nonce], script[nonce]')
-  const attr = withNonce?.nonce || withNonce?.getAttribute?.('nonce')
-  if (attr) return attr
-  return doc.querySelector?.('meta[property="csp-nonce"], meta[name="csp-nonce"]')?.getAttribute?.('content') || ''
+  return submitRequestsInFlight > 0 || hasElBusyIndicator(doc)
 }
 
 /** Keep Element Plus fixed overlays/drawers clear of the side-by-side assistant drawer. */
 export function installOverlayOffset(doc = document) {
-  if (!doc || !doc.documentElement) return () => {}
-  let entry = overlayOffsetOwners.get(doc)
-  if (!entry) {
-    let sheet = null
-    let styleEl = null
-    const win = doc.defaultView
-    const SheetCtor = win?.CSSStyleSheet ?? globalThis.CSSStyleSheet
-    if (typeof SheetCtor === 'function' && Array.isArray(doc.adoptedStyleSheets)) {
-      try {
-        sheet = new SheetCtor()
-        sheet.replaceSync(OVERLAY_OFFSET_CSS)
-        doc.adoptedStyleSheets = [...doc.adoptedStyleSheets, sheet]
-      } catch {
-        sheet = null
-      }
-    }
-    if (!sheet) {
-      const existing = doc.getElementById?.(OVERLAY_OFFSET_STYLE_ID)
-      styleEl = existing || doc.createElement('style')
-      styleEl.id = OVERLAY_OFFSET_STYLE_ID
-      const nonce = discoverCspNonce(doc)
-      if (nonce) styleEl.nonce = nonce
-      styleEl.textContent = OVERLAY_OFFSET_CSS
-      if (!existing) (doc.head || doc.documentElement).appendChild(styleEl)
-    }
-    const teardown = () => {
-      const current = overlayOffsetOwners.get(doc)
-      if (!current) return
-      overlayOffsetOwners.delete(doc)
-      if (current.sheet && Array.isArray(doc.adoptedStyleSheets)) {
-        doc.adoptedStyleSheets = doc.adoptedStyleSheets.filter(item => item !== current.sheet)
-      }
-      if (current.styleEl && current.styleEl.parentNode) {
-        current.styleEl.parentNode.removeChild(current.styleEl)
-      }
-      if (win?.removeEventListener) {
-        win.removeEventListener('pagehide', current.teardown)
-        win.removeEventListener('unload', current.teardown)
-      }
-    }
-    entry = {count: 0, sheet, styleEl, teardown}
-    overlayOffsetOwners.set(doc, entry)
-    if (win?.addEventListener) {
-      win.addEventListener('pagehide', teardown, {once: true})
-      win.addEventListener('unload', teardown, {once: true})
-    }
-  }
-  entry.count += 1
-  let released = false
-  return () => {
-    if (released) return
-    released = true
-    const current = overlayOffsetOwners.get(doc)
-    if (!current) return
-    current.count = Math.max(0, current.count - 1)
-    if (current.count === 0) current.teardown()
-  }
+  return installElOverlayOffset(doc, {styleId: 'woa-yudao-overlay-offset'})
 }

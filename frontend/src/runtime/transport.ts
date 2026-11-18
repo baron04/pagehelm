@@ -87,7 +87,7 @@ export class SessionClient {
 }
 
 /** One server-sent event: its id and the JSON its data lines carry. */
-export interface SseFrame {
+interface SseFrame {
   id: string
   data: string
 }

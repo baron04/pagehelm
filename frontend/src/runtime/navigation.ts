@@ -221,7 +221,7 @@ export function scrubLegacyNavigationUrls(action: ActionEnvelope | null | undefi
   return clean
 }
 
-export interface DocumentNavigation {
+interface DocumentNavigation {
   url: string
   startedAt: number
   type: 'navigate' | 'reload'
