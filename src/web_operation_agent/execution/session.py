@@ -166,6 +166,8 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                  data_reads: DataReadTools | None = None,
                  business_mutation_approval=None,
                  operation_confirmation=None,
+                 initial_operation_granted: bool = False,
+                 on_operation_granted: Callable[[], None] | None = None,
                  approval_hold_s: int = 0,
                  operation_hold_s: int = 0,
                  allow_clarification: bool = False,
@@ -642,7 +644,9 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
             business_approval=business_mutation_approval,
             operation_confirmation=operation_confirmation,
             cancelled=self._cancel_requested,
-            approval_hold_s=approval_hold_s, operation_hold_s=operation_hold_s)
+            approval_hold_s=approval_hold_s, operation_hold_s=operation_hold_s,
+            initial_operation_granted=initial_operation_granted,
+            on_operation_granted=on_operation_granted)
         self.contract: OperationContract = empty_contract(task.task_ref)
         self.contract_source = "none"
         self.bundle: EvidenceBundle | None = None

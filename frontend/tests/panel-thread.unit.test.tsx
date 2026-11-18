@@ -379,3 +379,87 @@ describe('Indeterminate outcome reconciliation (UX-06)', () => {
     expect(host.textContent).toContain(labels.reconcileNotApplied)
   })
 })
+
+describe('Composer draft recovery on failed delivery (BUG-01)', () => {
+  let host: HTMLDivElement
+  let root: Root
+
+  beforeEach(() => {
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    root = createRoot(host)
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    act(() => { root.unmount() })
+    host.remove()
+    vi.restoreAllMocks()
+  })
+
+  it('restores failed optimistic text into the composer and clears unedited draft on retry', () => {
+    let snap = makeSnapshot()
+    let notify: ((snapshot: PanelSnapshot) => void) | null = null
+    const retrySubmit = vi.fn()
+    const submit = vi.fn(() => {
+      snap = makeSnapshot({optimistic: {turnId: 't-fail', text: '请帮我查今天订单', failed: false}})
+      notify?.(snap)
+    })
+    const panelHost = makeHost(snap, {
+      snapshot: () => snap,
+      subscribe: listener => {
+        notify = listener
+        return () => { if (notify === listener) notify = null }
+      },
+      submit,
+      retrySubmit,
+    })
+
+    act(() => {
+      root.render(createElement(PanelWindow, {host: panelHost, allowedOrigins: []}))
+    })
+    const launcher = host.querySelector<HTMLButtonElement>('.woa-launcher')
+    if (launcher) act(() => { launcher.click() })
+
+    const textarea = () => host.querySelector<HTMLTextAreaElement>('#woa-composer-input')!
+    const setTextarea = (value: string) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
+      setter.call(textarea(), value)
+      textarea().dispatchEvent(new Event('input', {bubbles: true}))
+    }
+
+    act(() => { setTextarea('请帮我查今天订单') })
+    expect(textarea().value).toBe('请帮我查今天订单')
+    act(() => {
+      host.querySelector<HTMLFormElement>('form.woa-composer')!
+        .dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}))
+    })
+    expect(submit).toHaveBeenCalledExactlyOnceWith('请帮我查今天订单')
+    expect(textarea().value).toBe('')
+
+    act(() => {
+      snap = makeSnapshot({optimistic: {turnId: 't-fail', text: '请帮我查今天订单', failed: true}})
+      notify?.(snap)
+    })
+    expect(textarea().value).toBe('请帮我查今天订单')
+
+    act(() => {
+      host.querySelector<HTMLButtonElement>('.woa-undelivered button')!.click()
+    })
+    expect(retrySubmit).toHaveBeenCalledTimes(1)
+    expect(textarea().value).toBe('')
+
+    // Edited draft is preserved when clicking the undelivered retry button.
+    act(() => {
+      snap = makeSnapshot({optimistic: {turnId: 't-fail-2', text: '旧问题', failed: true}})
+      notify?.(snap)
+    })
+    expect(textarea().value).toBe('旧问题')
+    act(() => { setTextarea('已修改的问题') })
+    act(() => {
+      host.querySelector<HTMLButtonElement>('.woa-undelivered button')!.click()
+    })
+    expect(retrySubmit).toHaveBeenCalledTimes(2)
+    expect(textarea().value).toBe('已修改的问题')
+  })
+})

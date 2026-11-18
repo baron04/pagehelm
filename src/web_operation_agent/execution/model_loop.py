@@ -22,7 +22,7 @@ from ..business.convention_writes import normalize_changes_argument
 from ..goal.ports import capabilities_of
 from ..goal.data import DataRefused
 from ..privacy import SessionHandoffPolicy
-from ..panel_view import describe_step, step_facts
+from ..transport.panel_view import describe_step, step_facts
 from ..modeling.egress import AuditedChat
 from .receipt import MeasuredChat
 from .turn_trace import TurnTrace

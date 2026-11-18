@@ -388,7 +388,7 @@ export function createDevHost(): DevHost {
     reload() {
       commit({notice: null, connection: {...state.connection, state: 'ready', online: true}})
     },
-    async reconcile(_turnId, _proposalDigest) {
+    async reconcile() {
       return {outcome: 'unknown', settled: false}
     },
     scenario(name) {

@@ -653,5 +653,98 @@ class TheCardIsItsOwnKind(unittest.TestCase):
         self.assertEqual(kinds, set(S.APPROVAL_KINDS))
 
 
+class ConversationOperationConfirmationTests(unittest.TestCase):
+    def test_operate_approval_persists_across_turns_until_new_conversation_while_writes_always_ask(self):
+        from unittest.mock import patch
+        from dataclasses import replace
+        from web_operation_agent.business.control import ReadOnlyControl
+        from web_operation_agent.business.runtime import BusinessToolRuntime
+        from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnExecutor
+        from web_operation_agent.execution import turn
+        from web_operation_agent.schemas import ElementRef, POTENTIALLY_WRITING_ACTIONS
+        from web_operation_agent.state.conversation import ConversationState
+        from web_operation_agent.tests.execution.product_support import (
+            _Channel, _RemoteBrowser, _principal,
+        )
+        from web_operation_agent.tests.support.business import (
+            _Chat as _BusinessChat, _MutationExecutor, _write_skill,
+        )
+
+        def _env_with_link(channel, epoch: int, href: str):
+            env = channel.envelope(epoch, "http://app.test/companies")
+            obs = replace(
+                env.observation,
+                elements=[ElementRef(
+                    ref="e1", role="link", name="Tab", tag="a", epoch=epoch, attrs={"href": href},
+                )],
+            )
+            return replace(env, observation=obs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _write_skill(root / "write-skill.json")
+            mutation_executor = _MutationExecutor()
+            tools = BusinessToolRuntime((skill,), mutation_executor)
+            conversation_state = ConversationState()
+            channel = _Channel(decision="approved", principal=_principal())
+            channel.latest_observation_envelope = _env_with_link(channel, 1, "/companies?tab=1")
+            chat = _BusinessChat([
+                ("goto", {"url": "/companies?tab=1"}),
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("create_company", {"name": "Acme-1"}),
+                ("finish", {"done": True, "why": "turn 1 done"}),
+                ("goto", {"url": "/companies?tab=2"}),
+                ("load_skill", {"skill_id": skill.skill_id}),
+                ("create_company", {"name": "Acme-2"}),
+                ("finish", {"done": True, "why": "turn 2 done"}),
+                ("goto", {"url": "/companies?tab=3"}),
+                ("finish", {"done": True, "why": "turn 3 done"}),
+            ])
+            turn_index = {"n": 0}
+
+            def next_run(_msg):
+                turn_index["n"] += 1
+                return f"bug08-turn-{turn_index['n']}"
+
+            executor = AgentTurnExecutor(
+                channel=channel,
+                config=AgentTurnConfig(
+                    supported_scope="Operate and create companies.",
+                    ledger_path=root / "session.jsonl",
+                    allow_business_mutations=True,
+                    require_identity=True,
+                    deployment_profile="test",
+                    disabled_actions=POTENTIALLY_WRITING_ACTIONS - {"goto"},
+                    confirm_page_operations=True,
+                ),
+                chat=chat,
+                business_tools=tools,
+                control=ReadOnlyControl(),
+                run_id_factory=next_run,
+                conversation_state=conversation_state,
+            )
+
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
+                executor.run_once({"message_id": "m-1", "text": "Go and create Acme-1",
+                                   "page_url": "http://app.test/companies"})
+                self.assertTrue(conversation_state.page_operation_granted)
+                self.assertEqual([a.kind for a in channel.approvals], ["operate", "write"])
+
+                channel.latest_observation_envelope = _env_with_link(channel, 2, "/companies?tab=2")
+                executor.run_once({"message_id": "m-2", "text": "Go and create Acme-2",
+                                   "page_url": "http://app.test/companies"})
+                self.assertEqual([a.kind for a in channel.approvals],
+                                 ["operate", "write", "write"])
+
+                channel.new_conversation_pending = True
+                channel.latest_observation_envelope = _env_with_link(channel, 3, "/companies?tab=3")
+                executor.run_once({"message_id": "m-3", "text": "Open tab 3",
+                                   "page_url": "http://app.test/companies"})
+                self.assertTrue(conversation_state.page_operation_granted)
+                self.assertEqual([a.kind for a in channel.approvals],
+                                 ["operate", "write", "write", "operate"])
+            self.assertEqual(mutation_executor.executions, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

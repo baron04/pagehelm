@@ -4,7 +4,7 @@
 
 把 AI 助手嵌入第一方 Web 应用的 alpha 框架。服务端负责规划、模型访问、凭据、审批和审计；浏览器观察页面、执行固定工具并展示进度。
 
-[芋道](examples/yudao/deploy/README.md)是默认演示与测试应用；[Odoo 18 接入](examples/odoo/README.md)保留作参考，已不再维护。接口可能变化，目前不具备生产上线条件。
+[芋道](examples/yudao/deploy/README.md)是默认演示与测试应用。接口可能变化，目前不具备生产上线条件。
 
 ## 能力与架构
 

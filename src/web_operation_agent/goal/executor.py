@@ -953,6 +953,8 @@ class GoalTurnExecutor:
             business_approval=(approve_business if self.config.allow_business_mutations else None),
             operation_confirmation=(confirm_operation if self.config.confirm_page_operations
                                     else None),
+            initial_operation_granted=self.conversation_state.page_operation_granted,
+            on_operation_granted=self.conversation_state.grant_page_operation,
             cancelled=cancelled,
             approval_hold_s=self.config.approval_ttl_s,
             operation_hold_s=self.config.operation_approval_ttl_s)

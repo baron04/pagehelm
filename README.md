@@ -4,7 +4,7 @@
 
 An alpha framework for embedding an AI assistant in a first-party web application. The server owns planning, model access, credentials, approvals and audit; the browser observes the page, runs fixed tools and displays progress.
 
-[Yudao](examples/yudao/deploy/README.md) is the default demo and test application. The [Odoo 18 integration](examples/odoo/README.md) remains an unmaintained reference. Interfaces may change; the project is not production-ready.
+[Yudao](examples/yudao/deploy/README.md) is the default demo and test application. Interfaces may change; the project is not production-ready.
 
 ## Capabilities and architecture
 

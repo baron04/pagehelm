@@ -72,15 +72,21 @@ export function PanelWindow({host, allowedOrigins}: {
       setPanelFailure({code: 'unexpected', retryable: false})
     }
   }, [])
+  const clearRestoredDraft = useCallback(() => {
+    const failedText = snapshot.optimistic?.failed ? snapshot.optimistic.text : null
+    if (failedText) setDraft(prev => (prev === failedText ? '' : prev))
+  }, [snapshot.optimistic])
   const newConversation = useCallback(() => {
     setEffectConfirmation(null)
+    clearRestoredDraft()
     call(() => host.newConversation())
-  }, [call, host])
+  }, [call, clearRestoredDraft, host])
   const loadOlder = useCallback(() => call(() => host.loadOlder()), [call, host])
   const retrySubmit = useCallback(() => {
     setEffectConfirmation(null)
+    clearRestoredDraft()
     call(() => host.retrySubmit())
-  }, [call, host])
+  }, [call, clearRestoredDraft, host])
   const cancel = useCallback(() => call(() => host.cancel()), [call, host])
   const reload = useCallback(() => call(() => host.reload()), [call, host])
   const setOpen = useCallback((value: boolean) => {
@@ -162,6 +168,19 @@ export function PanelWindow({host, allowedOrigins}: {
     setDraft('')
     call(() => host.submit(text))
   }, [call, host])
+
+  // Restore the composer draft if the handshake/delivery fails so the user can edit or resend.
+  const restoredOptimisticTurn = useRef<string | null>(null)
+  useEffect(() => {
+    const failed = snapshot.optimistic?.failed ? snapshot.optimistic : null
+    if (!failed) {
+      restoredOptimisticTurn.current = null
+      return
+    }
+    if (restoredOptimisticTurn.current === failed.turnId) return
+    restoredOptimisticTurn.current = failed.turnId
+    setDraft(prev => (prev ? prev : failed.text))
+  }, [snapshot.optimistic])
 
   const reconcile = useMemo(
     () => (typeof host.reconcile === 'function'
