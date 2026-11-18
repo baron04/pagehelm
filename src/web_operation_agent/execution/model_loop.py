@@ -2000,8 +2000,10 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                                     rendered_text=expanded_text,
                                     presented_records=len(table_payload["rows"]),
                                     presentation_complete=len(table_payload["rows"]) >= table_payload["total_rows"],
+                                    source_reference=str(args.get("table_ref") or ""),
                                     structured_table=table_payload,
                                 )
+                                turn["finish_table_trace_recorded"] = True
                             if not str(args.get("answer") or "").strip():
                                 title = table_payload.get("title")
                                 total_rows = table_payload["total_rows"]

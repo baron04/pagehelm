@@ -396,6 +396,20 @@ class Wave3ActionReceiptContracts(unittest.TestCase):
         self.assertEqual(roundtrip.restricted_fields, ("密码", "营业执照上传"))
         self.assertEqual(roundtrip.error_code, "form_closed_or_readonly")
 
+        fill_no_effect = S.ActionReceipt(
+            schema_version=1, command_id="c-combo", action="fill",
+            args_echo={"ref": "e5", "value": "Nobody"}, ok=False,
+            error_code="option_unavailable", no_effect=True,
+            candidate_labels=("Alice", "Bob"),
+        )
+        self.assertEqual(S.ActionReceipt.from_json(fill_no_effect.to_json()), fill_no_effect)
+        with self.assertRaises(S.SchemaError):
+            S.ActionReceipt(
+                schema_version=1, command_id="c-bad", action="click",
+                args_echo={"ref": "e5"}, ok=False,
+                error_code="option_unavailable", no_effect=True,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

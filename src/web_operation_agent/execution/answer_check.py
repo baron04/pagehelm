@@ -465,9 +465,15 @@ def check_unbacked_business_claim(executor, s, prompt: str, turn, args: dict) ->
         return None
     if args.get("read_answer"):
         return None
-    if args.get("table_ref") and str(args.get("table_ref")) in (turn.get("finish_tables") or {}):
+    if args.get("table_ref") and (
+        turn.get("finish_table") is not None
+        or str(args.get("table_ref")) in (turn.get("finish_tables") or {})
+    ):
         return None
-    if getattr(s, "mutation_outcomes", None) or turn.get("written") or turn.get("handoff"):
+    if args.get("source_conclusions") or turn.get("sources") is not None:
+        return None
+    if (getattr(s, "mutation_outcomes", None) or turn.get("written") or turn.get("handoff")
+            or turn.get("review_completion") or turn.get("touched")):
         return None
     items = args.get("items")
     answer = str(args.get("answer") or "").strip()
@@ -488,10 +494,8 @@ def check_unbacked_business_claim(executor, s, prompt: str, turn, args: dict) ->
     ev_mode = bool(
         getattr(executor, "require_evidence_citations", False)
         or turn.get("require_evidence_citations")
-        or turn.get("issued_evidence_refs")
-        or (isinstance(items, list) and len(items) == 0)
     )
-    if not ev_mode and not business_signal:
+    if not ev_mode:
         return None
     sent_before = bool(turn.get("unbacked_claim_sent_back"))
     budget = getattr(s, "budget", None)

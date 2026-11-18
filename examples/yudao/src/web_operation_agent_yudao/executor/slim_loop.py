@@ -929,7 +929,7 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
                 turn["finish_table"] = exported
                 setattr(s, "finish_table", exported)
                 trace = getattr(self, "_trace", None)
-                if trace is not None and hasattr(trace, "record_delivery"):
+                if trace is not None and hasattr(trace, "record_delivery") and not turn.get("finish_table_trace_recorded"):
                     try:
                         trace.record_delivery(
                             reference=table_ref,
@@ -938,7 +938,9 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
                             presented_records=len(exported["rows"]),
                             presentation_complete=len(exported["rows"]) >= exported["total_rows"],
                             source_reference=table_ref,
+                            structured_table=exported,
                         )
+                        turn["finish_table_trace_recorded"] = True
                     except Exception:
                         pass
                 receipt = self._ctx().turn_tables[0].receipt_for_table_ref(table_ref) if self._ctx().turn_tables else ""

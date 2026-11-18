@@ -158,6 +158,8 @@ def stable_control_identity(name: str, arguments: dict, target, observation=None
     raw_val = (
         args.get("value")
         if args.get("value") is not None
+        else args.get("text")
+        if args.get("text") is not None
         else args.get("option_label")
         if args.get("option_label") is not None
         else args.get("option")
