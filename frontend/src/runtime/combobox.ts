@@ -1,4 +1,5 @@
 /** Fixed single-choice ARIA operation. The application supplies the reviewed label. */
+import {sleep} from './contain'
 import type {ElementLike} from './pageModel'
 
 /** Only the fixed selection tool can issue this mechanism fact. */
@@ -187,8 +188,10 @@ export function treeSelectionMatches(element: HTMLInputElement, label: string): 
 export function selectedOption(element: HTMLInputElement): string | null {
   const list = ownedListbox(element)
   if (!list) return null
-  const selected = list.querySelectorAll('[role="option"][aria-selected="true"]')
-  if (selected.length !== 1 || selected[0]!.closest('[role="listbox"]') !== list ||
+  const selected = [...list.querySelectorAll('[role="option"]')]
+    .filter(option => option.closest('[role="listbox"]') === list &&
+      (option.getAttribute('aria-selected') === 'true' || option.classList.contains('is-selected')))
+  if (selected.length !== 1 ||
       selected[0]!.getAttribute('aria-disabled') === 'true' || selected[0]!.hasAttribute('disabled')) return null
   const label = optionText(selected[0]!)
   return label && [...list.querySelectorAll('[role="option"]')].filter(option =>
@@ -203,4 +206,77 @@ export function visibleElement(element: Element): boolean {
   const rect = element.getBoundingClientRect(), style = getComputedStyle(element)
   return Boolean(element.isConnected && rect.width && rect.height && style.display !== 'none' &&
     style.visibility !== 'hidden' && !element.closest('[hidden],[aria-hidden="true"]'))
+}
+
+/** Collect visible, enabled option labels from an open combobox popup (listbox or tree). */
+export function visibleComboboxOptions(
+  element: HTMLInputElement,
+  maxCandidates = 12,
+  maxLabelChars = 200,
+): string[] {
+  const tree = ownedTree(element)
+  if (tree) {
+    if (!visibleElement(tree)) return []
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const choice of treeItemChoices(tree)) {
+      if (isTreeItemDisabled(choice.item) || !visibleElement(choice.item)) continue
+      const text = choice.path.trim().slice(0, maxLabelChars)
+      if (!text || seen.has(text)) continue
+      seen.add(text)
+      out.push(text)
+      if (out.length >= maxCandidates) break
+    }
+    return out
+  }
+  const list = ownedListbox(element)
+  if (!list || !visibleElement(list)) return []
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const option of list.querySelectorAll('[role="option"]')) {
+    if (option.closest('[role="listbox"]') !== list) continue
+    if (option.getAttribute('aria-disabled') === 'true' || option.hasAttribute('disabled')) continue
+    if (!visibleElement(option)) continue
+    const text = optionText(option).trim().slice(0, maxLabelChars)
+    if (!text || seen.has(text)) continue
+    seen.add(text)
+    out.push(text)
+    if (out.length >= maxCandidates) break
+  }
+  return out
+}
+
+/** True when a combobox input has an empty value and no selected option in its owned popup. */
+export function isComboboxClearedWithoutSelection(element: HTMLInputElement): boolean {
+  return listboxCombobox(element) &&
+    String(element.value || '').trim() === '' &&
+    selectedComboboxOption(element) === null
+}
+
+/**
+ * When a combobox popup opens with an empty option list (e.g. async remote options),
+ * wait briefly (~250ms bounded) for visible options to populate before concluding absence.
+ */
+export async function probeComboboxOptions(
+  element: HTMLInputElement,
+  {
+    timeoutMs = 250,
+    intervalMs = 50,
+    interrupted = () => false,
+  }: {timeoutMs?: number; intervalMs?: number; interrupted?: () => boolean} = {},
+): Promise<boolean> {
+  if (visibleComboboxOptions(element, 1).length > 0) return true
+  const popup = ownedTree(element) ?? ownedListbox(element)
+  if (!popup || !visibleElement(popup)) return false
+  const deadline = Date.now() + Math.max(0, timeoutMs)
+  while (!interrupted() && element.isConnected && Date.now() < deadline) {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) break
+    await sleep(Math.min(intervalMs, remaining))
+    if (interrupted() || !element.isConnected) return false
+    if (visibleComboboxOptions(element, 1).length > 0) return true
+    const currentPopup = ownedTree(element) ?? ownedListbox(element)
+    if (!currentPopup || !visibleElement(currentPopup)) return false
+  }
+  return visibleComboboxOptions(element, 1).length > 0
 }

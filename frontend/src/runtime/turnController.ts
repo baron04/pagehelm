@@ -11,15 +11,17 @@ import {
   executeCommand, waitForNavigation,
   type CommandOutcome, type NavigationExpectation,
 } from './executor'
+import type {FormFillTracker} from './formFillTracker'
 import {pressConfirmButton, readConfirmBox, sameControlText, waitForSubmitToSettle} from './formModel'
 import {
   absoluteUrl, armChildFrameNavigation, canonicalUrl, documentNavigation, navigationWal,
   recoveryProvesNavigation,
 } from './navigation'
 import {
-  formFieldMatches, type FormHandoffField, type FormSubmitTarget, type Page,
-  type PageHighlight, type PageOpener,
+  FormClosedOrReadonlyError, formFieldMatches, type FormHandoffField, type FormSubmitTarget,
+  type Page, type PageHighlight, type PageOpener,
 } from './page'
+import {summarizeObservation} from './pageSnapshot'
 import {classifyTransportError, type TransportVerdict} from './panelHost'
 import type {Redactor} from './redaction'
 import {renderState, type PendingView} from './renderState'
@@ -70,6 +72,7 @@ export interface TurnControllerContext extends ApprovalContext {
   readonly confirmButtonPresser: ((label: string, doc: Document) => boolean) | undefined
   readonly submitBusyReader: ((doc: Document) => boolean) | undefined
   readonly restoreElementFormModel: ((element: unknown, request: unknown) => Promise<boolean>) | undefined
+  readonly formFillTracker?: FormFillTracker | undefined
   readonly guardWindow: string
   stopped: boolean
   endState: string
@@ -723,6 +726,22 @@ export async function dispatchAction(
   // A native submit can commit a child-frame navigation before execution returns. Arm the
   // stable iframe element first so a fast server response cannot escape observation.
   const signal = armChildFrameNavigation(navigation.frameElement)
+  const tracker = ctx.formFillTracker
+  const turnId = executing.turn_id || ctx.stored?.activeMessageId || ''
+  const isFieldAction = action.command.action === 'fill' || action.command.action === 'select'
+  let targetElement: ReturnType<Page['element']> | undefined
+  let beforeFieldValue: {value: string; checked?: boolean} | undefined
+  let fieldKey = ''
+  if (isFieldAction && tracker) {
+    try {
+      targetElement = ctx.page.element(action.command.args?.ref)
+      fieldKey = tracker.resolveFieldKey(targetElement, String(action.command.args?.ref || ''))
+      beforeFieldValue = tracker.captureCurrentValue(targetElement)
+      if (targetElement) tracker.scanFormContainer(turnId, targetElement)
+    } catch {
+      // Missing/unloaded page fails in execution below.
+    }
+  }
   try {
     // The successor document must have started after this exact claimed command reached
     // dispatch. Persist before execution, which can destroy this JavaScript context.
@@ -747,6 +766,16 @@ export async function dispatchAction(
       }
     }
     const ok = result?.success !== false
+    if (isFieldAction && tracker && turnId && fieldKey) {
+      if (ok) {
+        const appliedValue = action.command.action === 'select'
+          ? String(action.command.args?.option_label ?? action.command.args?.value ?? '')
+          : tracker.captureCurrentValue(targetElement).value || String(action.command.args?.value ?? '')
+        tracker.recordApplied(turnId, fieldKey, targetElement, beforeFieldValue ?? {value: ''}, appliedValue)
+      } else {
+        tracker.recordRejected(turnId, fieldKey, 'element_not_actionable', undefined, targetElement)
+      }
+    }
     const execution_trace = results.executionTraceOf(result, action.command.action)
     if (ok && action.command.action === 'handoff_form' && ctx.config?.pageWriteGuard) {
       if (!await releaseWriteGuard(ctx.config.pageWriteGuard, fetch, ctx.guardWindow)) {
@@ -779,14 +808,29 @@ export async function dispatchAction(
     }
   } catch (error) {
     if (error instanceof ChoiceUnavailable) {
+      if (isFieldAction && tracker && turnId && fieldKey) {
+        tracker.recordRejected(turnId, fieldKey, error.code, error.candidate_labels, targetElement)
+      }
       return {ok: false, code: error.code, detail: error.message,
         no_effect: error.no_effect,
         candidate_labels: error.candidate_labels}
     }
+    if (error instanceof FormClosedOrReadonlyError) {
+      const detail = results.safeErrorDetail(error.message, action.command, ctx.redactor)
+      if (isFieldAction && tracker && turnId && fieldKey) {
+        tracker.recordRejected(turnId, fieldKey, error.code, undefined, targetElement)
+      }
+      return {ok: false, code: error.code, detail}
+    }
     const detail = results.safeErrorDetail(
       String((error as Error)?.message || error), action.command, ctx.redactor)
-    const code = ['origin_refused', 'bad_arguments', 'navigation_timeout', 'option_unavailable']
-      .find(prefix => detail.startsWith(prefix)) ?? 'page_error'
+    const code = [
+      'origin_refused', 'bad_arguments', 'navigation_timeout', 'option_unavailable',
+      'form_closed_or_readonly',
+    ].find(prefix => detail.startsWith(prefix)) ?? 'page_error'
+    if (isFieldAction && tracker && turnId && fieldKey) {
+      tracker.recordRejected(turnId, fieldKey, code, undefined, targetElement)
+    }
     return {ok: false, code, detail}
   } finally {
     signal?.dispose()
@@ -829,17 +873,40 @@ export async function settleAction(
         observation.observation.render_state !== 'ready' ||
         rebound.some(field => field === null) || !submitReady ||
         !ctx.page.verifyFormFields(rebound, observation.observation.elements)) {
-      outcome = {ok: false, code: 'stale_observation',
-        detail: 'the form fields were no longer ready at handoff'}
+      let closedError: FormClosedOrReadonlyError | null = null
+      try {
+        ctx.page.ensureHandoffOpenAndWritable(fields, observation.observation.elements)
+      } catch (err) {
+        if (err instanceof FormClosedOrReadonlyError) closedError = err
+      }
+      outcome = closedError
+        ? {ok: false, code: 'form_closed_or_readonly', detail: closedError.message}
+        : {ok: false, code: 'stale_observation', detail: 'the form fields were no longer ready at handoff'}
     }
   }
   if (executing.command.action === 'handoff_form' && !outcome.ok) {
     clearPageHighlight(ctx)
   }
+  const turnId = executing.turn_id || ctx.stored?.activeMessageId || ''
+  const trackerFields = ['fill', 'select', 'handoff_form'].includes(executing.command.action)
+    ? (ctx.formFillTracker?.receiptFields(turnId) ?? {})
+    : {}
+  const observationSummary = ['click', 'select', 'goto'].includes(executing.command.action)
+    ? summarizeObservation(
+      before.observation,
+      observation.observation,
+      ctx.redactor,
+      typeof document !== 'undefined' ? document : null,
+      ctx.panelContainer ?? undefined,
+    )
+    : undefined
   // `navigated` is a change in the observed top-level URL. A child-frame commit satisfies
   // the action guard, and its new content travels in the fresh observation instead.
   const receipt = results.receipt(executing, {
     ok: outcome.ok, code: outcome.code, detail: outcome.detail, observation,
+    beforeObservation: before.observation,
+    ...(observationSummary ? {observationSummary} : {}),
+    ...trackerFields,
     navigated: before.observation.url !== observation.observation.url,
     elapsedMs: Date.now() - Number(executing.started_at || 0),
     urlBefore: ctx.currentObservation?.observation.url || '',
@@ -875,6 +942,10 @@ export function executePageCommand(ctx: TurnControllerContext, command: ActionCo
     return Promise.resolve({success: true, message: 'control highlighted for the person'})
   }
   if (command.action === 'handoff_form') {
+    if (ctx.currentObservation) {
+      ctx.page.ensureHandoffOpenAndWritable(
+        command.args?.fields, ctx.currentObservation.observation.elements)
+    }
     if (!ctx.currentObservation || !ctx.page.verifyFormFields(
       command.args?.fields, ctx.currentObservation.observation.elements)) {
       throw new Error('bad_arguments: form fields do not match the current page')
@@ -887,6 +958,25 @@ export function executePageCommand(ctx: TurnControllerContext, command: ActionCo
       clearPageHighlight(ctx)
       ctx.highlightHandle = ctx.page.guideSubmit(command.args.submit.ref,
         ctx.stored?.inFlight?.turn_id ?? ctx.stored?.activeMessageId ?? '')
+    }
+    const turnId = ctx.stored?.inFlight?.turn_id ?? ctx.stored?.activeMessageId ?? ''
+    if (ctx.formFillTracker && turnId && Array.isArray(command.args?.fields)) {
+      for (const rawField of command.args.fields) {
+        const ref = (rawField as FormHandoffField | null)?.ref
+        if (!ref) continue
+        try {
+          const el = ctx.page.element(ref)
+          if (el) {
+            ctx.formFillTracker.scanFormContainer(turnId, el)
+            const key = ctx.formFillTracker.resolveFieldKey(el, ref)
+            const cur = ctx.formFillTracker.captureCurrentValue(el)
+            ctx.formFillTracker.recordApplied(turnId, key, el, cur, cur.value)
+          }
+        } catch {
+          // Ignore stale ref during optional restricted-control scan.
+        }
+      }
+      ctx.formFillTracker.focusFirstRestricted(turnId)
     }
     return Promise.resolve({success: true, message: 'form fields verified for handoff'})
   }
@@ -951,8 +1041,16 @@ export function executePageCommand(ctx: TurnControllerContext, command: ActionCo
   if (command.action === 'apply_facet' && !ctx.actionFreshness(command).fresh) {
     throw new Error('bad_arguments: page facet changed before dispatch')
   }
+  const agentEndpoint = ctx.config?.endpoint ? String(ctx.config.endpoint).replace(/\/$/, '') : ''
   return executeCommand(command, () => ctx.page, ctx.config ?? {},
-    ctx.openPage ? url => ctx.openInApplication(url) : undefined)
+    ctx.openPage ? url => ctx.openInApplication(url) : undefined, {
+      panelContainer: ctx.panelContainer,
+      isBusy: () => {
+        try { return ctx.page.readiness().pending } catch { return false }
+      },
+      ignoreUrl: (url: string) => Boolean(agentEndpoint && url.startsWith(agentEndpoint)) ||
+        /\/woa\/|\/events(?:$|\?)/.test(url),
+    })
 }
 
 /**
@@ -992,8 +1090,19 @@ export async function recoverActionAfterNavigation(
   } else if (await recoveryProvesNavigation(
     action, location.href, ctx.documentId, documentNavigation())) {
     const guardExpiry = action.write_guard_expires_at_ms
+    const observationSummary = ['click', 'select', 'goto'].includes(action.command.action)
+      ? summarizeObservation(
+        null,
+        observation.observation,
+        ctx.redactor,
+        typeof document !== 'undefined' ? document : null,
+        ctx.panelContainer ?? undefined,
+      )
+      : undefined
     const receipt = results.receipt(action, {
       ok: true, code: '', detail: '', observation,
+      beforeObservation: null,
+      ...(observationSummary ? {observationSummary} : {}),
       navigated: action.started_url_display !== observation.observation.url,
       elapsedMs: Date.now() - Number(action.started_at || 0),
       urlBefore: ctx.currentObservation?.observation.url || '',

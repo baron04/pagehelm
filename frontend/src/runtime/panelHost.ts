@@ -21,8 +21,8 @@ import type {
   ConnectionState, HostNotice, PanelExample, PanelHost as PanelHostContract, PanelSnapshot,
 } from '../bridge/host'
 import type {
-  AnswerTarget, ApprovalRequest, PanelConfiguration, PanelState, ReconciliationStatus, TimelineEntry,
-  TimelinePage,
+  AnswerTarget, ApprovalRequest, HandoffRestrictedControl, PanelConfiguration, PanelState,
+  ReconciliationStatus, TimelineEntry, TimelinePage,
 } from '../contract/panel'
 // Not a hand-written `1` any more: `scripts/build-tokens.mjs` lifts it out of the server's
 // own `panel_contract.json`, the same source `contract/panel.ts` re-exports for the panel.
@@ -139,6 +139,8 @@ export interface PanelActions {
   panelVisibility?(open: boolean): void
   openAnswerTarget?(address: string): boolean
   reconcile?(turnId: string, proposalDigest?: string): Promise<ReconciliationStatus> | ReconciliationStatus
+  undoFormFill?(turnId: string): Promise<boolean> | boolean
+  focusHandoffControl?(control: HandoffRestrictedControl): Promise<boolean> | boolean
 }
 
 const REQUIRED_ACTIONS = ['submit', 'cancel', 'decide', 'newConversation', 'loadOlder'] as const
@@ -470,6 +472,32 @@ export class PanelHost implements PanelHostContract {
     const status = await this.verbs.reconcile(turnId, proposalDigest)
     this.setReconciliation(turnId, status, proposalDigest)
     return status
+  }
+
+  async undoFormFill(turnId: string): Promise<boolean> {
+    const cleanTurnId = String(turnId || '').trim()
+    if (!cleanTurnId || !this.verbs.undoFormFill) return false
+    const ok = (await this.verbs.undoFormFill(cleanTurnId)) === true
+    if (ok) {
+      let changed = false
+      const entries = this.state.entries.map(entry => {
+        if (entry.turn_id !== cleanTurnId || !entry.handoff) return entry
+        changed = true
+        const updated: TimelineEntry = {
+          ...entry,
+          handoff: {...entry.handoff, can_undo: false, undone: true},
+        }
+        this.byId.set(updated.id, updated)
+        return updated
+      })
+      if (changed) this.commit({entries})
+    }
+    return ok
+  }
+
+  async focusHandoffControl(control: HandoffRestrictedControl): Promise<boolean> {
+    if (!control || typeof control !== 'object' || !this.verbs.focusHandoffControl) return false
+    return (await this.verbs.focusHandoffControl(control)) === true
   }
 
   reload(): void {

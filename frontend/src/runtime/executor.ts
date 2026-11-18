@@ -14,6 +14,7 @@ import {
 } from './navigation'
 import type {Page} from './page'
 import {explicitAttribute, type ElementLike} from './pageModel'
+import {beginPageSettleWatch, type SettleOptions} from './pageSettle'
 import type {ActionCommand, RuntimeConfig} from './types'
 import browserContract from '@contract/browser_contract.json'
 
@@ -116,19 +117,31 @@ type ApplicationOpen = (url: string) => Promise<boolean>
 
 export async function executeCommand(command: ActionCommand, access: PageAccess,
                                      config: Pick<RuntimeConfig, 'navigationMode'>,
-                                     open?: ApplicationOpen): Promise<CommandOutcome | unknown> {
+                                     open?: ApplicationOpen,
+                                     settleOptions?: SettleOptions): Promise<CommandOutcome | unknown> {
   const args = command.args || {}
+  const runSettled = async <T>(fn: () => Promise<T> | T, skipSettle?: (res: T) => boolean): Promise<T> => {
+    const watch = beginPageSettleWatch(settleOptions)
+    try {
+      const res = await fn()
+      if (!skipSettle?.(res)) await watch.settle()
+      return res
+    } finally {
+      watch.dispose()
+    }
+  }
   switch (command.action) {
     case 'observe':
       return {success: true, message: 'page observed'}
     case 'click': {
       const page = access()
       const native = nativeNavigation(page.element(args.ref))
-      if (native?.kind === 'form') return withSubmitEvidence(native, () => page.click(args.ref))
-      return page.click(args.ref)
+      return runSettled(() => (
+        native?.kind === 'form' ? withSubmitEvidence(native, () => page.click(args.ref)) : page.click(args.ref)
+      ))
     }
     case 'apply_facet':
-      return access().applyFacet(args.ref, args.active)
+      return runSettled(() => access().applyFacet(args.ref, args.active))
     case 'reveal':
       return access().reveal(args.ref)
     case 'submit': {
@@ -138,14 +151,16 @@ export async function executeCommand(command: ActionCommand, access: PageAccess,
       if (!form) throw new Error('bad_arguments: submit ref does not belong to a form')
       const native = nativeNavigation(form)
       if (native?.kind === 'form' && typeof form.requestSubmit === 'function') {
-        return withSubmitEvidence(native, () => {
+        return runSettled(() => withSubmitEvidence(native, () => {
           form.requestSubmit()
           return {success: true, message: 'form submitted'}
-        })
+        }))
       }
-      form.submit()
-      return {success: true, message: 'form submitted',
-        native_navigation_expected: native?.kind === 'form' && native.method !== 'dialog'}
+      return runSettled(() => {
+        form.submit()
+        return {success: true, message: 'form submitted',
+          native_navigation_expected: native?.kind === 'form' && native.method !== 'dialog'}
+      })
     }
     case 'fill':
       if (args.value === undefined) throw new Error('bad_arguments: fill needs value')
@@ -158,7 +173,7 @@ export async function executeCommand(command: ActionCommand, access: PageAccess,
       if (args.option_label !== undefined && typeof args.option_label !== 'string') {
         throw new Error('bad_arguments: select option label must be a string')
       }
-      return access().select(args.ref, String(args.value), args.option_label as string | undefined)
+      return runSettled(() => access().select(args.ref, String(args.value), args.option_label as string | undefined))
     case 'wait_for':
       await sleep(Math.min(Math.max(Number(args.ms || 1000), 0), MAX_WAIT_MS))
       return {success: true, message: 'wait completed'}
@@ -189,21 +204,27 @@ export async function executeCommand(command: ActionCommand, access: PageAccess,
         // `event.state` and ignore a stateless popstate as "a click on an anchor" -- Odoo's
         // does exactly that -- so a bare PopStateEvent changes the address bar while the
         // application still shows the previous view, silently.
-        const state = {woaNavigation: true}
-        history.pushState(state, '', href)
-        window.dispatchEvent(new PopStateEvent('popstate', {state: history.state ?? state}))
-        return {success: true, message: 'SPA navigation requested'}
+        return runSettled(() => {
+          const state = {woaNavigation: true}
+          history.pushState(state, '', href)
+          window.dispatchEvent(new PopStateEvent('popstate', {state: history.state ?? state}))
+          return {success: true, message: 'SPA navigation requested'}
+        })
       }
       // An application that opens its own pages keeps this document, and with it the
       // assistant's open window and whatever the person had on screen. A page it does not
       // open is loaded, as every page was before.
-      if (open && await open(href)) return {success: true, message: 'application navigation requested'}
-      location.assign(href)
-      return {success: true, message: 'navigation requested'}
+      return runSettled(async () => {
+        if (open && await open(href)) return {success: true, message: 'application navigation requested'}
+        location.assign(href)
+        return {success: true, message: 'navigation requested'}
+      }, res => res.message === 'navigation requested')
     }
     case 'back':
-      history.back()
-      return {success: true, message: 'history navigation requested'}
+      return runSettled(() => {
+        history.back()
+        return {success: true, message: 'history navigation requested'}
+      })
     default:
       throw new Error(`bad_arguments: unsupported action ${command.action}`)
   }
