@@ -41,7 +41,7 @@ import {clearStored, loadSession, writeStored, type SessionState} from './storag
 import {IdleHandshakeClosed, SessionClient, TransportError, sseBatches} from './transport'
 import {closeWriteGuard, openWriteGuard, releaseWriteGuard} from './writeGuard'
 import {pressConfirmButton, readConfirmBox, sameControlText, waitForSubmitToSettle} from './formModel'
-import type {ApprovalRequest, PanelConfiguration, PanelState} from '../contract/panel'
+import type {ApprovalRequest, PanelConfiguration, PanelState, ReconciliationStatus} from '../contract/panel'
 import {activityPoint} from './activityPoint'
 import {WIRE_VERSION, type ActionCommand, type ActionEnvelope, type ActionResultEnvelope,
   type JsonObject, type ObservationEnvelope, type RuntimeConfig} from './types'
@@ -76,10 +76,37 @@ const PASSIVE_ACTIONS = new Set(['observe', 'wait_for', 'scroll', 'form_model'])
 /** How long an application is given to open one of its own pages before it is loaded. */
 const APPLICATION_OPEN_MS = 6_000
 
+function createAbortError(): Error {
+  const error = new Error('The operation was aborted.')
+  error.name = 'AbortError'
+  return error
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError'
+}
+
+function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise
+  if (signal.aborted) return Promise.reject(createAbortError())
+  return new Promise<T>((resolve, reject) => {
+    const cancel = listen('submit abort', signal, 'abort', () => {
+      reject(createAbortError())
+    }, {once: true})
+    promise.then(
+      value => { cancel(); resolve(value) },
+      error => { cancel(); reject(error) },
+    )
+  })
+}
+
 export class EmbeddedWebRuntime {
   /** The session host reauthenticates while idle, before any observation or message is sent. */
   beforeSubmit?: () => Promise<void>
   private preparingSubmission = false
+  private preparingMessageId = ''
+  private submitAbortController: AbortController | null = null
+  private messagePostStarted = false
   config!: RuntimeConfig
   endpoint = ''
   sessionId = ''
@@ -274,8 +301,9 @@ export class EmbeddedWebRuntime {
   }
 
   _post<T = JsonObject>(path: string, body: unknown,
-                        options: {includeLease?: boolean} = {}): Promise<T> {
+                        options: {includeLease?: boolean; signal?: AbortSignal} = {}): Promise<T> {
     return this.client.post<T>(path, body, options).catch(async (error: unknown) => {
+      if (options.signal?.aborted || isAbortError(error)) throw error
       // Registry pressure may evict a quiet page's lease where a taken-over one is
       // terminal: the session is still this page's, so hello again for a fresh lease
       // and retry the request once.
@@ -453,6 +481,7 @@ export class EmbeddedWebRuntime {
       loadOlder: before => {
         detach('load older', this._loadOlder(before).catch(error => this._raise(error)))
       },
+      reconcile: (turnId, proposalDigest) => this.reconcileTurn(turnId, proposalDigest),
       openAnswerTarget: url => Boolean(this.openPage)
         && tryOpenAnswerInPlace(url, target => this._openInApplication(target)),
       panelVisibility: open => { if (!open) this._clearHighlight() },
@@ -556,6 +585,11 @@ export class EmbeddedWebRuntime {
     this.stopped = true
     this.cancelExpiry?.()
     this.cancelExpiry = null
+    this.submitAbortController?.abort()
+    this.submitAbortController = null
+    this.preparingSubmission = false
+    this.preparingMessageId = ''
+    this.messagePostStarted = false
     this.eventAbortController?.abort()
     this.eventAbortController = null
     for (const stop of this.stopListening?.splice(0) ?? []) stop()
@@ -615,42 +649,91 @@ export class EmbeddedWebRuntime {
     if (this.preparingSubmission) throw new Error('a task is being prepared')
     const goal = String(text || '').trim()
     if (!goal || goal.length > 2000) throw new Error('task must contain 1-2000 characters')
-    this.preparingSubmission = true
-    try {
-      if (this.beforeSubmit) await this.beforeSubmit()
-      if (this.stopped || this.stored.taskInFlight) throw new Error('runtime is no longer idle')
-    } catch (error) {
-      this.panelHost?.setOptimistic({turnId: '', text: goal, failed: true})
-      this._raise(error)
-      throw error
-    } finally {
-      this.preparingSubmission = false
-    }
     this._clearHighlight()
     const messageId = crypto.randomUUID()
+    const abortController = new AbortController()
+    this.preparingSubmission = true
+    this.preparingMessageId = messageId
+    this.submitAbortController = abortController
+    this.messagePostStarted = false
+    // Show the optimistic echo and observing/sending state synchronously before any renewal
+    // or observation round-trip, while keeping stored.taskInFlight false so renewal stays allowed.
+    this.panelHost?.setConnection({busy: true, stopping: false, state: 'observing'})
+    this.panelHost?.setOptimistic({turnId: messageId, text: goal, failed: false})
+    try {
+      if (this.beforeSubmit) {
+        await abortable(this.beforeSubmit(), abortController.signal)
+      }
+      if (abortController.signal.aborted) {
+        this._cleanupAbortedSubmit(messageId)
+        return {cancelled: true}
+      }
+      if (this.stopped || this.stored.taskInFlight) throw new Error('runtime is no longer idle')
+    } catch (error) {
+      if (this.submitAbortController === abortController) {
+        this.preparingSubmission = false
+        this.preparingMessageId = ''
+      }
+      if (abortController.signal.aborted || isAbortError(error)) {
+        if (this.submitAbortController === abortController) {
+          this.submitAbortController = null
+          this.messagePostStarted = false
+        }
+        this._cleanupAbortedSubmit(messageId)
+        return {cancelled: true}
+      }
+      if (this.submitAbortController === abortController) {
+        this.submitAbortController = null
+        this.messagePostStarted = false
+      }
+      this.panelHost?.setConnection({busy: false, stopping: false})
+      if (this.panelHost?.snapshot().optimistic?.turnId === messageId) {
+        this.panelHost.failOptimistic()
+      } else {
+        this.panelHost?.setOptimistic({turnId: messageId, text: goal, failed: true})
+      }
+      this._raise(error)
+      throw error
+    }
+    if (this.submitAbortController === abortController) {
+      this.preparingSubmission = false
+      this.preparingMessageId = ''
+    }
     this.stored.taskInFlight = true
     this.stored.pageWorked = false
     this.stored.activeMessageId = messageId
     this.stored.cancellationPending = false
     this._save()
-    // A completed cancellation belongs to the preceding message. Reset both flags at the
-    // new-message boundary as well as at the terminal event, so a delayed projection
-    // cannot leave the new stop control disabled.
-    this.panelHost?.setConnection({busy: true, stopping: false, state: 'observing'})
-    // Echo the message now; the server's own `message_accepted` event replaces it.
-    this.panelHost?.setOptimistic({turnId: messageId, text: goal, failed: false})
     try {
       // A first-party SPA can change route without replacing this Runtime. Bind every new
       // task to a fresh observation, so the server does not plan from a stale route.
-      const observation = await this.observe()
-      await this._post('/observations', observation)
+      const observation = await abortable(
+        this.observe('', abortController.signal),
+        abortController.signal,
+      )
+      if (abortController.signal.aborted) {
+        if (!this.stored.cancellationPending) this._cleanupAbortedSubmit(messageId)
+        return {cancelled: true}
+      }
+      await this._post('/observations', observation, {signal: abortController.signal})
+      if (abortController.signal.aborted) {
+        if (!this.stored.cancellationPending) this._cleanupAbortedSubmit(messageId)
+        return {cancelled: true}
+      }
+      this.messagePostStarted = true
       const response = await this._post('/messages', {
         message_id: messageId, text: this.redactor.redactString(goal),
         page_url: observation.observation.url,
-      })
-      this._panelState('queued')
+      }, {signal: abortController.signal})
+      if (!this.stopped && !abortController.signal.aborted) {
+        this._panelState('queued')
+      }
       return response
     } catch (error) {
+      if (abortController.signal.aborted || isAbortError(error)) {
+        if (!this.stored.cancellationPending) this._cleanupAbortedSubmit(messageId)
+        return {cancelled: true}
+      }
       this.stored.taskInFlight = false
       this.stored.activeMessageId = ''
       this.stored.cancellationPending = false
@@ -659,28 +742,120 @@ export class EmbeddedWebRuntime {
       this.panelHost?.failOptimistic()
       this._raise(error)
       throw error
+    } finally {
+      if (this.submitAbortController === abortController) {
+        this.submitAbortController = null
+        this.messagePostStarted = false
+      }
     }
   }
 
+  private _cleanupAbortedSubmit(messageId: string): void {
+    this.stored.taskInFlight = false
+    if (this.stored.activeMessageId === messageId) this.stored.activeMessageId = ''
+    this.stored.cancellationPending = false
+    this._save()
+    if (this.stopped) return
+    this.panelHost?.clearOptimisticOnce(messageId)
+    this.panelHost?.setConnection({busy: false, stopping: false, state: 'ready'})
+  }
+
   async cancelTask({retry = false}: {retry?: boolean} = {}): Promise<void> {
-    if (this.stopped || !this.stored.taskInFlight || !this.stored.activeMessageId) return
+    if (this.stopped) return
+    const controller = this.submitAbortController
+    const messageWasDispatched = this.messagePostStarted
+    const targetMessageId = this.stored.activeMessageId || this.preparingMessageId
+    if (controller && !messageWasDispatched) {
+      controller.abort()
+      this.preparingSubmission = false
+      this.preparingMessageId = ''
+      this.submitAbortController = null
+      this.messagePostStarted = false
+      if (targetMessageId) this._cleanupAbortedSubmit(targetMessageId)
+      return
+    }
+    if (!this.stored.taskInFlight || !this.stored.activeMessageId) return
     if (this.stored.cancellationPending && !retry) return
+    const wasAborted = Boolean(controller)
+    if (controller) controller.abort()
+    const messageId = this.stored.activeMessageId
     this._panelState('stopping')
     this.stored.cancellationPending = true
     this._save()
     this.panelHost?.setConnection({stopping: true})
     try {
-      await this._post('/cancellations', {
+      const reply = await this._post<{pre_cancelled?: boolean}>('/cancellations', {
         schema_version: WIRE_VERSION,
         session_id: this.sessionId,
-        message_id: this.stored.activeMessageId,
+        message_id: messageId,
       })
+      if (reply?.pre_cancelled) {
+        this._cleanupAbortedSubmit(messageId)
+      }
     } catch (error) {
+      const verdict = classifyTransportError(
+        error as {code?: unknown; status?: unknown}, this.panelConfiguration)
+      if (verdict.terminal) {
+        this.stored.cancellationPending = false
+        this._save()
+        this.panelHost?.setConnection({stopping: false})
+        this._raise(error, 'cancel_failed')
+        throw error
+      }
+      if (verdict.code === 'unknown_message' || (wasAborted && verdict.code !== 'submit_failed')) {
+        this._cleanupAbortedSubmit(messageId)
+        return
+      }
       this.stored.cancellationPending = false
       this._save()
       this.panelHost?.setConnection({stopping: false})
       this._panelState('error')
       this.panelHost?.raise('cancel_failed', {retryable: true})
+      throw error
+    }
+  }
+
+  /** Trigger a read-only reconciliation check for an indeterminate write turn. Never retries writes. */
+  async reconcileTurn(turnId: string, proposalDigest?: string): Promise<ReconciliationStatus> {
+    if (this.stopped) throw new Error('embedded runtime is stopped')
+    const cleanTurnId = String(turnId || '').trim()
+    const cleanDigest = String(proposalDigest || '').trim()
+    if (!cleanTurnId && !cleanDigest) {
+      throw new Error('reconciliation requires turnId or proposalDigest')
+    }
+    try {
+      const raw = await this._post<Record<string, unknown>>('/reconciliations', {
+        schema_version: WIRE_VERSION,
+        session_id: this.sessionId,
+        ...(cleanTurnId ? {turn_id: cleanTurnId} : {}),
+        ...(cleanDigest ? {proposal_digest: cleanDigest} : {}),
+      })
+      const source = (raw?.reconciliation && typeof raw.reconciliation === 'object'
+        ? raw.reconciliation : raw) as Record<string, unknown>
+      const rawOutcome = source?.outcome
+      const outcome: ReconciliationStatus['outcome'] =
+        rawOutcome === 'completed' || rawOutcome === 'failed' || rawOutcome === 'unknown'
+          ? rawOutcome : 'unknown'
+      const settled = typeof source?.settled === 'boolean'
+        ? source.settled : outcome !== 'unknown'
+      const message = typeof source?.message === 'string' && source.message.trim()
+        ? source.message.trim() : undefined
+      const status: ReconciliationStatus = {
+        outcome,
+        settled,
+        ...(message !== undefined ? {message} : {}),
+      }
+      this.panelHost?.setReconciliation(cleanTurnId, status, cleanDigest || undefined)
+      return status
+    } catch (error) {
+      const verdict = classifyTransportError(
+        error as {code?: unknown; status?: unknown}, this.panelConfiguration)
+      if (verdict.terminal) {
+        this._raise(error)
+      } else {
+        const failure = error as {code?: unknown} | null | undefined
+        this.panelHost?.raise(String(failure?.code || verdict.code || 'unexpected'), {retryable: false})
+      }
       throw error
     }
   }
@@ -928,9 +1103,11 @@ export class EmbeddedWebRuntime {
 
   // -- observing the page ------------------------------------------------------------------
 
-  async observe(causedByActionId = ''): Promise<ObservationEnvelope> {
+  async observe(causedByActionId = '', signal?: AbortSignal): Promise<ObservationEnvelope> {
+    if (signal?.aborted) throw createAbortError()
     const page = this.page
-    const state = await page.read()
+    const state = await abortable(page.read(), signal)
+    if (signal?.aborted) throw createAbortError()
     const epoch = ++this.stored.epoch
     this._save()
     const reading = page.describe(state, epoch)

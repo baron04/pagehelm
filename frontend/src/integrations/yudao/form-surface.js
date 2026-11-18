@@ -109,3 +109,75 @@ export function readSubmitBusy(doc = document) {
   installSubmitTracker(doc?.defaultView)
   return submitRequestsInFlight > 0 || Array.from(doc.querySelectorAll(BUSY_SELECTORS)).some(shown)
 }
+
+const OVERLAY_OFFSET_STYLE_ID = 'woa-yudao-overlay-offset'
+const OVERLAY_OFFSET_CSS = '.el-overlay, .el-drawer__wrapper { right: var(--woa-drawer-offset, 0px); }'
+const overlayOffsetOwners = new WeakMap()
+
+function discoverCspNonce(doc) {
+  const withNonce = doc.querySelector?.('style[nonce], script[nonce]')
+  const attr = withNonce?.nonce || withNonce?.getAttribute?.('nonce')
+  if (attr) return attr
+  return doc.querySelector?.('meta[property="csp-nonce"], meta[name="csp-nonce"]')?.getAttribute?.('content') || ''
+}
+
+/** Keep Element Plus fixed overlays/drawers clear of the side-by-side assistant drawer. */
+export function installOverlayOffset(doc = document) {
+  if (!doc || !doc.documentElement) return () => {}
+  let entry = overlayOffsetOwners.get(doc)
+  if (!entry) {
+    let sheet = null
+    let styleEl = null
+    const win = doc.defaultView
+    const SheetCtor = win?.CSSStyleSheet ?? globalThis.CSSStyleSheet
+    if (typeof SheetCtor === 'function' && Array.isArray(doc.adoptedStyleSheets)) {
+      try {
+        sheet = new SheetCtor()
+        sheet.replaceSync(OVERLAY_OFFSET_CSS)
+        doc.adoptedStyleSheets = [...doc.adoptedStyleSheets, sheet]
+      } catch {
+        sheet = null
+      }
+    }
+    if (!sheet) {
+      const existing = doc.getElementById?.(OVERLAY_OFFSET_STYLE_ID)
+      styleEl = existing || doc.createElement('style')
+      styleEl.id = OVERLAY_OFFSET_STYLE_ID
+      const nonce = discoverCspNonce(doc)
+      if (nonce) styleEl.nonce = nonce
+      styleEl.textContent = OVERLAY_OFFSET_CSS
+      if (!existing) (doc.head || doc.documentElement).appendChild(styleEl)
+    }
+    const teardown = () => {
+      const current = overlayOffsetOwners.get(doc)
+      if (!current) return
+      overlayOffsetOwners.delete(doc)
+      if (current.sheet && Array.isArray(doc.adoptedStyleSheets)) {
+        doc.adoptedStyleSheets = doc.adoptedStyleSheets.filter(item => item !== current.sheet)
+      }
+      if (current.styleEl && current.styleEl.parentNode) {
+        current.styleEl.parentNode.removeChild(current.styleEl)
+      }
+      if (win?.removeEventListener) {
+        win.removeEventListener('pagehide', current.teardown)
+        win.removeEventListener('unload', current.teardown)
+      }
+    }
+    entry = {count: 0, sheet, styleEl, teardown}
+    overlayOffsetOwners.set(doc, entry)
+    if (win?.addEventListener) {
+      win.addEventListener('pagehide', teardown, {once: true})
+      win.addEventListener('unload', teardown, {once: true})
+    }
+  }
+  entry.count += 1
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    const current = overlayOffsetOwners.get(doc)
+    if (!current) return
+    current.count = Math.max(0, current.count - 1)
+    if (current.count === 0) current.teardown()
+  }
+}

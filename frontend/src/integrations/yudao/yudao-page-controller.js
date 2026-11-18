@@ -4,6 +4,7 @@ import {PageController as GenericPageController, getElementByIndex as controller
 import {lineControls, nativeControlElement, nativeRangeDateCell, nativeRangeDateStep,
   withLineControls, withTreeQueryControls, withUserStatusControls, withObservedRowColumns} from './page-facts.js'
 import {boundClick, boundInput, boundRecord, readElementPageControl as ordinaryControl} from './page-facts.js'
+import {installOverlayOffset} from './form-surface.js'
 
 const bindings = new URL(import.meta.url).searchParams.get('bindings') === '1'
 
@@ -60,6 +61,19 @@ export async function inputTextElement(element, text, invoked = () => {}) {
 
 export class PageController extends GenericPageController {
   bindingTrace = {trace_id: null, events: []}
+  #cleanupOverlayOffset = null
+
+  constructor(options) {
+    super(options)
+    if (typeof document !== 'undefined') {
+      this.#cleanupOverlayOffset = installOverlayOffset(document)
+    }
+  }
+
+  dispose() {
+    try { this.#cleanupOverlayOffset?.() } finally { this.#cleanupOverlayOffset = null }
+    super.dispose()
+  }
   executionTrace(operation) {
     let trace = null
     try {
@@ -184,4 +198,4 @@ export function readElementPageControl(element) {
 }
 export {readPageBlocker, readPageRecordRoute, readPageRoute, readPageQuery, readPageRead,
   readElementNavigation, readElementFormModel, restoreElementFormModel, readElementRowRecord, openPage} from './page-facts.js'
-export {acceptReadSource, readConfirmBox, pressConfirmButton, readSubmitBusy} from './form-surface.js'
+export {acceptReadSource, installOverlayOffset, readConfirmBox, pressConfirmButton, readSubmitBusy} from './form-surface.js'

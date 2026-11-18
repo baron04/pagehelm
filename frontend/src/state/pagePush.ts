@@ -1,12 +1,10 @@
 /**
  * Make the host page narrower by the drawer's width, and give its width back afterwards.
  *
- * The root element is narrowed rather than given a margin, because applications set
- * `html { width: 100% }` -- Odoo does -- and a margin beside a full width only overflows.
- * Elements the page positions against the viewport (`position: fixed`) are not narrowed:
- * a dialog or a notification pinned to the right edge can sit partly under the drawer.
- * Narrowing those as well would mean making the body their containing block, which changes
- * how every fixed element of the application is placed; that is not this panel's to do.
+ * The root element is narrowed rather than given a margin, because host applications may set
+ * `html { width: 100% }`, and a margin beside a full width only overflows.
+ * `--woa-drawer-offset` is maintained on the root element so application integrations can
+ * offset viewport-fixed overlays and drawers (`position: fixed`) away from the pushed drawer.
  */
 import {useEffect} from 'react'
 
@@ -16,13 +14,27 @@ export function narrowPage(root: HTMLElement, width: number): () => void {
     value: root.style.getPropertyValue('width'),
     priority: root.style.getPropertyPriority('width'),
   }
-  const applied = `calc(100% - ${Math.round(width)}px)`
+  const previousOffset = {
+    value: root.style.getPropertyValue('--woa-drawer-offset'),
+    priority: root.style.getPropertyPriority('--woa-drawer-offset'),
+  }
+  const offset = `${Math.round(width)}px`
+  const applied = `calc(100% - ${offset})`
   root.style.setProperty('width', applied, 'important')
+  root.style.setProperty('--woa-drawer-offset', offset)
   return () => {
-    // An application that changed the width after the drawer did owns its new value.
-    if (root.style.getPropertyValue('width') !== applied) return
-    if (previous.value) root.style.setProperty('width', previous.value, previous.priority)
-    else root.style.removeProperty('width')
+    // An application that changed a property after the drawer did owns its new value.
+    if (root.style.getPropertyValue('--woa-drawer-offset') === offset) {
+      if (previousOffset.value) {
+        root.style.setProperty('--woa-drawer-offset', previousOffset.value, previousOffset.priority)
+      } else {
+        root.style.removeProperty('--woa-drawer-offset')
+      }
+    }
+    if (root.style.getPropertyValue('width') === applied) {
+      if (previous.value) root.style.setProperty('width', previous.value, previous.priority)
+      else root.style.removeProperty('width')
+    }
     if (!hadStyle && root.getAttribute('style') === '') root.removeAttribute('style')
   }
 }

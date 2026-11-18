@@ -53,11 +53,12 @@ export class SessionClient {
   }
 
   async post<T = Record<string, unknown>>(path: string, body: unknown,
-                                          {includeLease = true}: {includeLease?: boolean} = {}): Promise<T> {
+                                          {includeLease = true, signal}: {includeLease?: boolean; signal?: AbortSignal} = {}): Promise<T> {
     const response = await fetch(this.url(path), {
       method: 'POST', credentials: 'omit', cache: 'no-store',
       headers: this.headers({'content-type': 'application/json'}, includeLease),
       body: JSON.stringify(body),
+      ...(signal ? {signal} : {}),
     })
     if (!response.ok) throw await failure(response, path)
     return await response.json().catch(() => ({})) as T
