@@ -648,7 +648,8 @@ def proc_commit_helper(executor: YudaoTurnExecutor, op, prepared):
 class Arc12YudaoChecksTests(unittest.TestCase):
     def test_yudao_check_specs_are_complete_and_valid(self):
         required = {
-            "read_only_question",
+            "unbacked_business_claim",
+            "verified_empty_filter_repeated",
             "draft_only",
             "dangerous_unconfirmed",
             "unrequested_draft_field",
@@ -673,19 +674,19 @@ class Arc12YudaoChecksTests(unittest.TestCase):
         client = _ConcurrentTestClient()
 
         with tempfile.TemporaryDirectory() as tmp:
-            # 1) read_only_question
+            # 1) unbacked_business_claim (ACC-07)
             ro_exec, ro_ledger, ro_principal, _ = _make_executor(
                 client,
                 ledger_dir=tmp,
                 replies=[
-                    reply(call("goto", path="/orders")),
-                    reply(call("finish", status="cannot", answer="只读问答不切页", items=[
+                    reply(call("finish", status="done", answer="该商机当前已成交。", items=[])),
+                    reply(call("finish", status="cannot", answer="未调用查询工具核实该商机状态", items=[
                         {"item": "状态", "kind": "data", "status": "undelivered", "receipts": []},
                     ])),
                 ],
             )
             ro_run = _run_turn(ro_exec, "这个商机现在是什么状态", ro_ledger, ro_principal)
-            self._assert_check_recorded(ro_run, "read_only_question", outcome="blocked", answer_preserved=False)
+            self._assert_check_recorded(ro_run, "unbacked_business_claim", outcome="blocked", answer_preserved=False)
 
             # 2) draft_only (in _invoke_tool and in _propose)
             draft_exec, draft_ledger, draft_principal, _ = _make_executor(

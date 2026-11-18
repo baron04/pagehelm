@@ -14,6 +14,7 @@ from web_operation_agent.business.errors import (
     BusinessToolPermissionError,
     BusinessToolUnavailableError,
 )
+from web_operation_agent.execution.checks import record_check_fired
 from web_operation_agent.execution.draft_handoff import (
     add_draft_lines,
     field_identity,
@@ -25,10 +26,12 @@ from web_operation_agent.execution.model_loop_contracts import AnswerTarget, Loo
 from web_operation_agent.execution.read_summary import SummaryRefused
 from web_operation_agent.execution.value_source import note_candidates, note_receipt
 from web_operation_agent.goal.data import DataRefused
+from web_operation_agent.privacy import redact_sensitive_assignments
 from web_operation_agent.schemas.browser import MAX_SCROLL_PAGES
 
 from ..reads import bound_data_reads
 from ..reads.api_content import fenced, redacted
+from ..reads.live_filters import active_view_or_tab, canonical_filter_pairs, control_identity
 from ..reads.record_access import contact_can_edit, customer_can_edit
 from ..reads.turn_tables import TurnReadError, date_range
 from ..writes.live_forms import SUBMIT_WORDS, observed_radio_choices, plain
@@ -124,6 +127,242 @@ def _new_form_draft_request(text: str) -> bool:
     return _draft_only_request(text) and not re.search(r"编辑|修改|已有|原值|当前值|改成|改为", text)
 
 
+def _empty_filter_key(route: str, active_view: str = "", filter_pairs=()) -> tuple[str, str, tuple[tuple[str, str], ...]]:
+    return (str(route or ""), str(active_view or ""), canonical_filter_pairs(filter_pairs))
+
+
+def _verified_empty_store(ctx, policy_turn=None) -> set:
+    if isinstance(policy_turn, dict) or (policy_turn is not None and hasattr(policy_turn, "setdefault")):
+        store = policy_turn.setdefault("verified_empty_filters", set())
+        if isinstance(store, set):
+            return store
+    store = getattr(ctx, "verified_empty_filters", None) if ctx is not None else None
+    if not isinstance(store, set):
+        store = set()
+        if ctx is not None:
+            try:
+                setattr(ctx, "verified_empty_filters", store)
+            except Exception:
+                pass
+    return store
+
+
+def record_verified_empty_filter(ctx, policy_turn, *, route: str, active_view: str = "", filter_pairs=()):
+    key = _empty_filter_key(route, active_view, filter_pairs)
+    from web_operation_agent.execution import loop_guard
+    core_fn = getattr(loop_guard, "record_verified_empty_filter", None)
+    if callable(core_fn) and policy_turn is not None:
+        try:
+            core_fn(policy_turn, route=key[0], active_view_or_tab=key[1], filter_pairs=key[2])
+        except TypeError:
+            try:
+                core_fn(policy_turn, key[0], key[1], key[2])
+            except Exception:
+                pass
+    _verified_empty_store(ctx, policy_turn).add(key)
+    return key
+
+
+def is_verified_empty_filter(ctx, policy_turn, *, route: str, active_view: str = "", filter_pairs=()) -> bool:
+    key = _empty_filter_key(route, active_view, filter_pairs)
+    from web_operation_agent.execution import loop_guard
+    core_fn = getattr(loop_guard, "is_verified_empty_filter", None)
+    if callable(core_fn) and policy_turn is not None:
+        try:
+            if core_fn(policy_turn, route=key[0], active_view_or_tab=key[1], filter_pairs=key[2]):
+                return True
+        except TypeError:
+            try:
+                if core_fn(policy_turn, key[0], key[1], key[2]):
+                    return True
+            except Exception:
+                pass
+    return key in _verified_empty_store(ctx, policy_turn)
+
+
+def _current_page_query_filters(observation, overrides=None) -> tuple[tuple[str, str], ...]:
+    """Extract current visible query-control `(label, value)` pairs merged with optional overrides."""
+    merged: dict[str, str] = {}
+    if observation is not None:
+        for e in getattr(observation, "elements", ()) or ():
+            attrs = getattr(e, "attrs", {}) or {}
+            if attrs.get("page_control") != "query":
+                continue
+            label = str(attrs.get("field_label") or attrs.get("title") or "").strip().rstrip(":：").strip()
+            if not label:
+                continue
+            val = attrs.get("selected_option") if attrs.get("selected_option") is not None else attrs.get("value")
+            if isinstance(val, str) and val.strip():
+                merged[label] = val.strip()
+    if overrides:
+        for item in overrides:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label") or "").strip().rstrip(":：").strip()
+            if not label or label in _PAGING:
+                continue
+            val = str(item.get("value") or "").strip()
+            if val:
+                merged[label] = val
+            else:
+                merged.pop(label, None)
+    return canonical_filter_pairs(merged)
+
+
+def _is_settled_action_receipt(action: str, receipt, *, expected_path: str = "") -> bool:
+    if action not in {"click", "select", "goto"} or receipt is None or not getattr(receipt, "ok", False):
+        return False
+    obs = getattr(receipt, "observation", None)
+    summary = getattr(receipt, "observation_summary", None)
+    if obs is None or getattr(obs, "render_state", "") != "ready" or not isinstance(summary, dict) or not summary:
+        return False
+    if expected_path:
+        return urlsplit(obs.url).path == expected_path and getattr(obs, "page_route", "") == expected_path
+    return True
+
+
+def _format_observation_summary(summary: dict | None, handoffs=None) -> str:
+    if not isinstance(summary, dict) or not summary:
+        return ""
+    parts: list[str] = []
+    if summary.get("url_changed"):
+        parts.append("页面已跳转")
+    if summary.get("active_view"):
+        parts.append(f"当前视图={summary['active_view']}")
+    if summary.get("dialog_title"):
+        parts.append(f"弹窗={summary['dialog_title']}")
+    if isinstance(summary.get("row_count"), int):
+        parts.append(f"可见行数={summary['row_count']}")
+    msgs = summary.get("new_messages")
+    if isinstance(msgs, (list, tuple)) and msgs:
+        parts.append("提示=" + " | ".join(str(m) for m in msgs[:2]))
+    if not parts:
+        return ""
+    line = "页面变化摘要：" + "；".join(parts)
+    if handoffs is not None:
+        line = redacted(line, handoffs)
+    return redact_sensitive_assignments(line)[:400]
+
+
+def _is_restricted_control(element) -> str:
+    if element is None:
+        return ""
+    attrs = getattr(element, "attrs", {}) or {}
+    for key in ("restricted", "form_input_kind", "input_type", "type"):
+        val = str(attrs.get(key) or "").strip().lower()
+        if val in {"password", "file"}:
+            return val
+    if attrs.get("restricted") in {True, "true"}:
+        return "restricted"
+    return ""
+
+
+def _collect_restricted_controls(observation, scope: str = "") -> list[dict[str, str]]:
+    found: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for e in getattr(observation, "elements", ()) or ():
+        attrs = getattr(e, "attrs", {}) or {}
+        if scope and attrs.get("form_scope") != scope:
+            continue
+        kind = _is_restricted_control(e)
+        if not kind:
+            continue
+        label = _control_name(e)
+        if not label or (label, kind) in seen:
+            continue
+        seen.add((label, kind))
+        item: dict[str, str] = {"label": label, "kind": kind}
+        if getattr(e, "ref", ""):
+            item["ref"] = str(e.ref)
+        found.append(item)
+    return found
+
+
+def _field_outcome_bucket(turn) -> dict:
+    bucket = turn.setdefault("field_outcomes", {})
+    bucket.setdefault("applied_fields", {})
+    bucket.setdefault("rejected_fields", {})
+    bucket.setdefault("previous_fields", {})
+    bucket.setdefault("restricted_fields", [])
+    return bucket
+
+
+def _merge_field_outcomes(
+    turn,
+    *,
+    applied: dict | None = None,
+    rejected: dict | None = None,
+    previous: dict | None = None,
+    restricted=(),
+) -> dict:
+    bucket = _field_outcome_bucket(turn)
+    if isinstance(previous, dict):
+        for k, v in previous.items():
+            if k:
+                bucket["previous_fields"].setdefault(str(k), "" if v is None else str(v))
+    if isinstance(applied, dict):
+        for k, v in applied.items():
+            if k:
+                key = str(k)
+                bucket["applied_fields"][key] = "" if v is None else str(v)
+                bucket["rejected_fields"].pop(key, None)
+    if isinstance(rejected, dict):
+        for k, v in rejected.items():
+            if k:
+                key = str(k)
+                bucket["rejected_fields"][key] = v
+                bucket["applied_fields"].pop(key, None)
+    if restricted:
+        existing = list(bucket["restricted_fields"])
+        for item in restricted:
+            val = str(item or "").strip()
+            if val and val not in existing:
+                existing.append(val)
+        bucket["restricted_fields"] = existing
+    return bucket
+
+
+def build_handoff_facts(turn, observation=None, *, scope: str = "") -> dict | None:
+    """Build bounded `HandoffCardFacts` from turn field outcomes and restricted controls."""
+    bucket = (turn or {}).get("field_outcomes")
+    if not isinstance(bucket, dict):
+        return None
+    applied = bucket.get("applied_fields") or {}
+    rejected = bucket.get("rejected_fields") or {}
+    previous = bucket.get("previous_fields") or {}
+    restricted_labels = list(bucket.get("restricted_fields") or ())
+    completed = [{"name": str(k), "value": str(v)} for k, v in applied.items() if k]
+    pending = []
+    seen_pending: set[str] = set()
+    for k in rejected:
+        name = str(k)
+        if name and name not in seen_pending:
+            seen_pending.add(name)
+            pending.append({"name": name})
+    restricted_controls = _collect_restricted_controls(observation, scope=scope) if observation is not None else []
+    restricted_map = {c["label"]: c for c in restricted_controls}
+    for label in restricted_labels:
+        if label not in restricted_map:
+            restricted_controls.append({"label": label, "kind": "password" if "密码" in label else "restricted"})
+        if label not in seen_pending:
+            seen_pending.add(label)
+            pending.append({"name": label})
+    for ctrl in restricted_controls:
+        if ctrl["label"] not in seen_pending:
+            seen_pending.add(ctrl["label"])
+            pending.append({"name": ctrl["label"]})
+    if not completed and not pending and not restricted_controls:
+        return None
+    out: dict = {
+        "completed_fields": completed,
+        "pending_fields": pending,
+        "can_undo": bool(previous and completed),
+    }
+    if restricted_controls:
+        out["restricted_controls"] = restricted_controls
+    return out
+
+
 class _Procedure:
     def __init__(self, owner, name):
         self.owner, self.name = owner, name
@@ -145,12 +384,16 @@ class _ConcurrentReadProcedure(_Procedure):
 class YudaoProceduresBase:
     """Application knowledge and bounded page procedures for the shared loop."""
 
-    def __init__(self, knowledge, goal_port, origin, *, turn_context: SlimTurnContext | None = None):
+    def __init__(self, knowledge, goal_port, origin, *, turn_context: SlimTurnContext | None = None,
+                 publish_step=None, check_fired=None):
         self.knowledge, self.goal_port = knowledge, goal_port
         self.application = SimpleNamespace(descriptor=SimpleNamespace(origin=origin))
         #: The last business-form batch this turn entered, kept for a handoff made at its end.
         self.form_fill = None
         self.turn_context = turn_context if turn_context is not None else SlimTurnContext()
+        self._publish_step_cb = publish_step
+        self._check_fired_cb = check_fired
+        self._last_action_receipt = None
 
     def _ctx(self) -> SlimTurnContext:
         ctx = getattr(self, "turn_context", None)
@@ -158,6 +401,42 @@ class YudaoProceduresBase:
             ctx = SlimTurnContext()
             self.turn_context = ctx
         return ctx
+
+    def _publish_read_page(self, s, page_no: int) -> None:
+        if not isinstance(page_no, int) or isinstance(page_no, bool) or page_no < 1:
+            return
+        facts = {"stage": "read_page", "page": page_no}
+        turn_id = str(getattr(getattr(s, "message", None), "message_id", "")
+                      or getattr(getattr(s, "operation", None), "turn_id", "") or "")
+        cb = getattr(self, "_publish_step_cb", None)
+        if callable(cb):
+            cb(facts, turn_id)
+            return
+        pub = getattr(s, "_publish_step", None)
+        if callable(pub):
+            pub(facts, turn_id)
+            return
+        progress = getattr(s, "progress", None)
+        if callable(progress):
+            progress(facts)
+
+    def _emit_check(self, s, check: str, *, outcome: str = "blocked",
+                    attempt: int = 1, answer_preserved: bool = False) -> None:
+        cb = getattr(self, "_check_fired_cb", None)
+        if callable(cb):
+            cb(s, check, outcome=outcome, attempt=attempt, answer_preserved=answer_preserved)
+            return
+        ledger = getattr(s, "ledger", None)
+        if ledger is not None:
+            record_check_fired(
+                ledger,
+                s=s,
+                trace=None,
+                check=check,
+                outcome=outcome,
+                attempt=attempt,
+                answer_preserved=answer_preserved,
+            )
 
     def _bound_reads(self, data, operation, checkpoint):
         return bound_data_reads.BoundDataReads(data, operation, checkpoint, turn_context=self._ctx())
@@ -204,8 +483,15 @@ class YudaoProceduresBase:
         return next((e for e in s.obs.elements if e.ref == f"e{number}"), None)
 
     def _act(self, s, action: str, args: dict, *, navigating: bool = False, complete_query=False) -> LoopToolResult | None:
+        self._last_action_receipt = None
+        element = (next((e for e in s.obs.elements if e.ref == args.get("ref")), None)
+                   if getattr(s, "obs", None) is not None and args.get("ref") else None)
+        if element is not None and callable(getattr(s, "audit", None)):
+            try:
+                s.audit("page_control_identity", action=action, **control_identity(s.obs, element))
+            except TypeError:
+                pass
         if action == "select":
-            element = next((e for e in s.obs.elements if e.ref == args.get("ref")), None)
             if element is not None and element.role == "radiogroup":
                 choices = [c for c in observed_radio_choices(element) if c.label == args.get("option_label")]
                 if len(choices) != 1:
@@ -213,11 +499,34 @@ class YudaoProceduresBase:
                                           kind="page", state="refused", error_code="invalid_target")
                 args = {**args, "value": choices[0].value}
         outcome = s.page.execute(action, args, navigating=navigating)
+        receipt = getattr(outcome, "receipt", None)
+        self._last_action_receipt = receipt
+        policy_turn = self._ctx().executor_turn
+        if receipt is not None:
+            if getattr(receipt, "observation", None) is not None and not isinstance(getattr(type(s), "obs", None), property):
+                s.obs = receipt.observation
+            if policy_turn is not None:
+                if isinstance(getattr(receipt, "observation_summary", None), dict) and receipt.observation_summary:
+                    policy_turn["last_observation_summary"] = dict(receipt.observation_summary)
+                if any(getattr(receipt, k, None) for k in ("applied_fields", "rejected_fields", "previous_fields", "restricted_fields")):
+                    _merge_field_outcomes(
+                        policy_turn,
+                        applied=getattr(receipt, "applied_fields", None),
+                        rejected=getattr(receipt, "rejected_fields", None),
+                        previous=getattr(receipt, "previous_fields", None),
+                        restricted=getattr(receipt, "restricted_fields", ()),
+                    )
         if outcome.state == "completed":
             if complete_query:
-                return LoopToolResult("查询动作已核验。", kind="page", dispatch=outcome.dispatch,
+                summary_note = _format_observation_summary(
+                    getattr(receipt, "observation_summary", None),
+                    getattr(getattr(self, "knowledge", None), "handoffs", None),
+                )
+                msg = "查询动作已核验。" + (f"\n{summary_note}" if summary_note else "")
+                return LoopToolResult(msg, kind="page", dispatch=outcome.dispatch,
                                       completion_command=outcome.receipt.command_id)
             return None
+        err_code = outcome.error_code or (receipt.error_code if receipt is not None else "")
         reasons = {
             "unreviewed": "本部署未开放这个页面动作（应用尚未审核它的效果）；同一动作不会执行，"
                           "不要重复点击同一控件。这不代表账号无权限。要打开某条记录的详情，"
@@ -228,22 +537,24 @@ class YudaoProceduresBase:
             "stale_binding": "页面已变化，请根据最新观察重新选择。",
             "permission_denied": "当前账号没有执行这项操作的权限。",
             "expired": "本次动作授权已过期。",
+            "form_closed_or_readonly": "目标表单或弹窗已关闭、分离或为只读状态，请勿编造值或用旧控件序号重试；"
+                                       "请先核对当前页面观察，再决定是否重新打开表单或如实说明。",
         }
         feedback = ("未执行：" if outcome.dispatch == "not_dispatched" else
-                    "操作已发出但结果未确认，不会自动重发：") + reasons.get(outcome.error_code, "请根据错误码和最新观察决定下一步。")
-        if outcome.state == "refused" and outcome.error_code == "option_unavailable":
-            labels = outcome.receipt.candidate_labels if outcome.receipt is not None else ()
+                    "操作已发出但结果未确认，不会自动重发：") + reasons.get(err_code, "请根据错误码和最新观察决定下一步。")
+        if outcome.state == "refused" and err_code == "option_unavailable":
+            labels = receipt.candidate_labels if receipt is not None else ()
             feedback = ("未选择：应用已核验这个下拉操作没有改变表单。请从它的选项中核对精确名称；保留空格，不会自动替换。\n"
                         + fenced(redacted("\n".join(labels), self.knowledge.handoffs)))
-        elif outcome.receipt is not None and outcome.receipt.error_code == "option_unavailable":
+        elif receipt is not None and receipt.error_code == "option_unavailable":
             feedback = ("下拉框没有请求的精确选项，且未能确认当前表单完全保持原样；"
                         "不会自动重发，请手工核对当前草稿。")
         terminal = (bool(getattr(s, "terminal_reason", ""))
                     and outcome.state in {"refused", "unverified"}
-                    and (outcome.error_code == "option_unavailable" or outcome.receipt is not None
-                         and outcome.receipt.error_code == "option_unavailable"))
+                    and (err_code == "option_unavailable" or receipt is not None
+                         and receipt.error_code == "option_unavailable"))
         return LoopToolResult(feedback, kind="page", state=outcome.state,
-                              dispatch=outcome.dispatch, error_code=outcome.error_code,
+                              dispatch=outcome.dispatch, error_code=err_code,
                               terminal_answer=(feedback[:3500] + " 后续操作已停止，没有点击提交按钮，请核对当前草稿。") if terminal else "")
 
     def _choice_label(self, s, element, value):
@@ -289,7 +600,11 @@ class YudaoProceduresBase:
                     if policy_turn is not None:
                         for value in _date_range_receipt_values(data):
                             note_receipt(policy_turn, "", value)
-                return LoopToolResult(fenced(json.dumps(data, ensure_ascii=False)), kind="read")
+                body = fenced(json.dumps(data, ensure_ascii=False))
+                if name == "sql" and isinstance(data, dict) and data.get("table_ref"):
+                    if data.get("returned_rows", 0) >= 20 or data.get("truncated"):
+                        body += f"\n本结果集较大，可用 finish(..., table_ref=\"{data['table_ref']}\") 原样交付完整表格。"
+                return LoopToolResult(body, kind="read")
             except TurnReadError as exc:
                 return LoopToolResult(str(exc), kind="read", state="refused", error_code=exc.code)
         review_completion = False
@@ -348,12 +663,20 @@ class YudaoProceduresBase:
             if not isinstance(params, dict):
                 raise ValueError("query parameters must be an object")
             called_path = "/admin-api/" + args["path"].removeprefix("/admin-api/").lstrip("/")
+            req_filters = {key: value for key, value in params.items() if key not in ("pageNo", "pageSize")}
+            if is_verified_empty_filter(ctx, policy_turn, route=called_path, active_view="", filter_pairs=req_filters):
+                self._emit_check(s, "verified_empty_filter_repeated")
+                return LoopToolResult(
+                    "未执行：同一接口与筛选条件在本轮已核验为空结果（total=0）；请勿重复相同查询，请更换条件或如实说明查无记录。",
+                    kind="read", state="refused", error_code="verified_empty_filter_repeated",
+                )
             with s.measure("business"):
                 try:
                     sink = {"row_sink": table_context[0].add} if table_context is not None else {}
                     text = know.call_api(args["path"], params, args.get("fields", ()),
                                          **sink,
                                          row_offset=args.get("row_offset", 0),
+                                         on_page=lambda page_no: self._publish_read_page(s, page_no),
                                          **({"summary": args["summary"]} if "summary" in args else {}),
                                          **({"actor_digest": s.operation.principal.actor_authority_digest}
                                             if "summary" in args else {}))
@@ -376,6 +699,13 @@ class YudaoProceduresBase:
                         "还需要补充证据时，依据已发布的只读接口和当前账号范围寻找。",
                         kind="read", state="refused", error_code="permission_denied")
             if know.last_read:
+                if getattr(know, "last_is_list", False) and (
+                        know.last_read.get("declared_total") == 0 or know.last_read.get("count") == 0):
+                    record_verified_empty_filter(
+                        ctx, policy_turn,
+                        route=called_path, active_view="",
+                        filter_pairs=getattr(know, "last_filters", req_filters),
+                    )
                 def valid_key(key):
                     return isinstance(key, str) and bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", key))
                 published_fields = know._row_schema(called_path)
@@ -424,7 +754,11 @@ class YudaoProceduresBase:
             failed = self._act(s, "goto", {"url": self.application.descriptor.origin + path}, navigating=True)
             if failed:
                 return failed
-            settled = self._settled(s, path=path)
+            goto_receipt = getattr(self, "_last_action_receipt", None)
+            if _is_settled_action_receipt("goto", goto_receipt, expected_path=path):
+                settled = "still"
+            else:
+                settled = self._settled(s, path=path)
             there = urlsplit(s.obs.url).path
             if there != path:
                 return LoopToolResult(f"没有成功：浏览器现在在 {there}，没有到 {path}。", kind="page", state="unverified")
@@ -435,6 +769,8 @@ class YudaoProceduresBase:
                 return LoopToolResult(f"浏览器到了 {path}，但应用还没有报告这个页面已经显示出来：看下面的页面再决定。",
                                       kind="page", state="unverified", dispatch="acknowledged")
             access = self._record_access(s, path)
+            handoffs = getattr(getattr(self, "knowledge", None), "handoffs", None)
+            summary_note = _format_observation_summary(getattr(goto_receipt, "observation_summary", None), handoffs)
             opening = str(args.get("open", "")).strip()
             if opening:
                 lines, _hints = _page_lines(s.obs)
@@ -450,10 +786,14 @@ class YudaoProceduresBase:
                 failed = self._act(s, "click", {"ref": buttons[0].ref})
                 if failed:
                     return failed
-                self._settled(s)
-                return LoopToolResult("已打开。" + access + f" 已进入“{opening}”表单。", kind="page",
-                                      dispatch="acknowledged")
-            return LoopToolResult("已打开。" + access, kind="page", dispatch="acknowledged")
+                open_receipt = getattr(self, "_last_action_receipt", None)
+                if not _is_settled_action_receipt("click", open_receipt):
+                    self._settled(s)
+                open_note = _format_observation_summary(getattr(open_receipt, "observation_summary", None), handoffs)
+                msg = "已打开。" + access + f" 已进入“{opening}”表单。" + (f"\n{open_note}" if open_note else "")
+                return LoopToolResult(msg, kind="page", dispatch="acknowledged")
+            msg = "已打开。" + access + (f"\n{summary_note}" if summary_note else "")
+            return LoopToolResult(msg, kind="page", dispatch="acknowledged")
         if name in ("click", "input", "select", "highlight") or (name == "scroll" and args.get("index") is not None):
             element = self._element(s, args.get("index", -1))
             if element is None:
@@ -464,23 +804,68 @@ class YudaoProceduresBase:
             if (element.role == "tab" and s.obs.record_route == urlsplit(s.obs.url).path
                     and not self._detail_handoff_target(s, ctx.current_request)):
                 review_completion = True
+            btn_plain = plain(element.name)
+            is_query_btn = element.attrs.get("page_control") == "query" or btn_plain in {"搜索", "查询", "重置"}
+            route = s.obs.page_route or urlsplit(s.obs.url).path
+            tab = active_view_or_tab(s.obs)
+            if is_query_btn and btn_plain in {"搜索", "查询"}:
+                cur_filters = _current_page_query_filters(s.obs)
+                if is_verified_empty_filter(ctx, policy_turn, route=route, active_view=tab, filter_pairs=cur_filters):
+                    self._emit_check(s, "verified_empty_filter_repeated")
+                    return LoopToolResult(
+                        "未执行：当前筛选条件在本轮已核验为空结果（0条）；请勿重复相同查询，请更换条件或如实说明查无记录。",
+                        kind="page", state="refused", error_code="verified_empty_filter_repeated",
+                    )
+            elif is_query_btn and btn_plain == "重置":
+                cur_filters = _current_page_query_filters(s.obs)
+                if not cur_filters and is_verified_empty_filter(ctx, policy_turn, route=route, active_view=tab, filter_pairs=()):
+                    self._emit_check(s, "verified_empty_filter_repeated")
+                    return LoopToolResult(
+                        "未执行：当前无筛选条件的结果在本轮已核验为空（0条）；请勿重复重置查询。",
+                        kind="page", state="refused", error_code="verified_empty_filter_repeated",
+                    )
             tree_query = element.role == "treeitem" and element.attrs.get("page_control") == "query"
             failed = self._act(s, "click", {"ref": element.ref}, complete_query=tree_query)
             if tree_query and failed is not None and failed.state == "completed":
                 return failed
+            click_receipt = getattr(self, "_last_action_receipt", None)
             if not failed:
-                self._settled(s)
+                if not _is_settled_action_receipt("click", click_receipt):
+                    self._settled(s)
+                if is_query_btn and getattr(s.obs, "page_read", None) is not None:
+                    read_info = s.obs.page_read
+                    if read_info.get("total") == 0 or read_info.get("rows") == 0:
+                        record_verified_empty_filter(
+                            ctx, policy_turn,
+                            route=s.obs.page_route or urlsplit(s.obs.url).path,
+                            active_view=active_view_or_tab(s.obs),
+                            filter_pairs=_current_page_query_filters(s.obs),
+                        )
             text = ("已点开下拉。要选其中一项，用 select(index, option) 按选项文字选："
                     "展开的列表只显示了一部分，在里面点容易点错。") if _control_kind(element) == "〔下拉〕" else "已点击。"
+            if not failed:
+                handoffs = getattr(getattr(self, "knowledge", None), "handoffs", None)
+                summary_note = _format_observation_summary(getattr(click_receipt, "observation_summary", None), handoffs)
+                if summary_note:
+                    text += "\n" + summary_note
         elif name in ("input", "select"):
             value = args["text"] if name == "input" else args["option"]
             intent = ctx.write_intent
             scope = str(element.attrs.get("form_scope") or "")
+            label = _control_name(element)
+            restricted_kind = _is_restricted_control(element)
+            if restricted_kind:
+                if policy_turn is not None:
+                    _merge_field_outcomes(policy_turn, restricted=(label,))
+                return LoopToolResult(
+                    f"「{label}」属于受限控件（{restricted_kind}），不能由助手自动填入，请留给用户手动输入。",
+                    kind="page", state="refused", error_code="invalid_target",
+                )
             if (isinstance(intent, WriteIntent) and intent.mode == "draft"
                     and _business_scope(scope)
                     and element.attrs.get("page_control") != "query"):
                 unrequested = _unrequested_draft_fields(
-                    [{"label": _control_name(element), "value": value}],
+                    [{"label": label, "value": value}],
                     ctx.current_request, ctx.earlier_requests,
                     other_labels=[str(e.attrs.get("field_label") or "") for e in s.obs.elements
                                   if e.attrs.get("form_scope") == scope])
@@ -497,14 +882,38 @@ class YudaoProceduresBase:
                 command = {"ref": element.ref, "value": value, "option_label": value}
             if _unavailable_already_matches(element, value):
                 return LoopToolResult(
-                    f"「{_control_name(element)}」当前已是「{value}」（只读/禁用字段，保持原值）。",
+                    f"「{label}」当前已是「{value}」（只读/禁用字段，保持原值）。",
                     kind="page", state="completed", dispatch="not_dispatched")
+            previous_value = str(
+                element.attrs.get("selected_option")
+                if element.attrs.get("selected_option") is not None
+                else element.attrs.get("value") or ""
+            )
             failed = (self._act(s, "fill", command) if name == "input"
                       else self._select(s, element, value))
+            act_receipt = getattr(self, "_last_action_receipt", None)
             if not failed:
-                turn["touched"].append((_control_name(element), value))
-                self._settled(s, waits=2)
+                turn["touched"].append((label, value))
+                if policy_turn is not None:
+                    _merge_field_outcomes(
+                        policy_turn,
+                        applied={label: value},
+                        previous={label: previous_value},
+                    )
+                if not (name == "select" and _is_settled_action_receipt("select", act_receipt)):
+                    self._settled(s, waits=2)
+            elif policy_turn is not None:
+                _merge_field_outcomes(
+                    policy_turn,
+                    rejected={label: failed.error_code or "rejected"},
+                    previous={label: previous_value},
+                )
             text = "已填入。" if name == "input" else "已选中。"
+            if not failed:
+                handoffs = getattr(getattr(self, "knowledge", None), "handoffs", None)
+                summary_note = _format_observation_summary(getattr(act_receipt, "observation_summary", None), handoffs)
+                if summary_note:
+                    text += "\n" + summary_note
         elif name == "scroll":
             command = {"direction": "down" if args["down"] else "up", "pages": 1}
             if args.get("index") is not None:
@@ -601,12 +1010,25 @@ class YudaoProceduresBase:
                      query_only=False, locate=None, choose=None) -> LoopToolResult:
         """Fill or choose several named fields one after another, each found afresh."""
         ctx = self._ctx()
+        policy_turn = ctx.executor_turn
         if not 1 <= len(fields) <= _FORM_BATCH_FIELDS:
             return LoopToolResult("字段批次数量超出工具上限，整批未执行；请分批填写，最后再交接。",
                                   kind="page", state="refused", error_code="invalid_arguments")
         if then_click and then_highlight:
             return LoopToolResult("筛选和表单交接不能同时执行。", kind="page", state="refused",
                                   error_code="invalid_arguments")
+        query_filter_pairs = ()
+        is_query_submit = bool(query_only or plain(then_click) in {"搜索", "查询"})
+        if is_query_submit:
+            query_filter_pairs = _current_page_query_filters(s.obs, fields)
+            route = getattr(s.obs, "page_route", "") or urlsplit(getattr(s.obs, "url", "") or "").path
+            tab = active_view_or_tab(s.obs)
+            if is_verified_empty_filter(ctx, policy_turn, route=route, active_view=tab, filter_pairs=query_filter_pairs):
+                self._emit_check(s, "verified_empty_filter_repeated")
+                return LoopToolResult(
+                    "未执行：同一页面筛选条件在本轮已核验为空结果（0条）；请勿重复相同筛选或重置后重查，请更换条件或如实说明查无记录。",
+                    kind="page", state="refused", error_code="verified_empty_filter_repeated",
+                )
         intent = ctx.write_intent
         form_batch = bool(then_highlight or add_lines) or any(
             _business_scope(e.attrs.get("form_scope"))
@@ -631,6 +1053,7 @@ class YudaoProceduresBase:
         before, expected = s.obs, []
         said, incomplete, failure = [], False, None
         paging_commands, paging_targets = [], []
+        batch_applied, batch_rejected, batch_previous, batch_restricted = {}, {}, {}, []
 
         def _visible_named(target_label: str):
             vis_lines, _ = _page_lines(s.obs)
@@ -666,28 +1089,50 @@ class YudaoProceduresBase:
             shown, found = _visible_named(label)
             if not found:
                 incomplete = True
+                batch_rejected[label] = "missing_control"
                 said.append(f"{label}：屏幕上没有这个字段（先 scroll 让它出现，或核对字段名）")
                 continue
             kind = _control_kind(found[0])
             anchor = found[0]
+            restricted_kind = _is_restricted_control(anchor)
+            if restricted_kind:
+                incomplete = True
+                if label not in batch_restricted:
+                    batch_restricted.append(label)
+                batch_rejected[label] = f"restricted_{restricted_kind}"
+                said.append(f"{label}：属于受限控件（{restricted_kind}），不能由助手自动填入，请由用户手动填写")
+                continue
             pair = _date_pair(anchor, s.obs.elements)
             if kind == "〔日期〕" and (pair or re.search(r"[~～至到]", value)):
                 if not pair or any(e.ref[1:] not in shown for e in pair) or any(e not in pair for e in found):
                     incomplete = True
+                    batch_rejected[label] = "missing_date_range"
                     said.append(f"{label}：屏幕上没有唯一的日期范围两个框（先 scroll 让它们出现，或核对字段名）")
                     continue
                 ends = [part.strip() for part in re.split(r"\s*(?:~|～|至|到)\s*", value)]
                 if len(ends) != 2 or not all(ends):
                     incomplete = True
+                    batch_rejected[label] = "invalid_date_range"
                     said.append(f"{label}：这是日期范围，值写成“开始 ~ 结束”")
                     continue
                 steps = list(zip(pair, ends))
+                batch_previous.setdefault(
+                    label,
+                    " ~ ".join(str(e.attrs.get("value") or "") for e in pair).strip(" ~"),
+                )
             else:
                 if len(found) != 1:
                     incomplete = True
+                    batch_rejected[label] = "ambiguous_control"
                     said.append(f"{label}：屏幕上有多个同名字段，尚未填写")
                     continue
                 steps = [(found[0], value)]
+                batch_previous.setdefault(
+                    label,
+                    str(found[0].attrs.get("selected_option")
+                        if found[0].attrs.get("selected_option") is not None
+                        else found[0].attrs.get("value") or ""),
+                )
             failed = ""
             dispatched_any = False
             for at, (element, text) in enumerate(steps):
@@ -724,7 +1169,9 @@ class YudaoProceduresBase:
                                 and not _date_pair(nxt_found[0], s.obs.elements)):
                             coalesce_plain = True
                 if not coalesce_plain:
-                    self._settled(s, waits=2)
+                    last_rcpt = getattr(self, "_last_action_receipt", None)
+                    if not (kind in ("〔下拉〕", "〔单选〕") and _is_settled_action_receipt("select", last_rcpt)):
+                        self._settled(s, waits=2)
             if s.terminal_reason:
                 detail = "；".join(said)
                 detail += ("；" if detail else "") + f"{label}：" + (
@@ -736,14 +1183,36 @@ class YudaoProceduresBase:
             if failed:
                 incomplete = True
                 failure = failure or failed
+                batch_rejected[label] = failed.error_code or "rejected"
                 said.append(f"{label}：{failed.feedback}")
+                if failed.error_code == "form_closed_or_readonly":
+                    break
             else:
                 if not dispatched_any:
+                    batch_applied[label] = value
                     said.append(f"{label}：已是「{value}」（只读/禁用字段，保持原值）")
                 else:
+                    batch_applied[label] = value
                     turn["touched"].append((label, value))
                     turn["trace"].append(f"fill_fields[{label}]({json.dumps(value, ensure_ascii=False)[:60]})")
                     said.append(f"{label}：已{'选' if kind in ('〔下拉〕', '〔单选〕') else '填'}")
+        _merge_field_outcomes(
+            turn,
+            applied=batch_applied,
+            rejected=batch_rejected,
+            previous=batch_previous,
+            restricted=batch_restricted,
+        )
+        if policy_turn is not None:
+            _merge_field_outcomes(
+                policy_turn,
+                applied=batch_applied,
+                rejected=batch_rejected,
+                previous=batch_previous,
+                restricted=batch_restricted,
+            )
+        if failure is not None and failure.error_code == "form_closed_or_readonly":
+            return replace(failure, feedback="；".join(said) + "。")
         wanted = re.sub(r"\s+", "", then_click or "")
         if wanted and not incomplete and not failure:
             if locate is not None:
@@ -761,6 +1230,15 @@ class YudaoProceduresBase:
             else:
                 result = self._act(s, "click", {"ref": buttons[0].ref}, complete_query=True)
                 if result.completion_command:
+                    read_info = getattr(s.obs, "page_read", None)
+                    if is_query_submit and isinstance(read_info, dict) and (
+                            read_info.get("total") == 0 or read_info.get("rows") == 0):
+                        record_verified_empty_filter(
+                            ctx, policy_turn,
+                            route=getattr(s.obs, "page_route", "") or urlsplit(getattr(s.obs, "url", "") or "").path,
+                            active_view=active_view_or_tab(s.obs),
+                            filter_pairs=query_filter_pairs,
+                        )
                     return replace(result, feedback="；".join(said) + "；" + result.feedback)
                 failed = result
                 incomplete = incomplete or bool(failed)
@@ -770,7 +1248,6 @@ class YudaoProceduresBase:
         if form_batch and not query_only and expected and not then_click and not incomplete and not failure:
             self.form_fill = {"before": before, "expected": list(expected)}
         if then_highlight and not then_click and not incomplete and not failure:
-            policy_turn = ctx.executor_turn
             if policy_turn is None:
                 return LoopToolResult(text + "程序没有本轮状态可核对，不标出提交按钮。",
                                       kind="page", state="refused", error_code="turn_state_missing")
@@ -783,6 +1260,10 @@ class YudaoProceduresBase:
                                    blocked=policy_turn.get("unrestorable_forms"))
             if result.marked:
                 turn["marked"] = result.marked
+                handoff_facts = build_handoff_facts(policy_turn or turn, s.obs)
+                if handoff_facts is not None:
+                    turn["handoff_facts"] = handoff_facts
+                    policy_turn["handoff_facts"] = handoff_facts
             return replace(result, feedback=text + result.feedback)
         if (not incomplete and not failure and not then_click and not then_highlight
                 and len(paging_commands) == len(fields) and all(paging_commands)):
@@ -969,7 +1450,11 @@ class YudaoProceduresBase:
                 lists.append(api)
         out = ["找到的记录（模块；页面：记录名称）：", fenced(redacted("\n".join(told), self.knowledge.handoffs))]
         if several:
-            out.append("同一个模块里有几条可能是它：用户要的是其中一条时，不要自己挑，用 need_input 把它们（名称和编号）列给用户选。")
+            out.append(
+                "同一个模块里有几条可能是它：用户要的是其中一条时，不要自己挑，用 need_input"
+                "（调用 finish(status='need_input', answer=..., options=[...])，在 options 提供 2 到 4 个候选"
+                " {id, label, prompt}，标明名称和编号）让用户选。"
+            )
         if lists:
             out += ["这些模块的列表接口：", *("    " + api.replace("\n", "\n    ") for api in lists)]
         if scope_notes:
@@ -1130,7 +1615,15 @@ class YudaoProceduresBase:
                 if not isinstance(params, dict):
                     raise ValueError("query parameters must be an object")
                 called_path = "/admin-api/" + arguments["path"].removeprefix("/admin-api/").lstrip("/")
-                use_table_sink = self._ctx().turn_tables is not None
+                req_filters = {key: value for key, value in params.items() if key not in ("pageNo", "pageSize")}
+                ctx = self._ctx()
+                if is_verified_empty_filter(ctx, ctx.executor_turn, route=called_path, active_view="", filter_pairs=req_filters):
+                    return {
+                        "called_path": called_path,
+                        "params": params,
+                        "verified_empty_blocked": True,
+                    }
+                use_table_sink = ctx.turn_tables is not None
                 actor_digest = (
                     operation.principal.actor_authority_digest
                     if "summary" in arguments and operation is not None
@@ -1190,7 +1683,15 @@ class YudaoProceduresBase:
             know = self.knowledge
             called_path = prepared["called_path"]
             params = prepared["params"]
+            if prepared.get("verified_empty_blocked"):
+                self._emit_check(context, "verified_empty_filter_repeated")
+                return LoopToolResult(
+                    "未执行：同一接口与筛选条件在本轮已核验为空结果（total=0）；请勿重复相同查询，请更换条件或如实说明查无记录。",
+                    kind="read", state="refused", error_code="verified_empty_filter_repeated",
+                )
             self._note(context, stage="tool", tool=name, arguments=said)
+            for page_no in prepared["api"].get("pages_read", ()):
+                self._publish_read_page(context, page_no)
             try:
                 sink = table_context[0].add if table_context is not None else None
                 text = know._commit_call_api(prepared["api"], row_sink=sink)
@@ -1212,6 +1713,14 @@ class YudaoProceduresBase:
                     kind="read", state="refused", error_code="permission_denied",
                 )
             if know.last_read:
+                req_filters = {key: value for key, value in params.items() if key not in ("pageNo", "pageSize")}
+                if getattr(know, "last_is_list", False) and (
+                        know.last_read.get("declared_total") == 0 or know.last_read.get("count") == 0):
+                    record_verified_empty_filter(
+                        ctx, policy_turn,
+                        route=called_path, active_view="",
+                        filter_pairs=getattr(know, "last_filters", req_filters),
+                    )
                 def valid_key(key):
                     return isinstance(key, str) and bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", key))
 

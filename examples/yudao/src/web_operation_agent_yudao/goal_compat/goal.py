@@ -1230,7 +1230,10 @@ class YudaoGoalData:
         rows: dict[str, dict] = {}
         for scene in scenes:
             page = 1
+            on_page = getattr(self, "_on_page_callback", None)
             while True:
+                if page >= 2 and callable(on_page):
+                    on_page(page)
                 query = {**params, **spec.fixed_params}
                 if scene is not None:
                     query["sceneType"] = scene

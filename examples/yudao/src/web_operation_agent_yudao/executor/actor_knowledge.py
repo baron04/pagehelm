@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import inspect
 import json
 import math
 import re
@@ -125,6 +126,8 @@ class ActorKnowledge:
         #: read was refused or named no interface.
         self.last_read: dict | None = None
         self.last_keys: tuple[str, ...] = ()
+        self.last_filters: dict = {}
+        self.last_is_list: bool = False
         self.turn_targets: dict[str, set[str]] = {}
 
     def _load(self):
@@ -372,7 +375,7 @@ class ActorKnowledge:
         """One answer of the application's API as it may be told to a model."""
         return redacted(self.client.get(path, **params), self.handoffs)
 
-    def _pages(self, path: str, params: dict, follow: bool, first=None):
+    def _pages(self, path: str, params: dict, follow: bool, first=None, *, on_page=None):
         """One read of a list, and with `follow` its later pages."""
         data = self._read(path, **params) if first is None else first
         if isinstance(data, list):
@@ -406,6 +409,8 @@ class ActorKnowledge:
             while len(rows) < min(total, _ALL_ROWS):
                 page += 1
                 requests += 1
+                if callable(on_page):
+                    on_page(page)
                 more = self._read(path, **{**params, "pageNo": page})
                 if (not isinstance(more, dict) or type(more.get("total")) is not int
                         or more["total"] != total
@@ -430,8 +435,16 @@ class ActorKnowledge:
         summary=None,
         actor_digest: str = "",
         use_row_sink: bool = False,
+        on_page=None,
     ) -> dict:
         """Pure-read preparation for `call_api`; never mutates `self` or `TurnTables`."""
+        pages_read: list[int] = []
+
+        def track_page(page_no: int) -> None:
+            pages_read.append(page_no)
+            if callable(on_page):
+                on_page(page_no)
+
         prepared: dict = {
             "reset_query_answer": True,
             "reset_read": False,
@@ -439,7 +452,10 @@ class ActorKnowledge:
             "has_last_read": False,
             "last_read": None,
             "last_keys": (),
+            "last_filters": {},
+            "last_is_list": False,
             "last_query_answer": None,
+            "pages_read": pages_read,
         }
         try:
             if use_row_sink and summary is not None:
@@ -488,6 +504,7 @@ class ActorKnowledge:
                             params[k] = [f"{v[0]} 00:00:00", f"{v[1]} 23:59:59"]
             self._validate_params(path, params)
             filters = {key: value for key, value in params.items() if key not in ("pageNo", "pageSize")}
+            prepared["last_filters"] = dict(filters)
             relative, props, out = path[len("/admin-api/"):], self._row_schema(path), []
             if summary is not None:
                 from ..reads.read_summary import bind_native_conditions
@@ -499,7 +516,15 @@ class ActorKnowledge:
             declared_total = None
             data_lines: set[int] = set()
             try:
-                data, rows, total, whole, requests = self._pages(relative, params, bool(fields))
+                pages_kw = (
+                    {"on_page": track_page}
+                    if "on_page" in inspect.signature(self._pages).parameters
+                    else {}
+                )
+                data, rows, total, whole, requests = self._pages(
+                    relative, params, bool(fields), **pages_kw
+                )
+                prepared["last_is_list"] = rows is not None
                 declared_total = total if type(total) is int and total >= 0 else None
                 observed = rows if rows is not None else [data]
                 if (whole or rows is None) and all(isinstance(row, dict) for row in observed):
@@ -715,12 +740,16 @@ class ActorKnowledge:
         if prepared.get("reset_read"):
             self.last_read = None
             self.last_keys = ()
+            self.last_filters = {}
+            self.last_is_list = False
         if prepared.get("turn_targets_update") is not None:
             prefix, ids = prepared["turn_targets_update"]
             self.turn_targets.setdefault(prefix, set()).update(ids)
         if prepared.get("has_last_read"):
             self.last_read = prepared["last_read"]
             self.last_keys = prepared["last_keys"]
+            self.last_filters = dict(prepared.get("last_filters") or {})
+            self.last_is_list = bool(prepared.get("last_is_list"))
         if prepared.get("last_query_answer") is not None:
             self.last_query_answer = prepared["last_query_answer"]
         if "error" in prepared:
@@ -749,13 +778,14 @@ class ActorKnowledge:
         return self._told(out, data_lines)
 
     def call_api(self, path: str, params: dict, fields=(), *, row_offset: int = 0,
-                 summary=None, actor_digest: str = "", row_sink=None) -> str:
+                 summary=None, actor_digest: str = "", row_sink=None, on_page=None) -> str:
         prepared = self._prepare_call_api(
             path, params, fields,
             row_offset=row_offset,
             summary=summary,
             actor_digest=actor_digest,
             use_row_sink=row_sink is not None,
+            on_page=on_page,
         )
         return self._commit_call_api(prepared, row_sink=row_sink)
 

@@ -47,7 +47,7 @@ from web_operation_agent_yudao.executor.procedures import (
 )
 from web_operation_agent_yudao.executor.slim_loop import (
     ActorKnowledge, QueryParametersError, SlimTurnExecutor, TableReadTurnExecutor,
-    YudaoLoopProcedures, _clean_user_answer, _read_only_status_question,
+    YudaoLoopProcedures, _clean_user_answer,
 )
 from web_operation_agent_yudao.writes.write_intent import WriteIntent
 from web_operation_agent_yudao.tests import test_native_writes as native
