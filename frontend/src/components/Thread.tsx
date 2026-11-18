@@ -9,6 +9,7 @@ import {plainText} from '../markdown/plain'
 import {formatFullTime, formatTime} from '../state/clock'
 import {Answer} from './Answer'
 import {CopyButton} from './CopyButton'
+import {DebugTracePanel} from './DebugTracePanel'
 import {guarded} from './ErrorBoundary'
 import {Skeleton} from './Skeleton'
 import {iconProps} from './icon'
@@ -430,6 +431,7 @@ export interface ThreadProps {
   labels: Labels
   limits: PanelLimits
   allowedOrigins: readonly string[]
+  localDevMode?: boolean
   onOpenTarget?: (target: AnswerTarget) => boolean
   onLoadOlder: () => void
   onRetry: () => void
@@ -721,6 +723,9 @@ export function Thread(props: ThreadProps): React.JSX.Element {
                       <span>{labels.retryTurn}</span>
                     </button>
                   </div>
+                )}
+                {props.localDevMode === true && !turn.running && turn.outcome?.debug_trace && (
+                  <DebugTracePanel trace={turn.outcome.debug_trace} labels={labels} />
                 )}
               </div>
             </li>

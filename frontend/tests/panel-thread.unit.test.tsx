@@ -2,7 +2,9 @@ import {act, createElement} from 'react'
 import {createRoot, type Root} from 'react-dom/client'
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import type {PanelHost, PanelSnapshot} from '../src/bridge/host'
-import {DEFAULT_CONFIGURATION, type ReconciliationStatus, type TimelineEntry} from '../src/contract/panel'
+import {
+  DEFAULT_CONFIGURATION, type ReconciliationStatus, type TimelineEntry, type TurnDebugTrace,
+} from '../src/contract/panel'
 import {PanelWindow} from '../src/components/PanelWindow'
 import {Thread} from '../src/components/Thread'
 
@@ -461,5 +463,138 @@ describe('Composer draft recovery on failed delivery (BUG-01)', () => {
     })
     expect(retrySubmit).toHaveBeenCalledTimes(2)
     expect(textarea().value).toBe('已修改的问题')
+  })
+})
+
+describe('Local-dev debug trace inspector (UX-07)', () => {
+  let host: HTMLDivElement
+  let root: Root
+
+  const sampleTrace: TurnDebugTrace = {
+    first_route_kind: 'table_read',
+    stop_reason: 'finish',
+    wall_ms: 420,
+    stage_ms: {model: 300, tools: 120},
+    model_calls: 2,
+    tokens: {input: 120, output: 45, total: 165},
+    tool_chain: [
+      {step: 1, tool: 'query_orders', elapsed_ms: 95, ok: true},
+      {step: 2, tool: 'read_record', elapsed_ms: 25, ok: false, error_code: 'not_found'},
+    ],
+    checks: [
+      {check: 'post_read', outcome: 'pass', attempt: 1},
+    ],
+  }
+
+  beforeEach(() => {
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    root = createRoot(host)
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    act(() => { root.unmount() })
+    host.remove()
+    vi.restoreAllMocks()
+  })
+
+  it('renders nothing when local_dev_mode is false or omitted even if debug_trace is present', () => {
+    const snap = makeSnapshot({
+      entries: [
+        makeEntry('e1', 'goal', '列出订单'),
+        makeEntry('e2', 'result', '共 3 条。', {panel_state: 'success', debug_trace: sampleTrace}),
+      ],
+    })
+    act(() => {
+      root.render(createElement(Thread, {
+        snapshot: snap, labels, limits, allowedOrigins: [],
+        onLoadOlder: () => undefined, onRetry: () => undefined,
+      }))
+    })
+    expect(host.querySelector('[data-testid="woa-debug-trace"]')).toBeNull()
+    expect(host.querySelector('.woa-trace')).toBeNull()
+
+    const panelHost = makeHost(snap, {
+      configuration: {...DEFAULT_CONFIGURATION, local_dev_mode: false},
+    })
+    act(() => {
+      root.render(createElement(PanelWindow, {host: panelHost, allowedOrigins: []}))
+    })
+    const launcher = host.querySelector<HTMLButtonElement>('.woa-launcher')
+    if (launcher) act(() => { launcher.click() })
+    expect(host.querySelector('[data-testid="woa-debug-trace"]')).toBeNull()
+    expect(host.querySelector('.woa-trace')).toBeNull()
+  })
+
+  it('toggles trace details and copies JSON when local_dev_mode is true', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(window, 'isSecureContext', {value: true, configurable: true})
+    Object.defineProperty(navigator, 'clipboard', {value: {writeText}, configurable: true})
+
+    const snap = makeSnapshot({
+      entries: [
+        makeEntry('e1', 'goal', '列出订单'),
+        makeEntry('e2', 'result', '共 3 条。', {panel_state: 'success', debug_trace: sampleTrace}),
+      ],
+    })
+    const panelHost = makeHost(snap, {
+      configuration: {...DEFAULT_CONFIGURATION, local_dev_mode: true},
+    })
+    act(() => {
+      root.render(createElement(PanelWindow, {host: panelHost, allowedOrigins: []}))
+    })
+    const launcher = host.querySelector<HTMLButtonElement>('.woa-launcher')
+    if (launcher) act(() => { launcher.click() })
+
+    const traceBox = host.querySelector('[data-testid="woa-debug-trace"]')
+    expect(traceBox).not.toBeNull()
+    expect(host.querySelector('.woa-trace')).not.toBeNull()
+
+    // Closed by default.
+    const toggle = host.querySelector<HTMLButtonElement>('.woa-trace__toggle')!
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(toggle.textContent).toContain(labels.debugTrace)
+    expect(host.querySelector('.woa-trace__detail')).toBeNull()
+
+    // Expand details.
+    act(() => { toggle.click() })
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(toggle.textContent).toContain(labels.debugTraceHide)
+    const detail = host.querySelector('.woa-trace__detail')!
+    expect(detail).not.toBeNull()
+    expect(detail.textContent).toContain(labels.debugTraceRoute)
+    expect(detail.textContent).toContain('table_read')
+    expect(detail.textContent).toContain(labels.debugTraceStopReason)
+    expect(detail.textContent).toContain('finish')
+    expect(detail.textContent).toContain(labels.debugTraceTimings)
+    expect(detail.textContent).toContain('wall 420ms')
+    expect(detail.textContent).toContain('model 300ms')
+    expect(detail.textContent).toContain('tools 120ms')
+    expect(detail.textContent).toContain(labels.debugTraceTokens)
+    expect(detail.textContent).toContain('in 120')
+    expect(detail.textContent).toContain('out 45')
+    expect(detail.textContent).toContain('total 165')
+    expect(detail.textContent).toContain(labels.debugTraceToolChain)
+    expect(detail.textContent).toContain('query_orders')
+    expect(detail.textContent).toContain('95ms')
+    expect(detail.textContent).toContain('ok')
+    expect(detail.textContent).toContain('read_record')
+    expect(detail.textContent).toContain('err')
+    expect(detail.textContent).toContain('not_found')
+    expect(detail.textContent).toContain(labels.debugTraceChecks)
+    expect(detail.textContent).toContain('post_read')
+    expect(detail.textContent).toContain('pass')
+
+    // Copy JSON.
+    const copy = host.querySelector<HTMLButtonElement>('.woa-trace__copy')!
+    expect(copy.textContent).toContain(labels.debugTraceCopy)
+    await act(async () => {
+      copy.click()
+      await Promise.resolve()
+    })
+    expect(writeText).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(writeText.mock.calls[0]![0] as string)).toEqual(sampleTrace)
+    expect(copy.textContent).toContain(labels.copied)
   })
 })

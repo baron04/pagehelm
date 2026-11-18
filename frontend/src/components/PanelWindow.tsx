@@ -311,6 +311,7 @@ export function PanelWindow({host, allowedOrigins}: {
         {welcome && <WelcomeHeading labels={labels} />}
         <Thread snapshot={snapshot} labels={labels} limits={limits}
                 allowedOrigins={allowedOrigins}
+                localDevMode={Boolean(host.configuration.local_dev_mode)}
                 onOpenTarget={target => host.openAnswerTarget?.(target) ?? false}
                 onLoadOlder={loadOlder} onRetry={retrySubmit}
                 onRetryTurn={submit} onReconcile={reconcile}
