@@ -261,10 +261,11 @@ class HarnessTurnContext:
     chat: object = None
     skill_limit: str = ""
     chosen: tuple = ()
-    # ARC-08 structured telemetry
+    # ARC-08 / ARC-12 structured telemetry
     first_route_kind: str = ""
     stop_reason: str = ""
     tool_timings: list[dict[str, Any]] = field(default_factory=list)
+    checks: list[dict[str, Any]] = field(default_factory=list)
     model_calls: int = 0
 
 
@@ -325,6 +326,22 @@ def _build_debug_trace(
         chain.append(item)
     if chain:
         trace_summary["tool_chain"] = chain
+    recorded_checks = []
+    for chk in getattr(s, "checks", ())[:20]:
+        if not isinstance(chk, dict):
+            continue
+        check_name = _sanitize_trace_label(str(chk.get("check") or ""), max_len=80)
+        outcome = _sanitize_trace_label(str(chk.get("outcome") or ""), max_len=40)
+        if not check_name or not outcome:
+            continue
+        recorded_checks.append({
+            "check": check_name,
+            "outcome": outcome,
+            "attempt": max(1, int(chk.get("attempt", 1))),
+            "answer_preserved": bool(chk.get("answer_preserved", False)),
+        })
+    if recorded_checks:
+        trace_summary["checks"] = recorded_checks
     return trace_summary
 
 

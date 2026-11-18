@@ -38,6 +38,7 @@ class TurnTrace:
         self.stop_reason: str = ""
         self.stage_timings: dict[str, float] = {}
         self.tool_timings: list[dict] = []
+        self.checks: list[dict] = []
 
     def note_first_route(self, route_kind: str) -> None:
         """Record the first tool/route kind dispatched during this turn."""
@@ -69,6 +70,18 @@ class TurnTrace:
         if error_code:
             entry["error_code"] = str(error_code)[:80]
         self.tool_timings.append(entry)
+
+    def record_check(self, *, check: str, outcome: str, attempt: int,
+                     answer_preserved: bool = False) -> None:
+        """Append one structural ARC-12 programmatic check entry."""
+        if not isinstance(check, str) or not check.strip():
+            return
+        self.checks.append({
+            "check": check.strip()[:80],
+            "outcome": str(outcome or "")[:40],
+            "attempt": max(1, int(attempt)),
+            "answer_preserved": bool(answer_preserved),
+        })
 
     def record_delivery(self, *, reference: str, projection: dict, rendered_text: str,
                         presented_records: int, presentation_complete: bool,
@@ -129,6 +142,8 @@ class TurnTrace:
             record["stage_timings"] = dict(self.stage_timings)
         if self.tool_timings:
             record["tool_timings"] = list(self.tool_timings)
+        if self.checks:
+            record["checks"] = list(self.checks)
         if (self.handoffs.has_unredacted(record, url_decode_depth=3)
                 or has_unredacted_sensitive_assignment(record, url_decode_depth=3)):
             record = {**outcome, "withheld": "credential_form"}
