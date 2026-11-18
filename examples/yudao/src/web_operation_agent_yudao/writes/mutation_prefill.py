@@ -113,7 +113,8 @@ def _record_field_outcomes(target_obj, *, applied=None, rejected=None, previous=
         setattr(target_obj, "restricted_fields", tuple(existing))
 
 
-def _attach_handoff_facts(context, *, applied_fields, rejected_fields, restricted_controls, pending_fields):
+def _attach_handoff_facts(context, *, applied_fields, rejected_fields, restricted_controls,
+                          pending_fields, restricted_refs=None):
     seen_pending: set[str] = set()
     pending = []
     for name in [*rejected_fields.keys(), *pending_fields, *restricted_controls]:
@@ -127,11 +128,26 @@ def _attach_handoff_facts(context, *, applied_fields, rejected_fields, restricte
         "can_undo": bool(applied_fields),
     }
     if restricted_controls:
+        refs = restricted_refs or {}
+        def _restricted_kind(label: str) -> str:
+            low = str(label or "").lower()
+            if any(tok in low for tok in ("密码", "口令", "password")):
+                return "password"
+            if any(tok in low for tok in ("上传", "文件", "附件", "avatar", "file", "upload")):
+                return "file"
+            return "restricted"
         handoff["restricted_controls"] = [
-            {"label": str(lbl), "kind": "password" if "密码" in str(lbl) else "restricted"}
+            {
+                "label": str(lbl),
+                "kind": _restricted_kind(str(lbl)),
+                **({"ref": str(refs[str(lbl)])} if refs.get(str(lbl)) else {}),
+            }
             for lbl in restricted_controls
         ]
-    setattr(context, "handoff_facts", handoff)
+    try:
+        setattr(context, "handoff_facts", handoff)
+    except Exception:
+        pass
     operation = getattr(context, "operation", None)
     if operation is not None:
         try:
@@ -422,7 +438,7 @@ class YudaoMutationPrefill:
                 return _refused("打开表单失败，未继续预填。")
             current = context.obs
         before = current
-        applied, rejected, previous, restricted, expected = {}, {}, {}, [], []
+        applied, rejected, previous, restricted, restricted_refs, expected = {}, {}, {}, [], {}, []
         pending = []
         for _key, label, value in general["fields"]:
             matches = [
@@ -436,6 +452,7 @@ class YudaoMutationPrefill:
             element = matches[0]
             if _is_restricted_element(element):
                 restricted.append(label)
+                restricted_refs[label] = element.ref
                 pending.append(label)
                 continue
             prev_val = str(
@@ -443,7 +460,7 @@ class YudaoMutationPrefill:
                 or element.attrs.get("value")
                 or ""
             )
-            action = "select" if element.role in {"combobox", "listbox"} else "fill"
+            action = "select" if element.role in {"combobox", "listbox", "radiogroup"} else "fill"
             args = {"ref": element.ref, "value": value}
             if action == "select":
                 args["option_label"] = value
@@ -453,8 +470,10 @@ class YudaoMutationPrefill:
             if _receipt_error_code(outcome) == "form_closed_or_readonly":
                 _record_field_outcomes(context, applied=applied, rejected={**rejected, label: "form_closed_or_readonly"},
                                        previous=previous, restricted=restricted)
-                _attach_handoff_facts(context, applied_fields=applied, rejected_fields=rejected,
-                                      restricted_controls=restricted, pending_fields=[*pending, label])
+                self.last_handoff_facts = _attach_handoff_facts(
+                    context, applied_fields=applied, rejected_fields=rejected,
+                    restricted_controls=restricted, pending_fields=[*pending, label],
+                    restricted_refs=restricted_refs)
                 return _form_closed_or_readonly_result()
             _collect_receipt_outcomes(outcome, label, value, prev_val, applied, rejected, previous, restricted)
             if outcome.state != "completed":
@@ -464,7 +483,7 @@ class YudaoMutationPrefill:
         _record_field_outcomes(context, applied=applied, rejected=rejected, previous=previous, restricted=restricted)
         self.last_handoff_facts = _attach_handoff_facts(
             context, applied_fields=applied, rejected_fields=rejected,
-            restricted_controls=restricted, pending_fields=pending)
+            restricted_controls=restricted, pending_fields=pending, restricted_refs=restricted_refs)
         if not expected:
             return _refused("没有成功填入任何表单字段，请核对当前表单。")
         submits = [

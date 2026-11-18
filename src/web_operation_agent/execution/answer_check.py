@@ -131,7 +131,11 @@ def delivery_correction(executor, s, turn, args, feedback, *, terminal: bool = F
             s.ledger,
             s=s,
             trace=getattr(executor, "_trace", None),
-            check=MODEL_DELIVERY_REJECTED_SPEC.name,
+            check=(
+                UNBACKED_BUSINESS_CLAIM_SPEC.name
+                if issue.code == "unbacked_business_claim"
+                else MODEL_DELIVERY_REJECTED_SPEC.name
+            ),
             outcome="returned",
             attempt=1,
             answer_preserved=False,
@@ -148,12 +152,24 @@ def delivery_correction(executor, s, turn, args, feedback, *, terminal: bool = F
         if i < len(items):
             items[i]["status"] = "undelivered"
     labels = "、".join(f"第 {i + 1} 项" for i in indices) or "本轮交付"
-    # The reply goes out as the model wrote it. What failed the check is marked on its
-    # item and said once, after it; the model's words are never swapped for ours.
+    # The reply goes out as the model wrote it, except unbacked business claims whose
+    # unverified assertions cannot be delivered without current-turn evidence.
     original = str(args.get("answer") or "").strip()
-    note = f"（程序核对：{labels}没有通过交付检查，标为未交付。{issue.message}）"
-    limit = getattr(getattr(executor, "config", None), "max_user_answer_chars", 4000)
-    answer = (original[:max(0, limit - len(note) - 2)] + "\n\n" + note) if original else note[:limit]
+    if issue.code == "unbacked_business_claim":
+        answer = ("未能提供可核验的本轮工具回执，无法确认该业务结论；请以本轮实际读取结果为准。"
+                  if getattr(s, "chinese", True)
+                  else "Cannot verify this business claim without current-turn tool evidence.")
+        turn["forced_stop_reason"] = "unbacked_business_claim"
+        check_spec_name = UNBACKED_BUSINESS_CLAIM_SPEC.name
+        outcome_label = "blocked"
+        answer_preserved = False
+    else:
+        note = f"（程序核对：{labels}没有通过交付检查，标为未交付。{issue.message}）"
+        limit = getattr(getattr(executor, "config", None), "max_user_answer_chars", 4000)
+        answer = (original[:max(0, limit - len(note) - 2)] + "\n\n" + note) if original else note[:limit]
+        check_spec_name = MODEL_DELIVERY_REJECTED_SPEC.name
+        outcome_label = "annotated"
+        answer_preserved = bool(original)
     turn.pop("pending_delivery", None)
     s.ledger.append(
         "model_delivery_rejected",
@@ -162,16 +178,16 @@ def delivery_correction(executor, s, turn, args, feedback, *, terminal: bool = F
         attempt=int(returned_before),
         returned=False,
         terminal=True,
-        answer_kept=bool(original),
+        answer_kept=answer_preserved,
     )
     record_check_fired(
         s.ledger,
         s=s,
         trace=getattr(executor, "_trace", None),
-        check=MODEL_DELIVERY_REJECTED_SPEC.name,
-        outcome="annotated",
+        check=check_spec_name,
+        outcome=outcome_label,
         attempt=1 + int(returned_before),
-        answer_preserved=bool(original),
+        answer_preserved=answer_preserved,
     )
     return {
         **{key: value for key, value in args.items() if key != "read_answer"},

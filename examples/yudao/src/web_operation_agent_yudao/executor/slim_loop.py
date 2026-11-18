@@ -467,6 +467,13 @@ _BUSINESS_CLAIM_WORDS = re.compile(
     r"部门|岗位|员工|用户|会员|积分|优惠券|秒杀|审批|流程|公告|规则|权限|配置|单据|账款|"
     r"余额|金额|单价|数量|总数|条数|笔数|列表|详情|台账|状态|进度|审批|核销|打开|页面|筛选"
 )
+_CONCRETE_ANSWER_CLAIM_RE = re.compile(
+    r"(?:当前|目前|现有|共计?|合计|总计|共有)[^。；\n]{0,20}?(?:\d+\s*(?:条|笔|张|个|单|元|万|件)|状态|余额|库存|已)|"
+    r"(?:余额|金额|单价|库存|数量|条数|笔数|记录数)\s*(?:为|是|共|有|[:：])\s*\d|"
+    r"状态\s*(?:为|是|[:：])|"
+    r"已(?:成交|签约|审核|审批|结清|关闭|作废|发货|入库|出库|启用|停用)|"
+    r"(?:客户|商机|合同|订单|供应商|线索|工单)\s*[A-Za-z0-9\u4e00-\u9fff]{1,16}\s*(?:当前|目前|状态|余额|有\s*\d)"
+)
 _GENERAL_GREETING_ONLY = re.compile(
     r"^(?:你好|您好|hi|hello|hey|早上好|下午好|晚上好|在吗|谢谢|感谢|多谢|再见|拜拜)[！!。,.?\s]*$",
     re.IGNORECASE,
@@ -486,18 +493,22 @@ _PURE_ARITHMETIC_PHRASE = re.compile(
 def _is_allowed_direct_reply(prompt: str, answer: str) -> bool:
     """Return True only for the 4 general non-business reply classes allowed with items=[]."""
     text = _words(prompt or "").strip()
+    if _CONCRETE_ANSWER_CLAIM_RE.search(answer or ""):
+        return False
     if not text:
         return True
+    if _BUSINESS_CLAIM_WORDS.search(text):
+        return False
     if _GENERAL_GREETING_ONLY.match(text):
-        return not _BUSINESS_CLAIM_WORDS.search(answer or "")
-    if _GENERAL_CAPABILITY.search(text) and not _BUSINESS_CLAIM_WORDS.search(text):
         return True
-    if _GENERAL_TEXT_WORK.search(text) and not _BUSINESS_CLAIM_WORDS.search(text):
+    if _GENERAL_CAPABILITY.search(text):
+        return True
+    if _GENERAL_TEXT_WORK.search(text):
         return True
     if _PURE_ARITHMETIC_EXPRESSION.match(text):
         return True
-    if _PURE_ARITHMETIC_PHRASE.search(text) and re.search(r"\d", text) and not _BUSINESS_CLAIM_WORDS.search(text):
-        return not _BUSINESS_CLAIM_WORDS.search(answer or "")
+    if _PURE_ARITHMETIC_PHRASE.search(text) and re.search(r"\d", text):
+        return True
     return False
 
 
@@ -1068,25 +1079,45 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
                 return DeliveryFeedback("invalid_input_options", "options 仅可在 status=need_input 时使用。")
             if not _normalize_input_options(args.get("options")):
                 return DeliveryFeedback("invalid_input_options", "options 必须包含 2 到 4 个非空且不重复 label 的候选项。")
-        if (args.get("status") == "done" and not args.get("items") and not args.get("table_ref")
-                and turn.get("sources") is None):
-            table_ctx = self._ctx().turn_tables
-            has_evidence = bool(
-                getattr(self, "_tool_receipts", ())
-                or turn.get("read_tables_used")
+        items_arg = args.get("items")
+        answer_text = str(args.get("answer") or "")
+        prompt_text = getattr(getattr(s, "message", None), "text", "") or self._ctx().current_request or ""
+        empty_items_unbacked = bool(
+            "items" in args
+            and not items_arg
+            and not (turn.get("written") or turn.get("handoff"))
+            and not _is_allowed_direct_reply(prompt_text, answer_text)
+        )
+        page_only_smuggle = bool(
+            isinstance(items_arg, (list, tuple))
+            and items_arg
+            and all(isinstance(it, dict) and it.get("kind") == "page" for it in items_arg)
+            and not (
+                turn.get("read_evidence_used")
                 or turn.get("written")
                 or turn.get("handoff")
-                or (table_ctx and table_ctx[0].receipts)
+                or turn.get("review_completion")
+                or turn.get("touched")
             )
-            prompt_text = getattr(getattr(s, "message", None), "text", "") or self._ctx().current_request or ""
-            if not has_evidence and not _is_allowed_direct_reply(prompt_text, str(args.get("answer") or "")):
-                self._emit_check_fired(s, "unbacked_business_claim")
-                return DeliveryFeedback(
-                    "unbacked_business_claim",
-                    "只有纯问候、能力说明、用户原文翻译/摘要、纯算术这四类允许空回执（items=[]）直答；"
-                    "涉及客户、单据、库存、规则、权限或配置等业务数据时，必须先调用工具查询并引用本轮有效 ev_ 回执，"
-                    "查不到请用 status=cannot 如实说明。",
+            and (
+                _CONCRETE_ANSWER_CLAIM_RE.search(answer_text)
+                or (
+                    not _requires_page_delivery(prompt_text)
+                    and not any(getattr(r, "ok", False) and getattr(r, "action", None) in {"goto", "click", "fill", "select"}
+                                for r in getattr(self, "_tool_receipts", ()))
+                    and _BUSINESS_CLAIM_WORDS.search(prompt_text)
                 )
+            )
+        )
+        if (args.get("status") == "done" and not args.get("table_ref")
+                and turn.get("sources") is None and not args.get("source_conclusions")
+                and (empty_items_unbacked or page_only_smuggle)):
+            return DeliveryFeedback(
+                "unbacked_business_claim",
+                "只有纯问候、能力说明、用户原文翻译/摘要、纯算术这四类允许空回执（items=[]）直答；"
+                "涉及客户、单据、库存、规则、权限或配置等业务数据时，必须先调用工具查询并引用本轮有效 ev_ 回执，"
+                "查不到请用 status=cannot 如实说明。",
+            )
         if "items" not in args:
             return ""
         try:
@@ -1170,8 +1201,10 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
         return ""
 
     def _tool_feedback(self, s, turn, name, result, text):
-        if name in {"call_api", "tables", "sql"}:
+        if name in {"call_api", "tables", "sql"} and result.state == "completed":
             turn["read_tables_used"] = True
+        if result.state == "completed" and result.kind == "read":
+            turn["read_evidence_used"] = True
         if result.state == "completed" and result.kind in {"read", "page", "write"} and name != "tables":
             reference = self._ctx().turn_tables[0].issue_receipt()
             s.ledger.append("model_delivery_receipt", tool=name, reference=reference)

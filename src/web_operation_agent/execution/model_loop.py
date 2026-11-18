@@ -2382,7 +2382,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                         pass
             elif status == "cannot":
                 s.terminal_reason = "agent_refused"
-                harness.set_stop_reason(s, "agent_refused", trace=trace)
+                harness.set_stop_reason(s, turn.pop("forced_stop_reason", None) or "agent_refused", trace=trace)
             elif s.mutation_outcomes:
                 # Said outright, as the goal turn's Skill path says it: settlement names
                 # the verified writes ahead of the answer of any turn it is not told

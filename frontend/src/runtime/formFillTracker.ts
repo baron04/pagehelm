@@ -318,14 +318,14 @@ export class FormFillTracker {
     for (const state of entries) {
       const matched = state.restrictedEntries.find(item =>
         item.element.isConnected &&
-        (!control.kind || item.kind === control.kind) &&
+        (!control.kind || control.kind === 'restricted' || item.kind === control.kind) &&
         (!control.label || item.label === control.label))
       if (matched && focusRestrictedElement(matched.element)) return true
     }
     if (doc) {
       for (const container of doc.querySelectorAll('[role="dialog"], dialog, form')) {
         for (const item of scanRestrictedControlsInContainer(container)) {
-          if ((!control.kind || item.kind === control.kind) &&
+          if ((!control.kind || control.kind === 'restricted' || item.kind === control.kind) &&
               (!control.label || item.label === control.label)) {
             if (focusRestrictedElement(item.element)) return true
           }

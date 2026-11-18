@@ -670,4 +670,26 @@ describe('ACC-13 + UX-03 + UX-05: form fill tracking, undoFormFill, restricted c
       },
     })
   })
+
+  it('focusControl matches generic restricted kind sent by server adapters', () => {
+    document.body.innerHTML = ''
+    const dialog = document.createElement('div')
+    dialog.setAttribute('role', 'dialog')
+    const label = document.createElement('label')
+    label.textContent = '附件上传'
+    const fileInput = document.createElement('input')
+    fileInput.type = 'file'
+    fileInput.id = 'upload-box'
+    label.setAttribute('for', 'upload-box')
+    fileInput.focus = vi.fn()
+    fileInput.scrollIntoView = vi.fn()
+    dialog.append(label, fileInput)
+    document.body.appendChild(dialog)
+
+    const tracker = new FormFillTracker(redactor)
+    const ok = tracker.focusControl({label: '附件上传', kind: 'restricted'})
+    expect(ok).toBe(true)
+    expect(fileInput.scrollIntoView).toHaveBeenCalled()
+    expect(fileInput.focus).toHaveBeenCalled()
+  })
 })

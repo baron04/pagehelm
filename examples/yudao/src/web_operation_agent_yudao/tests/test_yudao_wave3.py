@@ -494,6 +494,151 @@ class Wave3Arc04Arc06Ux02Tests(unittest.TestCase):
         self.assertEqual(len(terminal_payloads[-1]["input_options"]), 2)
         self.assertEqual(terminal_payloads[-1]["input_options"][0]["id"], "c1")
 
+    def test_acc07_repeated_unbacked_done_after_failed_api_cannot_bypass_or_leak_claim(self):
+        self.assertTrue(_is_allowed_direct_reply("你能做什么？", "我可以帮您查询客户、订单、库存数据并打开页面。"))
+        self.assertFalse(_is_allowed_direct_reply("你能做什么？", "客户 Acme 当前有 3 条订单。"))
+        client = _ConcurrentTestClient()
+        obs_page = PageObservation(
+            1, 1, "http://synthetic.invalid/crm/customer", "Customer", [], [],
+            "synthetic", render_state="ready", page_route="/crm/customer",
+        )
+        # After an observe page action + failed call_api (no ev_ receipt), twice-repeated
+        # finish(done, items=[]) must be blocked cleanly without preserving the unbacked claim.
+        exec_fail, ledger_fail, principal_fail, _ = _make_executor(
+            client,
+            replies=[
+                reply(call("observe")),
+                reply(call("call_api", path="broken/endpoint")),
+                reply(call("finish", status="done", answer="客户星河科技目前余额为 5000 元。", items=[])),
+                reply(call("finish", status="done", answer="客户星河科技目前余额为 5000 元。", items=[])),
+            ],
+        )
+        obs_receipt = ActionReceipt(1, "cmd-obs", "observe", {}, True, observation=obs_page)
+        exec_fail.control = NS(dispatch=lambda *a, **kw: PageActionOutcome(
+            "completed", "acknowledged", json.dumps(obs_receipt.to_json()), "",
+        ))
+        run = _run_turn(exec_fail, "查询星河科技余额", ledger_fail, principal_fail)
+        self.assertEqual(run["state"].terminal_reason, "agent_refused")
+        self.assertEqual(getattr(run["state"], "stop_reason", ""), "unbacked_business_claim")
+        self.assertNotIn("5000", run["outcome"])
+        self.assertIn("未能提供可核验的本轮工具回执", run["outcome"])
+        self.assertTrue(any(
+            name == "check_fired"
+            and p.get("check") == "unbacked_business_claim"
+            and p.get("outcome") == "blocked"
+            and p.get("answer_preserved") is False
+            for name, p in run["events"]
+        ))
+
+        # Smuggling an unbacked claim via kind="page" item is also caught and blocked on retry.
+        exec_page, ledger_page, principal_page, _ = _make_executor(
+            client,
+            replies=[
+                reply(call("observe")),
+                reply(call("finish", status="done", answer="该商机当前已成交。", items=[
+                    {"item": "当前页", "kind": "page", "status": "delivered", "receipts": []},
+                ])),
+                reply(call("finish", status="done", answer="该商机当前已成交。", items=[
+                    {"item": "当前页", "kind": "page", "status": "delivered", "receipts": []},
+                ])),
+            ],
+        )
+        run_page = _run_turn(exec_page, "这个商机现在是什么状态", ledger_page, principal_page)
+        self.assertEqual(run_page["state"].terminal_reason, "agent_refused")
+        self.assertEqual(getattr(run_page["state"], "stop_reason", ""), "unbacked_business_claim")
+        self.assertNotIn("已成交", run_page["outcome"])
+
+    def test_ux05_restricted_file_kind_and_ux03_radiogroup_select_in_prefill(self):
+        from web_operation_agent_yudao.writes.mutation_prefill import (
+            YudaoMutationPrefill, _attach_handoff_facts,
+        )
+
+        ctx = _op_context()
+        facts = _attach_handoff_facts(
+            ctx,
+            applied_fields={"客户名称": "星河"},
+            rejected_fields={},
+            restricted_controls=["登录密码", "附件上传"],
+            pending_fields=[],
+            restricted_refs={"登录密码": "e9", "附件上传": "e10"},
+        )
+        self.assertEqual(
+            facts["restricted_controls"],
+            [
+                {"label": "登录密码", "kind": "password", "ref": "e9"},
+                {"label": "附件上传", "kind": "file", "ref": "e10"},
+            ],
+        )
+
+        class _Review:
+            def permits(self, kind, path, control=""):
+                return path == "/erp/supplier" and kind in {"form_entry", "fields"}
+            def labels_on(self, path):
+                return {"status": "开启状态"}
+
+        dialog_obs = PageObservation(
+            1, 2, "http://synthetic.invalid/erp/supplier", "Supplier", [],
+            [
+                ElementRef("e1", "radiogroup", "开启状态", "div", 2, {
+                    "form_scope": "dialog:1",
+                    "form_instance": "i1",
+                    "field_label": "开启状态",
+                    "selected_option": "",
+                    "radio_options": json.dumps([{"label": "开启", "value": "0"}, {"label": "关闭", "value": "1"}], ensure_ascii=False),
+                }),
+                ElementRef("e2", "textbox", "", "input", 2, {"form_scope": "dialog:1", "form_instance": "i1", "field_label": "附件上传", "input_type": "file"}),
+                ElementRef("e3", "button", "确定", "button", 2, {"form_scope": "dialog:1", "form_instance": "i1"}),
+            ],
+            "synthetic", render_state="ready", page_route="/erp/supplier",
+        )
+        proposal = BusinessMutationProposal(
+            "erp_supplier_create",
+            {"entity": "erp/supplier", "operation": "erp_supplier_create", "actor": "9",
+             "before": {}, "choices": [], "relations": [], "body": {"status": 0}},
+            "新建ERP 供应商资料", ("开启",), "3" * 32,
+            operation_context_digest=ctx.binding_digest,
+        )
+        prefill = YudaoMutationPrefill(NS(get=lambda *a, **kw: None), object(), _Review())
+        offer = prefill.offer(proposal, context=ctx, observation=dialog_obs)
+        self.assertIsNotNone(offer)
+
+        executed = []
+        class _Page:
+            def checkpoint(self):
+                return None
+
+            def execute(self, action, args, **_kw):
+                executed.append((action, dict(args)))
+                if action == "select":
+                    updated = [
+                        replace(el, attrs={**el.attrs, "selected_option": args["option_label"]})
+                        if el.ref == args["ref"] else el
+                        for el in hctx.obs.elements
+                    ]
+                    hctx.obs = replace(hctx.obs, elements=updated)
+                return NS(state="completed", dispatch="acknowledged", error_code="",
+                          receipt=ActionReceipt(1, f"c-{action}", action, args, True, observation=hctx.obs))
+
+            def handoff(self, fields, submit):
+                return NS(
+                    state="completed",
+                    dispatch="acknowledged",
+                    error_code="",
+                    receipt=ActionReceipt(1, "c-handoff", "handoff_form", {"fields": fields, "submit": submit}, True, observation=hctx.obs),
+                )
+
+        hctx = NS(
+            obs=dialog_obs,
+            page=_Page(),
+            binding_digest=ctx.binding_digest,
+            operation=ctx,
+            audit=lambda *a, **kw: None,
+        )
+        res = prefill.handoff(offer, proposal, context=hctx)
+        self.assertEqual(res.state, "completed")
+        self.assertEqual(executed[0][0], "select")
+        self.assertEqual(executed[0][1]["ref"], "e1")
+
 
 if __name__ == "__main__":
     unittest.main()

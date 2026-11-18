@@ -686,7 +686,7 @@ class Arc12YudaoChecksTests(unittest.TestCase):
                 ],
             )
             ro_run = _run_turn(ro_exec, "这个商机现在是什么状态", ro_ledger, ro_principal)
-            self._assert_check_recorded(ro_run, "unbacked_business_claim", outcome="blocked", answer_preserved=False)
+            self._assert_check_recorded(ro_run, "unbacked_business_claim", outcome="returned", answer_preserved=False)
 
             # 2) draft_only (in _invoke_tool and in _propose)
             draft_exec, draft_ledger, draft_principal, _ = _make_executor(
