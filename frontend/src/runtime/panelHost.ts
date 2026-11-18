@@ -21,7 +21,8 @@ import type {
   ConnectionState, HostNotice, PanelExample, PanelHost as PanelHostContract, PanelSnapshot,
 } from '../bridge/host'
 import type {
-  AnswerTarget, ApprovalRequest, PanelConfiguration, PanelState, TimelineEntry, TimelinePage,
+  AnswerTarget, ApprovalRequest, PanelConfiguration, PanelState, ReconciliationStatus, TimelineEntry,
+  TimelinePage,
 } from '../contract/panel'
 // Not a hand-written `1` any more: `scripts/build-tokens.mjs` lifts it out of the server's
 // own `panel_contract.json`, the same source `contract/panel.ts` re-exports for the panel.
@@ -51,6 +52,8 @@ export interface TransportVerdict {
 //: and a reload replayed the same doomed decision and never mounted the panel (P7.5 CR-38).
 const APPROVAL_CLOSED = new Set([
   'approval_expired', 'approval_not_pending', 'unknown_approval', 'approval_conflict'])
+const PER_TURN_NOT_FOUND = new Set(['unknown_message', 'unknown_action'])
+const SESSION_NOT_FOUND = new Set(['', 'not_found', 'unknown_session'])
 
 /** Statuses where repeating the request can succeed; any other status repeats the same refusal. */
 const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504])
@@ -95,13 +98,20 @@ export function classifyTransportError(
   if (terminalCodes.includes(code)) {
     return {terminal: true, code, state: byCode[code] ?? 'error', retryable: false}
   }
+  if (PER_TURN_NOT_FOUND.has(code)) {
+    return {terminal: false, code, state: 'ready', retryable: false}
+  }
   // A 401 or a 404 on a session endpoint is not a hiccup: the credential or the session is
-  // gone, and retrying only turns a finished UI into a reconnect loop.
+  // gone, and retrying only turns a finished UI into a reconnect loop. A per-turn 404
+  // (e.g. unknown_message / unknown_action) must leave the session alive.
   if (status === 401) {
     return {terminal: true, code: code || 'unauthorized', state: 'error', retryable: false}
   }
   if (status === 404) {
-    return {terminal: true, code: code || 'not_found', state: 'ended', retryable: false}
+    if (SESSION_NOT_FOUND.has(code)) {
+      return {terminal: true, code: code || 'not_found', state: 'ended', retryable: false}
+    }
+    return {terminal: false, code, state: 'ready', retryable: false}
   }
   if (status === 409) {
     return {terminal: true, code: code || 'runtime_replaced', state: 'replaced', retryable: false}
@@ -128,6 +138,7 @@ export interface PanelActions {
   loadOlder(before: string): void
   panelVisibility?(open: boolean): void
   openAnswerTarget?(address: string): boolean
+  reconcile?(turnId: string, proposalDigest?: string): Promise<ReconciliationStatus> | ReconciliationStatus
 }
 
 const REQUIRED_ACTIONS = ['submit', 'cancel', 'decide', 'newConversation', 'loadOlder'] as const
@@ -286,6 +297,19 @@ export class PanelHost implements PanelHostContract {
       entry.replayed ? this.recoveredHistoryVisible : entry.sequence > this.floor))
     for (const entry of fresh) this.byId.set(entry.id, entry)
     let entries = this.state.entries
+    for (const entry of incoming) {
+      const existing = this.byId.get(entry.id)
+      if (!existing || fresh.includes(entry)) continue
+      if (entry.reconciliation || (entry.proposal_digest && !existing.proposal_digest)) {
+        const merged: TimelineEntry = {
+          ...existing,
+          ...(entry.proposal_digest ? {proposal_digest: entry.proposal_digest} : {}),
+          ...(entry.reconciliation ? {reconciliation: entry.reconciliation} : {}),
+        }
+        this.byId.set(entry.id, merged)
+        entries = entries.map(item => item.id === entry.id ? merged : item)
+      }
+    }
     if (fresh.length) {
       entries = prepend ? [...fresh, ...entries] : [...entries, ...fresh]
     }
@@ -387,6 +411,25 @@ export class PanelHost implements PanelHostContract {
 
   setHistoryError(value: boolean): void { this.commit({historyError: value}) }
 
+  setReconciliation(turnId: string, reconciliation: ReconciliationStatus, proposalDigest?: string): void {
+    let changed = false
+    const entries = this.state.entries.map(entry => {
+      const isOutcome = entry.kind === 'result' || entry.panel_state === 'indeterminate'
+      if (!isOutcome) return entry
+      const matchesTurn = Boolean(turnId) && entry.turn_id === turnId
+      const matchesDigest = Boolean(proposalDigest) && entry.proposal_digest === proposalDigest
+      if (!matchesTurn && !matchesDigest) return entry
+      if (matchesTurn && proposalDigest && entry.proposal_digest && entry.proposal_digest !== proposalDigest) {
+        return entry
+      }
+      changed = true
+      const updated: TimelineEntry = {...entry, reconciliation}
+      this.byId.set(updated.id, updated)
+      return updated
+    })
+    if (changed) this.commit({entries})
+  }
+
   // -- driven by the panel ---------------------------------------------------------
   submit(text: string): void {
     this.clearNotice()
@@ -418,6 +461,15 @@ export class PanelHost implements PanelHostContract {
   }
 
   dismissNotice(): void { this.clearNotice() }
+
+  async reconcile(turnId: string, proposalDigest?: string): Promise<ReconciliationStatus> {
+    if (!this.verbs.reconcile) {
+      return {outcome: 'unknown', settled: false}
+    }
+    const status = await this.verbs.reconcile(turnId, proposalDigest)
+    this.setReconciliation(turnId, status, proposalDigest)
+    return status
+  }
 
   reload(): void {
     if (this.retryStart) {

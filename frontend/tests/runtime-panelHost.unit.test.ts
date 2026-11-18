@@ -36,6 +36,21 @@ describe('classifyTransportError reads the server own table, once', () => {
     expect(classifyTransportError({status: 403}, DEFAULT_CONFIGURATION).terminal).toBe(true)
   })
 
+  it('keeps the session alive on per-turn 404 errors while ending only on session-level 404s', () => {
+    expect(classifyTransportError({status: 404, code: 'unknown_message'}, DEFAULT_CONFIGURATION))
+      .toMatchObject({terminal: false, code: 'unknown_message', state: 'ready', retryable: false})
+    expect(classifyTransportError({status: 404, code: 'unknown_action'}, DEFAULT_CONFIGURATION))
+      .toMatchObject({terminal: false, code: 'unknown_action', state: 'ready', retryable: false})
+    expect(classifyTransportError({status: 404, code: 'unknown_approval'}, DEFAULT_CONFIGURATION))
+      .toMatchObject({terminal: false, code: 'unknown_approval', state: 'ready', approvalClosed: true})
+    expect(classifyTransportError({status: 404, code: 'unknown_session'}, DEFAULT_CONFIGURATION))
+      .toMatchObject({terminal: true, code: 'unknown_session', state: 'ended', retryable: false})
+    expect(classifyTransportError({status: 404, code: 'session_closed'}, DEFAULT_CONFIGURATION))
+      .toMatchObject({terminal: true, code: 'session_closed', state: 'ended', retryable: false})
+    expect(classifyTransportError({status: 404, code: 'not_found'}, DEFAULT_CONFIGURATION))
+      .toMatchObject({terminal: true, code: 'not_found', state: 'ended', retryable: false})
+  })
+
   it('falls back to retryable reconnecting for an ordinary network fault', () => {
     expect(classifyTransportError(null, DEFAULT_CONFIGURATION)).toMatchObject(
       {terminal: false, retryable: true, state: 'reconnecting'})
@@ -337,5 +352,57 @@ describe('history paging state is independent of the live stream', () => {
     const version = host.timelineVersion
     host.applyTimeline({incarnation: 'b', entries: []})
     expect(host.applyTimeline({incarnation: 'a', entries: [entry()]}, {prepend: true, version})).toBe(false)
+  })
+})
+
+describe('PanelHost.reconcile updates indeterminate outcome entries in place', () => {
+  it('delegates to bound reconcile verb and updates the matching timeline entry', async () => {
+    const reconcile = vi.fn().mockResolvedValue({
+      outcome: 'completed' as const, settled: true, message: '已确认生效',
+    })
+    const host = new PanelHost({
+      configuration: DEFAULT_CONFIGURATION,
+      actions: {...actions(), reconcile},
+    })
+    host.applyTimeline({
+      entries: [
+        entry({id: 'e1', sequence: 1, turn_id: 't1', kind: 'goal', text: '创建客户'}),
+        entry({
+          id: 'e2', sequence: 2, turn_id: 't1', kind: 'result',
+          panel_state: 'indeterminate', proposal_digest: 'a'.repeat(64),
+          text: '状态不确定',
+        }),
+      ],
+    })
+    const listener = vi.fn()
+    host.subscribe(listener)
+
+    const result = await host.reconcile('t1', 'a'.repeat(64))
+
+    expect(reconcile).toHaveBeenCalledWith('t1', 'a'.repeat(64))
+    expect(result).toEqual({outcome: 'completed', settled: true, message: '已确认生效'})
+    expect(host.snapshot().entries[1]?.reconciliation).toEqual(result)
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
+
+  it('merges updated reconciliation status when applyTimeline replays an existing entry id', () => {
+    const host = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: actions()})
+    host.applyTimeline({
+      entries: [
+        entry({id: 'e2', sequence: 2, turn_id: 't1', kind: 'result', panel_state: 'indeterminate'}),
+      ],
+    })
+    host.applyTimeline({
+      entries: [
+        entry({
+          id: 'e2', sequence: 2, turn_id: 't1', kind: 'result', panel_state: 'indeterminate',
+          reconciliation: {outcome: 'failed', settled: true, message: '未生效'},
+        }),
+      ],
+    })
+    expect(host.snapshot().entries).toHaveLength(1)
+    expect(host.snapshot().entries[0]?.reconciliation).toEqual({
+      outcome: 'failed', settled: true, message: '未生效',
+    })
   })
 })
