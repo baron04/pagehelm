@@ -436,7 +436,7 @@ class GoalTurnTests(unittest.TestCase):
         events = [json.loads(line) for line in self.ledger.read_text().splitlines()]
         return execution, channel, chat, port, events
 
-    def test_leave_to_work_the_page_is_asked_once_per_turn(self):
+    def test_leave_to_work_the_page_carries_across_turns_until_new_conversation(self):
         goal = _declaration(kind="page", entity="order", record="S00006", section="Other Info")
         resolved = [Resolved(kind="page", page=PagePlan(url="/orders/6", label="S00006",
             expected_path="/orders/6", section="Other Info"))]
@@ -452,7 +452,8 @@ class GoalTurnTests(unittest.TestCase):
             statuses.append(executor.execute({"message_id": f"m{i}", "text": "打开 S00006 看看其他信息",
                                               "page_url": "http://127.0.0.1:8080/home"}).status)
         self.assertEqual(statuses, [AgentTurnStatus.FINISHED] * 3)
-        self.assertEqual(len(channel.approvals), 3)
+        # Turn 0 asks once, Turn 1 (fresh=False) reuses BUG-08 grant, Turn 2 (fresh=True) resets.
+        self.assertEqual(len(channel.approvals), 2)
         events = [json.loads(line) for line in self.ledger.read_text().splitlines()]
         self.assertFalse(any(e["event"] == "operation_leave_carried" for e in events))
 

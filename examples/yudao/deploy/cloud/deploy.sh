@@ -94,7 +94,7 @@ if [ -n "$RESTORE" ]; then
   echo "restoring $(basename "$RESTORE") and giving every account a new password"
   [ -s "$RESTORE" ] && gzip -t "$RESTORE"
   gunzip -c "$RESTORE" | ssh "$TARGET" 'docker exec -i yudao-mysql-1 sh -c '"'"'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" 2>/dev/null'"'"
-  ssh "$TARGET" 'docker exec yudao-mysql-1 sh -c '"'"'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" ruoyi-vue-pro -e "DELETE FROM system_oauth2_access_token; DELETE FROM system_oauth2_refresh_token;" 2>/dev/null'"'"'
+  ssh "$TARGET" 'docker exec yudao-mysql-1 sh -c '"'"'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" ruoyi-vue-pro -e "DELETE FROM system_oauth2_access_token; DELETE FROM system_oauth2_refresh_token;" 2>/dev/null'"'"
   ssh "$TARGET" 'docker exec yudao-redis-1 redis-cli FLUSHDB >/dev/null'
   ssh "$TARGET" 'docker restart yudao-server-1 >/dev/null && i=0; until [ "$(curl -s -o /dev/null -w %{http_code} http://127.0.0.1:48080/admin-api/system/tenant/get-id-by-name?name=x)" = 200 ]; do i=$((i+1)); [ $i -lt 96 ] || exit 1; sleep 5; done'
   PORT=48180
