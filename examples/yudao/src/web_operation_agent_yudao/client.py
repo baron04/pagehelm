@@ -24,6 +24,44 @@ from .accounts import load_account
 #: yudao's "not logged in" code.
 _UNAUTHORIZED = 401
 _READ_CHECKPOINT = ContextVar("yudao_read_checkpoint", default=None)
+_FENCED_GETS_GUARD: ContextVar[frozenset[str] | None] = ContextVar("yudao_fenced_gets_guard", default=None)
+
+
+def _matches_fenced_get(path: str, fenced: frozenset[str]) -> bool:
+    if not fenced:
+        return False
+    clean = path.split("?", 1)[0].lstrip("/")
+    full = "/admin-api/" + clean
+    if full in fenced or clean in fenced or ("/" + clean) in fenced:
+        return True
+    from .page_guard import _writing_get_pattern
+    folded = full.casefold()
+    for entry in fenced:
+        normalized = entry if entry.startswith("/admin-api/") else "/admin-api/" + entry.lstrip("/")
+        try:
+            if _writing_get_pattern(normalized).fullmatch(folded):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _enforce_fenced_read(method: str, path: str) -> None:
+    fenced = _FENCED_GETS_GUARD.get()
+    if fenced is None:
+        return
+    if method != "GET":
+        raise YudaoReadRefused(
+            f"{path}: non-GET {method} refused in read-only fenced context",
+            code=403,
+            reason="fenced_non_get",
+        )
+    if _matches_fenced_get(path, fenced):
+        raise YudaoReadRefused(
+            f"{path}: writing GET refused in fenced context",
+            code=403,
+            reason="fenced_writing_get",
+        )
 
 
 class YudaoReadRefused(DataRefused):
@@ -87,6 +125,7 @@ class YudaoClient:
 
     def get(self, path: str, **params):
         """GET /admin-api/<path>; the `data` of a successful response."""
+        _enforce_fenced_read("GET", path)
         for attempt in range(2):
             check = _READ_CHECKPOINT.get()
             if check is not None:
@@ -114,6 +153,8 @@ class YudaoClient:
         from .write_definitions import BACKEND_WRITE_ATOMICITY
         if method not in {"POST", "PUT"} or not re_safe_native_path(path):
             raise ValueError("native write requires a reviewed method and path")
+        if _FENCED_GETS_GUARD.get() is not None:
+            raise BusinessToolPermissionError("writes are forbidden in read-only fenced context")
         if operation and operation not in BACKEND_WRITE_ATOMICITY:
             raise ValueError("native write has no reviewed backend contract")
         atomicity = BACKEND_WRITE_ATOMICITY.get(operation)
@@ -195,6 +236,17 @@ class YudaoClient:
         finally:
             _READ_CHECKPOINT.reset(marker)
 
+    @contextmanager
+    def fenced_read_only(self, writing_gets: frozenset[str] = frozenset()):
+        """Enforce read-only GETs and refuse any endpoint in `writing_gets`."""
+        existing = _FENCED_GETS_GUARD.get()
+        merged = frozenset(writing_gets) if existing is None else (existing | frozenset(writing_gets))
+        marker = _FENCED_GETS_GUARD.set(merged)
+        try:
+            yield
+        finally:
+            _FENCED_GETS_GUARD.reset(marker)
+
     def _login(self) -> str:
         with self._lock:
             if self._token is None:
@@ -206,11 +258,13 @@ class YudaoClient:
             return self._token
 
     def _request(self, method: str, path: str, *, params=None, body=None, token=None):
+        _enforce_fenced_read(method, path)
         from web_operation_agent.execution.events import turn_interval
         with turn_interval("application"):
             return self._request_transport(method, path, params=params, body=body, token=token)
 
     def _request_transport(self, method: str, path: str, *, params=None, body=None, token=None):
+        _enforce_fenced_read(method, path)
         url = f"{self.base_url}/admin-api/{path}"
         if params:
             url += "?" + urllib.parse.urlencode(

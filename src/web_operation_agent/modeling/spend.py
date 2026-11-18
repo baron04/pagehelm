@@ -5,11 +5,17 @@ an explicit per-model price; missing usage is recorded as unknown rather than si
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
+import sqlite3
+import stat
 import threading
 import time
 from pathlib import Path
@@ -141,13 +147,249 @@ class DailyAllowance:
             self._spent[key] = self._spent.get(key, 0.0) + float(cost_cny)
 
 
+@dataclass(frozen=True, slots=True)
+class SpendCapReservation:
+    """Outcome of an atomic process-wide spend reservation."""
+
+    allowed: bool
+    reason: str = ""
+    reservation_id: str = ""
+    reserved_cny: float = 0.0
+    daily_used_cny: float = 0.0
+    monthly_used_cny: float = 0.0
+
+
+def _validate_optional_cap(value: object, name: str) -> float | None:
+    if value is None:
+        return None
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) or value <= 0):
+        raise ValueError(f"{name} must be a positive finite number or None")
+    return float(value)
+
+
+class SQLiteSpendCap:
+    """Atomic process-wide daily and monthly reference spend cap backed by SQLite."""
+
+    def __init__(self, path: str | Path, *,
+                 daily_cap_cny: float | None = None,
+                 monthly_cap_cny: float | None = None,
+                 turn_reserve_cny: float = 0.02,
+                 utc_offset_minutes: int = 8 * 60,
+                 stale_reservation_s: float = 3600.0,
+                 timeout_s: float = 5.0):
+        self.daily_cap_cny = _validate_optional_cap(daily_cap_cny, "daily_cap_cny")
+        self.monthly_cap_cny = _validate_optional_cap(monthly_cap_cny, "monthly_cap_cny")
+        if (isinstance(turn_reserve_cny, bool) or not isinstance(turn_reserve_cny, (int, float))
+                or not math.isfinite(turn_reserve_cny) or turn_reserve_cny < 0):
+            raise ValueError("turn_reserve_cny must be a non-negative finite number")
+        if (isinstance(stale_reservation_s, bool) or not isinstance(stale_reservation_s, (int, float))
+                or not math.isfinite(stale_reservation_s) or stale_reservation_s <= 0):
+            raise ValueError("stale_reservation_s must be a positive finite number")
+        if (isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float))
+                or not math.isfinite(timeout_s) or not 0 < timeout_s <= 120):
+            raise ValueError("timeout_s must be in (0, 120]")
+        self.turn_reserve_cny = float(turn_reserve_cny)
+        self.stale_reservation_s = float(stale_reservation_s)
+        self.timeout_s = float(timeout_s)
+        self._tz = timezone(timedelta(minutes=int(utc_offset_minutes)))
+        candidate = Path(path).expanduser()
+        self.path = candidate if candidate.is_absolute() else Path.cwd() / candidate
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if self.path.is_symlink():
+            raise ValueError("spend cap database path must not be a symbolic link")
+        try:
+            descriptor = os.open(
+                self.path,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+        except FileExistsError:
+            if not stat.S_ISREG(os.lstat(self.path).st_mode):
+                raise ValueError("spend cap database path must be a regular file")
+        else:
+            os.close(descriptor)
+        os.chmod(self.path, 0o600)
+        with self._connect() as db:
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute("PRAGMA synchronous=FULL")
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS spend_totals ("
+                "period_kind TEXT NOT NULL, "
+                "period_key TEXT NOT NULL, "
+                "spent_cny REAL NOT NULL, "
+                "PRIMARY KEY (period_kind, period_key))"
+            )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS spend_reservations ("
+                "reservation_id TEXT PRIMARY KEY, "
+                "day_key TEXT NOT NULL, "
+                "month_key TEXT NOT NULL, "
+                "reserved_cny REAL NOT NULL, "
+                "created_at REAL NOT NULL)"
+            )
+
+    @contextmanager
+    def _connect(self):
+        connection = sqlite3.connect(self.path, timeout=self.timeout_s, isolation_level=None)
+        connection.row_factory = sqlite3.Row
+        try:
+            yield connection
+        finally:
+            connection.close()
+
+    def _keys(self, now: float | None = None) -> tuple[str, str, float]:
+        ts = time.time() if now is None else float(now)
+        dt = datetime.fromtimestamp(ts, tz=self._tz)
+        return dt.strftime("%Y-%m-%d"), dt.strftime("%Y-%m"), ts
+
+    def _usage(self, db, day_key: str, month_key: str, ts: float) -> tuple[float, float]:
+        db.execute("DELETE FROM spend_reservations WHERE created_at <= ?",
+                   (ts - self.stale_reservation_s,))
+        day_spent = db.execute(
+            "SELECT COALESCE(spent_cny, 0.0) FROM spend_totals WHERE period_kind='day' AND period_key=?",
+            (day_key,),
+        ).fetchone()
+        month_spent = db.execute(
+            "SELECT COALESCE(spent_cny, 0.0) FROM spend_totals WHERE period_kind='month' AND period_key=?",
+            (month_key,),
+        ).fetchone()
+        day_res = db.execute(
+            "SELECT COALESCE(SUM(reserved_cny), 0.0) FROM spend_reservations WHERE day_key=?",
+            (day_key,),
+        ).fetchone()
+        month_res = db.execute(
+            "SELECT COALESCE(SUM(reserved_cny), 0.0) FROM spend_reservations WHERE month_key=?",
+            (month_key,),
+        ).fetchone()
+        day_used = float(day_spent[0] if day_spent else 0.0) + float(day_res[0] if day_res else 0.0)
+        month_used = float(month_spent[0] if month_spent else 0.0) + float(month_res[0] if month_res else 0.0)
+        return day_used, month_used
+
+    def reserve(self, reservation_id: str, *, amount_cny: float | None = None,
+                now: float | None = None) -> SpendCapReservation:
+        if not isinstance(reservation_id, str) or not reservation_id.strip():
+            raise ValueError("reservation_id must be a non-empty string")
+        if amount_cny is not None and (
+                isinstance(amount_cny, bool) or not isinstance(amount_cny, (int, float))
+                or not math.isfinite(amount_cny) or amount_cny < 0):
+            raise ValueError("amount_cny must be a non-negative finite number")
+        day_key, month_key, ts = self._keys(now)
+        caps = [c for c in (self.daily_cap_cny, self.monthly_cap_cny) if c is not None]
+        if amount_cny is not None:
+            req = float(amount_cny)
+        elif caps:
+            req = min(self.turn_reserve_cny, min(caps))
+        else:
+            req = 0.0
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            day_used, month_used = self._usage(db, day_key, month_key, ts)
+            if self.daily_cap_cny is not None and (
+                    day_used >= self.daily_cap_cny
+                    or day_used + req > self.daily_cap_cny + 1e-12):
+                db.commit()
+                return SpendCapReservation(
+                    allowed=False, reason="daily_cap_exceeded",
+                    daily_used_cny=day_used, monthly_used_cny=month_used)
+            if self.monthly_cap_cny is not None and (
+                    month_used >= self.monthly_cap_cny
+                    or month_used + req > self.monthly_cap_cny + 1e-12):
+                db.commit()
+                return SpendCapReservation(
+                    allowed=False, reason="monthly_cap_exceeded",
+                    daily_used_cny=day_used, monthly_used_cny=month_used)
+            db.execute(
+                "INSERT OR REPLACE INTO spend_reservations "
+                "(reservation_id, day_key, month_key, reserved_cny, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (reservation_id, day_key, month_key, req, ts),
+            )
+            db.commit()
+            return SpendCapReservation(
+                allowed=True, reason="", reservation_id=reservation_id,
+                reserved_cny=req, daily_used_cny=day_used + req,
+                monthly_used_cny=month_used + req)
+
+    def release(self, reservation_id: str) -> None:
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("DELETE FROM spend_reservations WHERE reservation_id=?", (reservation_id,))
+            db.commit()
+
+    def record_spend(self, cost_cny: float, *, now: float | None = None) -> None:
+        if (isinstance(cost_cny, bool) or not isinstance(cost_cny, (int, float))
+                or not math.isfinite(cost_cny) or cost_cny < 0):
+            raise ValueError("cost_cny must be a non-negative finite number")
+        day_key, month_key, _ts = self._keys(now)
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            for kind, key in (("day", day_key), ("month", month_key)):
+                db.execute(
+                    "INSERT INTO spend_totals (period_kind, period_key, spent_cny) VALUES (?, ?, ?) "
+                    "ON CONFLICT(period_kind, period_key) DO UPDATE SET spent_cny = spent_cny + excluded.spent_cny",
+                    (kind, key, float(cost_cny)),
+                )
+            db.commit()
+
+    def sync_from_ledger(self, ledger: str | Path, *, now: float | None = None) -> None:
+        """Ensure persisted spend totals are at least the ledger's recorded day/month sums."""
+        try:
+            lines = Path(ledger).read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return
+        day_key, month_key, _ts = self._keys(now)
+        day_sum = 0.0
+        month_sum = 0.0
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(row, dict):
+                continue
+            cost, t = row.get("call_cost_cny"), row.get("t")
+            if not isinstance(cost, (int, float)) or isinstance(cost, bool) or not isinstance(t, (int, float)):
+                continue
+            row_day, row_month, _ = self._keys(t)
+            if row_month == month_key:
+                month_sum += float(cost)
+                if row_day == day_key:
+                    day_sum += float(cost)
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            for kind, key, total in (("day", day_key, day_sum), ("month", month_key, month_sum)):
+                db.execute(
+                    "INSERT INTO spend_totals (period_kind, period_key, spent_cny) VALUES (?, ?, ?) "
+                    "ON CONFLICT(period_kind, period_key) DO UPDATE SET spent_cny = MAX(spent_cny, excluded.spent_cny)",
+                    (kind, key, total),
+                )
+            db.commit()
+
+    def allows(self, *, now: float | None = None) -> bool:
+        day_key, month_key, ts = self._keys(now)
+        with self._connect() as db:
+            day_used, month_used = self._usage(db, day_key, month_key, ts)
+        if self.daily_cap_cny is not None and day_used >= self.daily_cap_cny:
+            return False
+        if self.monthly_cap_cny is not None and month_used >= self.monthly_cap_cny:
+            return False
+        return True
+
+    def usage(self, *, now: float | None = None) -> tuple[float, float]:
+        day_key, month_key, ts = self._keys(now)
+        with self._connect() as db:
+            return self._usage(db, day_key, month_key, ts)
+
+
 class SpendMeter:
     """Cumulative usage, one ledger line per call, with the two stop lines."""
 
     def __init__(self, *, ledger: str | Path | None = None, batch_id: str = "",
                  run_input_token_abort: int = 220000, batch_cost_stop: float | None = None,
                  price: dict | None = None,
-                 allowance: DailyAllowance | None = None, allowance_key: str = ""):
+                 allowance: DailyAllowance | None = None, allowance_key: str = "",
+                 global_cap: SQLiteSpendCap | None = None):
         # Precedence: an explicit argument, then the environment override, then the
         # project ledger. The environment is how a test run redirects everything at once;
         # a caller that names a file means that file.
@@ -169,11 +411,18 @@ class SpendMeter:
         self.price = price
         if allowance is not None and not re.fullmatch(r"[0-9a-f]{8,64}", allowance_key):
             raise ValueError("allowance_key must be an opaque lowercase hex identifier")
+        if global_cap is not None and not isinstance(global_cap, SQLiteSpendCap):
+            raise TypeError("global_cap must be SQLiteSpendCap or None")
         self.allowance, self.allowance_key = allowance, allowance_key
+        self.global_cap = global_cap
 
     def within_allowance(self) -> bool:
-        """False once this meter's key has spent its daily allowance."""
-        return self.allowance is None or self.allowance.allows(self.allowance_key)
+        """False once this meter's key or process-wide cap has spent its allowance."""
+        if self.allowance is not None and not self.allowance.allows(self.allowance_key):
+            return False
+        if self.global_cap is not None and not self.global_cap.allows():
+            return False
+        return True
 
     def cost_of(self, i: int, o: int, c: int) -> float:
         if self.price is None:
@@ -314,6 +563,8 @@ class SpendMeter:
             self.run_in[run_id] = next_run_in
             if self.allowance is not None:
                 self.allowance.add(self.allowance_key, call_cost)
+            if self.global_cap is not None:
+                self.global_cap.record_spend(call_cost, now=rec["t"])
             self._commit_run_record(
                 run_id=run_id, rec=rec, reported_model=selected_reported_model,
                 request_id=request_id, unmetered=False, known_cost=call_cost)

@@ -430,6 +430,11 @@ class YudaoGoalData:
             return None
         if not self._ui.line_labels(spec.component.rsplit("/", 1)[0]):
             return None
+        for candidate in (spec.list_path, spec.get_path):
+            if candidate:
+                full = "/admin-api/" + candidate.lstrip("/")
+                if full in self._writing_gets or candidate in self._writing_gets:
+                    return None
         try:
             listed = self._client.get(spec.list_path, pageNo=1, pageSize=1,
                                       **{**({"sceneType": 1} if "sceneType" in spec.params else {}),

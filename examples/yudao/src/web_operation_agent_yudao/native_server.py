@@ -26,8 +26,10 @@ gateway and this bootstrap endpoint on the site's own origin.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
+import math
 import os
 import re
 import signal
@@ -36,19 +38,24 @@ import threading
 import time
 import urllib.request
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 from web_operation_agent.business.control import ReadOnlyControl
+from web_operation_agent.business.mutation import MutationJournalError, SQLiteMutationJournal
 from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.composition.live import (LiveConversationRunner, LiveProductCapacityError,
                                                   LiveProductServer)
 from web_operation_agent.composition.sources import SourceCapability
-from web_operation_agent.modeling.client import ChatModel, SpendMeter
+from web_operation_agent.execution.product import AgentTurnError, AgentTurnErrorCode, AgentTurnStatus
+from web_operation_agent.modeling.client import ChatModel, ProviderConnectionPool, SpendMeter
 from web_operation_agent.modeling.egress import ProviderEgressPolicy
-from web_operation_agent.modeling.spend import DailyAllowance
-from web_operation_agent.state.conversation import SQLiteConversationState
+from web_operation_agent.modeling.provider import ProviderRuntimeGuard
+from web_operation_agent.modeling.spend import DailyAllowance, SQLiteSpendCap
+from web_operation_agent.state.conversation import SQLiteConversationState, prune_sqlite_conversations
 from web_operation_agent.state.identity import PrincipalError
 from web_operation_agent.state.store import SQLiteSessionStore
 
@@ -155,6 +162,21 @@ class YudaoHostConfig:
     #: Days each turn's record of what the model was given and answered is kept beside
     #: the session's audit (`runs/<session>/turns/`); 0 writes none.
     turn_trace_days: int = 14
+    #: Process-wide concurrent provider calls bound across all sessions.
+    max_concurrent_model_requests: int = 4
+    #: Seconds to wait for in-flight write dispatch + readback during SIGTERM drain.
+    shutdown_drain_timeout_s: float = 15.0
+    #: Days before inactive durable session and conversation rows are pruned.
+    session_retention_days: int = 30
+    #: Size threshold (bytes) triggering rotation of an active `audit.jsonl`.
+    audit_max_bytes: int = 10 * 1024 * 1024
+    #: Days rotated audit segments are kept before pruning non-retained rows.
+    audit_retention_days: int = 90
+    #: Maximum rotated audit segments retained per audit log directory.
+    audit_max_segments: int = 10
+    #: Optional process-wide daily and monthly reference spend caps (CNY). None disables.
+    daily_total_cap_cny: float | None = None
+    monthly_total_cap_cny: float | None = None
     #: User-facing source lookup and reading over the configured release. Off for the
     #: deployment (D3): implementation questions get the prompt's fixed reply, and the
     #: build-time scanners use the release tree through their own CLIs, not this switch.
@@ -205,6 +227,37 @@ class YudaoHostConfig:
             raise ValueError("sessions_per_actor must be a whole number from 1 to 64")
         if self.sessions_per_actor > self.max_sessions:
             raise ValueError("sessions_per_actor cannot exceed max_sessions")
+        if (isinstance(self.max_concurrent_model_requests, bool)
+                or not isinstance(self.max_concurrent_model_requests, int)
+                or not 1 <= self.max_concurrent_model_requests <= 1000):
+            raise ValueError("max_concurrent_model_requests must be an integer from 1 to 1000")
+        if (isinstance(self.shutdown_drain_timeout_s, bool)
+                or not isinstance(self.shutdown_drain_timeout_s, (int, float))
+                or not math.isfinite(self.shutdown_drain_timeout_s)
+                or not 0 <= self.shutdown_drain_timeout_s <= 300):
+            raise ValueError("shutdown_drain_timeout_s must be a finite number from 0 to 300")
+        if (isinstance(self.session_retention_days, bool)
+                or not isinstance(self.session_retention_days, int)
+                or not 1 <= self.session_retention_days <= 365):
+            raise ValueError("session_retention_days must be an integer from 1 to 365")
+        if (isinstance(self.audit_max_bytes, bool)
+                or not isinstance(self.audit_max_bytes, int)
+                or not 1024 <= self.audit_max_bytes <= 1024 * 1024 * 1024):
+            raise ValueError("audit_max_bytes must be an integer from 1024 to 1GiB")
+        if (isinstance(self.audit_retention_days, bool)
+                or not isinstance(self.audit_retention_days, int)
+                or not 1 <= self.audit_retention_days <= 3650):
+            raise ValueError("audit_retention_days must be an integer from 1 to 3650")
+        if (isinstance(self.audit_max_segments, bool)
+                or not isinstance(self.audit_max_segments, int)
+                or not 1 <= self.audit_max_segments <= 100):
+            raise ValueError("audit_max_segments must be an integer from 1 to 100")
+        for cap_name in ("daily_total_cap_cny", "monthly_total_cap_cny"):
+            cap = getattr(self, cap_name)
+            if cap is not None and (
+                    isinstance(cap, bool) or not isinstance(cap, (int, float))
+                    or not math.isfinite(cap) or cap <= 0):
+                raise ValueError(f"{cap_name} must be a positive finite number or None")
 
 
 @dataclass
@@ -278,18 +331,39 @@ class YudaoHost:
             except Exception:
                 self.native_proxy.close()
                 raise
+        self.runtime_guard = ProviderRuntimeGuard(
+            max_concurrent_requests=config.max_concurrent_model_requests)
+        self._model_connection_pool = ProviderConnectionPool(
+            max_idle=max(4, config.max_concurrent_model_requests))
         self.store = SQLiteSessionStore(config.state_dir / "session-store.sqlite3")
         self.server = LiveProductServer(
             max_sessions=config.max_sessions, max_sessions_per_actor=config.sessions_per_actor,
             host=config.gateway_host, port=config.gateway_port,
             public_base_url=config.public_agent_url or None,
-            allow_private_network_bind=True, durable_store=self.store)
+            allow_private_network_bind=True, durable_store=self.store,
+            provider_status=self.runtime_guard.status)
         #: (tenant, actor, page instance) -> that page's session.
         self._sessions: dict[tuple[str, str, str], _Active] = {}
         self.ledger = config.state_dir / "model-spend.jsonl"
         self.allowance = DailyAllowance(config.daily_allowance_cny, utc_offset_minutes=8 * 60)
         self.allowance.load(self.ledger)
+        self.spend_cap: SQLiteSpendCap | None = None
+        if config.daily_total_cap_cny is not None or config.monthly_total_cap_cny is not None:
+            self.spend_cap = SQLiteSpendCap(
+                config.state_dir / "spend-caps.sqlite3",
+                daily_cap_cny=config.daily_total_cap_cny,
+                monthly_cap_cny=config.monthly_total_cap_cny,
+                utc_offset_minutes=8 * 60,
+            )
+            self.spend_cap.sync_from_ledger(self.ledger)
+        self._mutation_journal = (
+            SQLiteMutationJournal(config.state_dir / "mutations.sqlite3")
+            if (config.native_writes or config.native_write_preparation) else None
+        )
         self._lock = threading.RLock()
+        self._writes_cond = threading.Condition(self._lock)
+        self._draining = False
+        self._inflight_writes = 0
         self._traces_pruned_at = 0.0
         self.prune_turn_traces()
         if config.warm_index and self.rule_source is not None:
@@ -349,6 +423,8 @@ class YudaoHost:
 
     def bootstrap(self, token: str, tenant: str, instance: str) -> dict:
         from .page_guard import WINDOW_KEY
+        if self.draining:
+            raise BootstrapRefused(503, "server_draining")
         # `instance` names the page asking: each page keeps its own conversation, so two
         # pages -- or two browsers, or two devices -- of one person never take each other's.
         # The name is also the page's guard window, so it must fit the window charset here
@@ -365,6 +441,8 @@ class YudaoHost:
             page_window = _PageWindow(instance)
             app = self._application(client, window=page_window)
             with self._lock:
+                if self._draining:
+                    raise BootstrapRefused(503, "server_draining")
                 active = self._sessions.get(key)
                 if active is not None:
                     try:
@@ -403,7 +481,6 @@ class YudaoHost:
 
     def _application(self, client: YudaoClient, *, window: str | _PageWindow = "") -> YudaoApplication:
         from .guard_proxy import GUARD_PATH
-        from web_operation_agent.business.mutation import SQLiteMutationJournal
         forms = None
         if self.live_forms:
             from .live_forms import FenceEvidence, LiveFormPort
@@ -422,17 +499,153 @@ class YudaoHost:
                                 native_writes=self.config.native_writes,
                                 native_write_preparation=self.config.native_write_preparation,
                                 writing_gets=self._fenced,
-                                mutation_journal=SQLiteMutationJournal(self.config.state_dir / "mutations.sqlite3")
-                                    if (self.config.native_writes or self.config.native_write_preparation) else None)
+                                mutation_journal=self._mutation_journal,
+                                write_tracker=self.track_inflight_write)
         return app
 
+    @property
+    def draining(self) -> bool:
+        with self._lock:
+            return self._draining
+
+    @property
+    def accepting_sessions(self) -> bool:
+        with self._lock:
+            return not self._draining
+
+    @property
+    def inflight_writes(self) -> int:
+        with self._lock:
+            return self._inflight_writes
+
+    @contextmanager
+    def track_inflight_write(self):
+        with self._lock:
+            self._inflight_writes += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._inflight_writes -= 1
+                self._writes_cond.notify_all()
+
+    def begin_drain(self) -> None:
+        with self._lock:
+            self._draining = True
+        server_drain = getattr(self.server, "begin_drain", None)
+        if callable(server_drain):
+            server_drain()
+
+    def drain(self, timeout_s: float | None = None) -> dict:
+        """Stop accepting new sessions/turns and wait boundedly for in-flight writes."""
+        self.begin_drain()
+        effective = (
+            float(self.config.shutdown_drain_timeout_s)
+            if timeout_s is None else max(0.0, float(timeout_s))
+        )
+        deadline = time.monotonic() + effective
+        with self._writes_cond:
+            while self._inflight_writes > 0:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._writes_cond.wait(timeout=remaining)
+            remaining_writes = self._inflight_writes
+        marked = 0
+        if (remaining_writes > 0 or effective == 0.0) and self._mutation_journal is not None:
+            for intent in self._mutation_journal.unresolved():
+                if intent.state != "dispatching":
+                    continue
+                try:
+                    self._mutation_journal.finish(
+                        intent.proposal_digest,
+                        "indeterminate",
+                        reconciliation={"phase": "shutdown_drain_timeout"},
+                    )
+                    marked += 1
+                except MutationJournalError:
+                    continue
+                self._append_host_audit({
+                    "t": time.time(),
+                    "event": "business_mutation_indeterminate",
+                    "proposal_digest": intent.proposal_digest,
+                    "reason": "shutdown_drain_timeout",
+                    "dispatches": 0,
+                    "side_effect_possible": True,
+                })
+        return {
+            "drained": remaining_writes == 0 and marked == 0,
+            "remaining_writes": remaining_writes,
+            "marked_indeterminate": marked,
+        }
+
+    def _append_host_audit(self, record: dict) -> None:
+        audit_path = self.config.state_dir / "audit.jsonl"
+        audit_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd = os.open(audit_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
     def prune_turn_traces(self) -> None:
-        """Delete turn records past their retention; at most once an hour."""
-        if not self.config.turn_trace_days or time.time() - self._traces_pruned_at < 3600:
-            return
-        self._traces_pruned_at = time.time()
-        from web_operation_agent.execution.turn_trace import prune_turn_traces
-        prune_turn_traces(self.config.state_dir / "runs", self.config.turn_trace_days)
+        """Run periodic host cleanup (traces, sessions, conversations, audit rotation)."""
+        self.cleanup()
+
+    def cleanup(self, *, force: bool = False, now_ms: int | None = None) -> dict:
+        """Prune expired sessions/conversations/traces and rotate audit logs safely."""
+        now_s = time.time() if now_ms is None else now_ms / 1000.0
+        current_ms = int(now_s * 1000) if now_ms is None else now_ms
+        if not force and now_s - self._traces_pruned_at < 3600:
+            return {"skipped": True}
+        self._traces_pruned_at = now_s
+        traces_removed = 0
+        if self.config.turn_trace_days:
+            from web_operation_agent.execution.turn_trace import prune_turn_traces
+            traces_removed = prune_turn_traces(
+                self.config.state_dir / "runs", self.config.turn_trace_days, now=now_s)
+        cutoff_ms = current_ms - self.config.session_retention_days * 86_400_000
+        sessions_removed = self.store.prune(older_than_ms=cutoff_ms)
+        conversations_removed = prune_sqlite_conversations(
+            self.config.state_dir / "conversation-state.sqlite3",
+            older_than_ms=cutoff_ms,
+            now_ms=current_ms,
+        )
+        journal_swept = (
+            self._mutation_journal.sweep(now_ms=current_ms)
+            if self._mutation_journal is not None else {}
+        )
+        unresolved_digests = (
+            frozenset(item.proposal_digest for item in self._mutation_journal.unresolved())
+            if self._mutation_journal is not None else frozenset()
+        )
+        audit_targets = [self.config.state_dir / "audit.jsonl"]
+        runs_dir = self.config.state_dir / "runs"
+        if runs_dir.is_dir():
+            audit_targets.extend(sorted(runs_dir.glob("*/audit.jsonl")))
+        rotated = 0
+        pruned_segments = 0
+        preserved_rows = 0
+        for audit_path in audit_targets:
+            r, p, k = _rotate_and_prune_audit(
+                audit_path,
+                max_bytes=self.config.audit_max_bytes,
+                max_segments=self.config.audit_max_segments,
+                retention_days=self.config.audit_retention_days,
+                unresolved_digests=unresolved_digests,
+                now_s=now_s,
+            )
+            rotated += r
+            pruned_segments += p
+            preserved_rows += k
+        return {
+            "skipped": False,
+            "traces_removed": traces_removed,
+            "sessions_removed": sessions_removed,
+            "conversations_removed": conversations_removed,
+            "journal_swept": journal_swept,
+            "audit_rotated": rotated,
+            "audit_segments_pruned": pruned_segments,
+            "audit_preserved_rows": preserved_rows,
+        }
 
     def _open(self, app: YudaoApplication, principal, key, page_window: _PageWindow):
         bound = bind_application(app)
@@ -450,9 +663,12 @@ class YudaoHost:
         person = hashlib.sha256("\0".join(key[:2]).encode()).hexdigest()[:24]
         meter = SpendMeter(ledger=self.ledger, batch_id=f"yudao-native-{run_dir.name}",
                            allowance=self.allowance, allowance_key=person,
+                           global_cap=self.spend_cap,
                            run_input_token_abort=16_000_000)
         chat = ChatModel(meter, env=dict(self.config.model_env), model=self.config.model,
                          max_completion_tokens=8192, timeout=self.config.turn_timeout_s,
+                         runtime_guard=self.runtime_guard,
+                         connection_pool=self._model_connection_pool,
                          egress_policy=ProviderEgressPolicy(
                              session_handoff_keys=bound.ports.routes.session_handoff_query_keys))
 
@@ -512,7 +728,7 @@ class YudaoHost:
                 mutation_prefill = YudaoMutationPrefill(app.client, app.ports.forms, self.page_review)
             from .native_submit import YudaoSubmitPort
             submit_port = YudaoSubmitPort(app.client, self.native_proxy, self._load_api_docs,
-                                          window=page_window)
+                                          window=page_window, write_tracker=self.track_inflight_write)
             native_submit = submit_port if self.config.native_submit else None
             turn_config = replace(turn_config, action_policy=action_policy, click_policy=None,
                 max_user_answer_chars=panel_limits()["result_max_chars"])
@@ -534,6 +750,48 @@ class YudaoHost:
                 time_zone=app.goal_data.time_zone(),
                 skill_knowledge=self.config.slim_skill_knowledge,
                 turn_traces=self.config.turn_trace_days > 0)
+            orig_execute = executor.execute
+
+            def guarded_execute(message):
+                if self.draining:
+                    raise AgentTurnError(
+                        AgentTurnErrorCode.RUNTIME_UNAVAILABLE,
+                        "服务正在优雅停机，暂不接受新回合。",
+                        retryable=True,
+                    )
+                if self.spend_cap is None:
+                    return orig_execute(message)
+                turn_id = str((message or {}).get("message_id") or "")
+                res_id = f"{session_id}:{turn_id or uuid.uuid4().hex}"
+                reservation = self.spend_cap.reserve(res_id)
+                if not reservation.allowed:
+                    notice = (
+                        "今日平台参考费用已达上限，暂不接受新任务，请明日再试。"
+                        if reservation.reason == "daily_cap_exceeded"
+                        else "本月平台参考费用已达上限，暂不接受新任务。"
+                    )
+                    channel.publish(
+                        "progress",
+                        {
+                            "state": "task_failed",
+                            "message": notice,
+                            "error_code": reservation.reason,
+                            "retryable": False,
+                        },
+                        turn_id=turn_id,
+                    )
+                    return SimpleNamespace(
+                        terminal_reason=reservation.reason,
+                        user_answer=notice,
+                        status=AgentTurnStatus.REFUSED,
+                        message=SimpleNamespace(message_id=turn_id),
+                    )
+                try:
+                    return orig_execute(message)
+                finally:
+                    self.spend_cap.release(res_id)
+
+            executor.execute = guarded_execute
             return LiveConversationRunner(channel, executor=executor)
 
         session = self.server.create_session(
@@ -555,13 +813,24 @@ class YudaoHost:
     @staticmethod
     def _warm_index(app: YudaoApplication, knowledge) -> None:
         """Warm the actor's menu/API descriptions and outline, without line-table reads."""
-        index = app.goal_port.outline_index
-        for build in (getattr(knowledge, "_load", None), index):
-            try:
-                if build is not None:
-                    build()
-            except Exception:  # noqa: BLE001 -- see the docstring
-                pass
+        fenced = (
+            frozenset(getattr(getattr(app, "goal_data", None), "_writing_gets", ()))
+            | frozenset(getattr(knowledge, "writing_gets", ()))
+        )
+        client = getattr(app, "client", None) or getattr(knowledge, "client", None)
+        guard = (
+            client.fenced_read_only(fenced)
+            if hasattr(client, "fenced_read_only")
+            else contextlib.nullcontext()
+        )
+        index = getattr(getattr(app, "goal_port", None), "outline_index", None)
+        with guard:
+            for build in (getattr(knowledge, "_load", None), index):
+                try:
+                    if build is not None:
+                        build()
+                except Exception:  # noqa: BLE001 -- see the docstring
+                    pass
 
     def _browser_bootstrap(self, session) -> dict:
         now_ms = int(time.time() * 1000)
@@ -583,9 +852,112 @@ class YudaoHost:
                     self._sessions.pop(key, None)
 
     def close(self) -> None:
+        self._model_connection_pool.close_all()
         self.server.close()
         if self.native_proxy is not None:
             self.native_proxy.close()
+
+
+_PRESERVED_AUDIT_EVENTS = frozenset({
+    "business_mutation_indeterminate",
+    "run_started",
+    "session_started",
+    "policy_bound",
+})
+_FINGERPRINT_KEYS = (
+    "policy_fingerprint",
+    "catalog_sha256",
+    "policy_digest",
+    "source_digest",
+    "skill_digest",
+)
+
+
+def _is_preserved_audit_line(raw_line: str, unresolved_digests: frozenset[str]) -> bool:
+    line = raw_line.strip()
+    if not line:
+        return False
+    try:
+        row = json.loads(line)
+    except ValueError:
+        return False
+    if not isinstance(row, dict):
+        return False
+    if row.get("proposal_digest") in unresolved_digests:
+        return True
+    if row.get("event") in _PRESERVED_AUDIT_EVENTS:
+        return True
+    return any(bool(row.get(key)) for key in _FINGERPRINT_KEYS)
+
+
+def _rotate_and_prune_audit(
+    audit_path: Path,
+    *,
+    max_bytes: int,
+    max_segments: int,
+    retention_days: int,
+    unresolved_digests: frozenset[str],
+    now_s: float,
+) -> tuple[int, int, int]:
+    rotated = 0
+    pruned = 0
+    preserved = 0
+    parent = audit_path.parent
+    if not parent.is_dir():
+        return 0, 0, 0
+    if audit_path.is_file():
+        try:
+            size = audit_path.stat().st_size
+        except OSError:
+            size = 0
+        if size >= max_bytes:
+            stamp = int(now_s * 1000)
+            seq = 0
+            while True:
+                candidate = parent / f"audit.{stamp}-{seq}.jsonl"
+                if not candidate.exists():
+                    break
+                seq += 1
+            os.replace(audit_path, candidate)
+            rotated = 1
+
+    segments = sorted(
+        p for p in parent.glob("audit.*.jsonl")
+        if p.name != "audit.retained.jsonl" and p.is_file()
+    )
+    cutoff_s = now_s - retention_days * 86400
+    keep_recent = set(segments[-max_segments:]) if max_segments > 0 else set()
+    retained_path = parent / "audit.retained.jsonl"
+    seen_hashes: set[str] = set()
+    if retained_path.is_file():
+        for existing in retained_path.read_text(encoding="utf-8").splitlines():
+            if existing.strip():
+                seen_hashes.add(hashlib.sha256(existing.strip().encode("utf-8")).hexdigest())
+
+    for segment in segments:
+        try:
+            mtime = segment.stat().st_mtime
+        except OSError:
+            continue
+        if segment in keep_recent and mtime >= cutoff_s:
+            continue
+        to_retain: list[str] = []
+        for raw_line in segment.read_text(encoding="utf-8").splitlines():
+            if _is_preserved_audit_line(raw_line, unresolved_digests):
+                stripped = raw_line.strip()
+                digest = hashlib.sha256(stripped.encode("utf-8")).hexdigest()
+                if digest not in seen_hashes:
+                    seen_hashes.add(digest)
+                    to_retain.append(stripped)
+        if to_retain:
+            fd = os.open(retained_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as fh:
+                for item in to_retain:
+                    fh.write(item + "\n")
+            preserved += len(to_retain)
+        segment.unlink(missing_ok=True)
+        pruned += 1
+    return rotated, pruned, preserved
 
 
 def _handler(host: YudaoHost):
@@ -604,7 +976,19 @@ def _handler(host: YudaoHost):
 
         def do_GET(self):
             if self.path == "/healthz":
-                self._json(200, {"ok": True, "sessions": host.server.session_count})
+                self._json(200, {
+                    "ok": True,
+                    "draining": host.draining,
+                    "sessions": host.server.session_count,
+                })
+            elif self.path == "/readyz":
+                draining = host.draining
+                self._json(503 if draining else 200, {
+                    "ready": not draining,
+                    "accepting_sessions": not draining,
+                    "draining": draining,
+                    "sessions": host.server.session_count,
+                })
             else:
                 self._json(404, {"error": "not_found"})
 
@@ -684,6 +1068,10 @@ def main(argv=None) -> int:
     ap.add_argument("--max-sessions", type=int, default=YudaoHostConfig.max_sessions)
     ap.add_argument("--daily-allowance-cny", type=float,
                     default=YudaoHostConfig.daily_allowance_cny)
+    ap.add_argument("--daily-total-cap-cny", type=float, default=None)
+    ap.add_argument("--monthly-total-cap-cny", type=float, default=None)
+    ap.add_argument("--shutdown-drain-timeout-s", type=float,
+                    default=YudaoHostConfig.shutdown_drain_timeout_s)
     ap.add_argument("--turn-trace-days", type=int, default=YudaoHostConfig.turn_trace_days,
                     help="days to keep each turn's record of what the model was given and answered; 0 keeps none")
     a = ap.parse_args(argv)
@@ -711,6 +1099,9 @@ def main(argv=None) -> int:
             location_bindings=a.location_bindings,
             max_sessions=a.max_sessions,
             daily_allowance_cny=a.daily_allowance_cny,
+            daily_total_cap_cny=a.daily_total_cap_cny,
+            monthly_total_cap_cny=a.monthly_total_cap_cny,
+            shutdown_drain_timeout_s=a.shutdown_drain_timeout_s,
             turn_trace_days=a.turn_trace_days,
             runtime_source=a.runtime_source)
         from .deployment_validation import validate_native_deployment
@@ -733,15 +1124,17 @@ def main(argv=None) -> int:
     threading.Thread(target=host._warm_api_docs, daemon=True).start()
     http = ThreadingHTTPServer((host.config.bootstrap_host, host.config.bootstrap_port), _handler(host))
     stop = threading.Event()
-    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    signal.signal(signal.SIGTERM, lambda *_: (host.begin_drain(), stop.set()))
     threading.Thread(target=http.serve_forever, daemon=True).start()
     print(f"yudao assistant: gateway {host.server.base_url}, bootstrap :{host.config.bootstrap_port}",
           flush=True)
     try:
         while not stop.wait(60):
             host.forget_closed()
+            host.cleanup()
     except KeyboardInterrupt:
         pass
+    host.drain()
     http.shutdown()
     host.close()
     return 0

@@ -100,11 +100,13 @@ class YudaoSubmitPort:
     def contract(self):
         return YUDAO_SUBMIT_CONVENTIONS
 
-    def __init__(self, client, proxy, api_docs, *, private_evidence=None, window=""):
+    def __init__(self, client, proxy, api_docs, *, private_evidence=None, window="", write_tracker=None):
         if private_evidence is not None and not callable(private_evidence):
             raise TypeError("private_evidence must be callable")
         self.client, self.proxy, self._api_docs = client, proxy, api_docs
         self._private_evidence = private_evidence
+        self._write_tracker = write_tracker
+        self._active_write_cm = None
         #: Which of the actor's guard windows the page the current turn runs on works
         #: through. Read evidence is scoped to it, so two pages' reads never explain each
         #: other's. A callable resolves it when the guard is asked -- a shared
@@ -230,10 +232,27 @@ class YudaoSubmitPort:
     def arm(self, permit: SubmitPermit) -> None:
         actor = self._actor()
         permit.actor = actor
-        self.proxy.guard.arm_permit(actor, permit, owner=self._window_name())
+        if self._write_tracker is not None and self._active_write_cm is None:
+            cm = self._write_tracker()
+            cm.__enter__()
+            self._active_write_cm = cm
+        try:
+            self.proxy.guard.arm_permit(actor, permit, owner=self._window_name())
+        except BaseException:
+            self._release_write_tracker()
+            raise
+
+    def _release_write_tracker(self) -> None:
+        cm = self._active_write_cm
+        self._active_write_cm = None
+        if cm is not None:
+            cm.__exit__(None, None, None)
 
     def disarm(self) -> None:
-        self.proxy.guard.disarm_permit(self._actor())
+        try:
+            self.proxy.guard.disarm_permit(self._actor())
+        finally:
+            self._release_write_tracker()
 
     def settled(self) -> None:
         self.proxy.guard.wait_idle(self._actor(), 5.0)

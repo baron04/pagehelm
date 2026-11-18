@@ -1,4 +1,5 @@
 """Exercise HTTP admission against an isolated SQLite-backed fake application."""
+from contextlib import closing
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -19,7 +20,7 @@ class GuardProxyTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.db = Path(self.tmp.name) / "synthetic.sqlite3"
-        with sqlite3.connect(self.db) as connection:
+        with closing(sqlite3.connect(self.db)) as connection, connection:
             connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY, name TEXT)")
             connection.execute("INSERT INTO records VALUES (1, 'Synthetic customer')")
         self.calls = []
@@ -42,7 +43,7 @@ class GuardProxyTests(unittest.TestCase):
                 if self.path.endswith("/slow-update"):
                     owner.entered.set()
                     owner.release.wait(3)
-                with sqlite3.connect(owner.db) as connection:
+                with closing(sqlite3.connect(owner.db)) as connection, connection:
                     if self.command != "GET" or self.path.endswith("/unsafe-get"):
                         connection.execute("UPDATE records SET name = 'Changed'")
                     name = connection.execute("SELECT name FROM records WHERE id=1").fetchone()[0]
@@ -112,7 +113,7 @@ class GuardProxyTests(unittest.TestCase):
         self.assertEqual(status, 200); self.assertEqual(body["name"], "Synthetic customer")
         self.assertEqual(len(self.calls), 1)
         self.assertIsNone(self.calls[0][2]) # No window cookie is forwarded upstream.
-        with sqlite3.connect(self.db) as connection:
+        with closing(sqlite3.connect(self.db)) as connection, connection:
             self.assertEqual(connection.execute("SELECT name FROM records").fetchone()[0], "Synthetic customer")
         status, body, _ = self.request("POST", GUARD_PATH + "/end")
         self.assertEqual(status, 200); self.assertFalse(body["active"])

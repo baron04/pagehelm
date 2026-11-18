@@ -204,9 +204,14 @@ class NativeWriteHandler:
             private["follow_up_type"] = args["type"]
         # Canonical key includes effects and target, never a Skill identity.
         key = hashlib.sha256(json.dumps([entity, body], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        reconcile_meta = {"entity": entity, "id": body.get("id", body.get("bizId")),
+                          "operation": self.operation, "body_digest": key}
+        if self.operation in RECORD_OPERATIONS and self.operation.endswith("update"):
+            reconcile_meta["expected"] = {k: v for k, v in body.items() if k != "id"}
+            if before:
+                reconcile_meta["before"] = {k: before[k] for k in reconcile_meta["expected"] if k in before}
         return BusinessMutationSpec(private, effect, tuple(targets), reconcile_key=key,
-            details=tuple(details), reconciliation={"entity": entity, "id": body.get("id", body.get("bizId")),
-                "operation": self.operation, "body_digest": key},
+            details=tuple(details), reconciliation=reconcile_meta,
             effect_projection=prepared_effect(self.operation, args, body, actor=actor,
                 choices=choices, relations=relations, snapshot=snapshot, goal_data=self.goal_data))
 
@@ -427,11 +432,16 @@ def native_tools(client, goal_data, *, runtime_dictionary=False, mutation_dispat
 
 class CombinedTools:
     """Existing bounded reads plus the installed immutable mutation definitions."""
-    def __init__(self, reads, mutations): self.reads, self.mutations = reads, mutations
+    def __init__(self, reads, mutations, *, write_tracker=None):
+        self.reads, self.mutations = reads, mutations
+        self._write_tracker = write_tracker
     def tool_schemas(self): return (*self.reads.tool_schemas(), *self.mutations.tool_schemas())
     def tool_effects(self): return {**self.reads.tool_effects(), **self.mutations.tool_effects()}
     def execute(self, name, args, *, context=None): return self.reads.execute(name, args, context=context)
     def prepare_mutation(self, name, args, *, context=None):
         return self.mutations.prepare_mutation(name, args, context=context)
     def execute_mutation(self, name, args, *, context=None):
-        return self.mutations.execute_mutation(name, args, context=context)
+        if self._write_tracker is None:
+            return self.mutations.execute_mutation(name, args, context=context)
+        with self._write_tracker():
+            return self.mutations.execute_mutation(name, args, context=context)

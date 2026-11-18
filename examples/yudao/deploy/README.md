@@ -126,9 +126,23 @@ The non-admin evaluation account is `evaluator` (role `sales_rep`, East China sa
 
 ```bash
 python3 seed.py
-./snapshot.sh seed-v1              # export to $YUDAO_CACHE/snapshots/seed-v1.sql.gz
-./snapshot.sh restore seed-v1      # restore; restarts the server, which invalidates login tokens
+mkdir -p -m 700 .private/business-backups
+./snapshot.sh --docker-host unix:///var/run/docker.sock --project REVIEWED_PROJECT \
+  export .private/business-backups/seed-v1.sql.gz
+./snapshot.sh --docker-host unix:///var/run/docker.sock --project REVIEWED_PROJECT \
+  restore .private/business-backups/seed-v1.sql.gz \
+  --expect-sha256 <SHA256> --writer-isolated --apply
 ```
+
+The snapshot tool requires an explicit local Docker socket and Compose project; it
+selects the running `mysql` and `redis` services by labels and never falls back to a
+fixed container name. It refuses existing exports and publishes only after `mysqldump`
+succeeds and the gzip stream verifies non-empty. Restore requires stopped `server` and
+`agent` services, an explicitly reviewed SHA-256 and `--apply`; it validates the
+complete gzip before importing, clears `system_oauth2_access_token` and
+`system_oauth2_refresh_token` in MySQL, flushes Yudao's Redis auth/permission cache
+(`FLUSHDB`), and never restarts an application. This is a local operator tool, not part
+of the automatic `./local` or `./deploy` flows.
 
 ## Known application behaviour
 
