@@ -147,7 +147,9 @@ class LauncherTests(unittest.TestCase):
 
     def test_mounts_follow_the_launcher_directory_and_exclude_private_sources(self):
         mounts = cfg.source_mounts(self.config)
-        self.assertIn(str(cfg.ROOT / "src"), [m["source"] for m in mounts])
+        sources = [m["source"] for m in mounts]
+        self.assertIn(str(cfg.ROOT / "src"), sources)
+        self.assertIn(str(cfg.ROOT / "frontend/dist/integrations/yudao"), sources)
         for mount in mounts:
             source = Path(mount["source"])
             self.assertNotIn(source.name, {".env", ".workbench", "node_modules", "test-results"})

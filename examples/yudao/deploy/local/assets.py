@@ -25,7 +25,12 @@ def build_frontend() -> None:
             before = {}
         source = cfg.source_digest(frontend_only=True)
         runtime = hashlib.sha256(cfg.RUNTIME.read_bytes()).hexdigest() if cfg.RUNTIME.is_file() else ""
-        if before.get("frontend") == source and before.get("runtime") == runtime:
+        yudao_dir = cfg.ROOT / "frontend/dist/integrations/yudao"
+        yudao_built = (
+            not (cfg.ROOT / "frontend/scripts/build-yudao.mjs").is_file()
+            or all((yudao_dir / n).is_file() for n in ("page-facts.js", "yudao-page-controller.js", "form-surface.js"))
+        )
+        if before.get("frontend") == source and before.get("runtime") == runtime and yudao_built:
             if not marker.is_file():
                 marker.write_text(json.dumps(before))
                 marker.chmod(0o600)

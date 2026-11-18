@@ -153,8 +153,8 @@ def source_mounts(config: Configuration) -> list[dict]:
     paths = [ROOT / part for part in (
         "src", "examples/yudao/src", "examples/yudao/deploy/local",
         "examples/yudao/deploy/cloud/native-policy", "examples/yudao/deploy/cloud/yudao-loader.js",
-        "frontend/src", "frontend/scripts", "frontend/trace", "scripts/build_panel.py", "scripts/build_runtime.py",
-        "requirements.lock")]
+        "frontend/src", "frontend/scripts", "frontend/trace", "frontend/dist/integrations/yudao",
+        "scripts/build_panel.py", "scripts/build_runtime.py", "requirements.lock")]
     paths += sorted(p for p in (ROOT / "frontend").iterdir() if p.is_file() and p.suffix in {".json", ".ts"})
     paths += [CACHE / "ui/src", CACHE / "woa"]
     if (CACHE / "server").is_dir():

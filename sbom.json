@@ -1300,6 +1300,76 @@
       "hashes": [
         {
           "alg": "npm-integrity",
+          "content": "sha512-UC+ZhH3XtczQYfOlu3lNEkdW/p4dsJ1r/bP7H8+rhao3TTTMO1ATq/4DdIi23XuGoFY+Cz0JmCbdVl0hz9jZcA=="
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "@emnapi/core",
+      "properties": [
+        {
+          "name": "woa:licenseSource",
+          "value": "package-lock"
+        },
+        {
+          "name": "woa:requiredBy",
+          "value": "frontend"
+        },
+        {
+          "name": "woa:direct",
+          "value": "false"
+        },
+        {
+          "name": "woa:shipped",
+          "value": "false"
+        }
+      ],
+      "purl": "pkg:npm/@emnapi/core@1.9.2",
+      "type": "library",
+      "version": "1.9.2"
+    },
+    {
+      "hashes": [
+        {
+          "alg": "npm-integrity",
+          "content": "sha512-3U4+MIWHImeyu1wnmVygh5WlgfYDtyf0k8AbLhMFxOipihf6nrWC4syIm/SwEeec0mNSafiiNnMJwbza/Is6Lw=="
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "@emnapi/runtime",
+      "properties": [
+        {
+          "name": "woa:licenseSource",
+          "value": "package-lock"
+        },
+        {
+          "name": "woa:requiredBy",
+          "value": "frontend"
+        },
+        {
+          "name": "woa:direct",
+          "value": "false"
+        },
+        {
+          "name": "woa:shipped",
+          "value": "false"
+        }
+      ],
+      "purl": "pkg:npm/@emnapi/runtime@1.9.2",
+      "type": "library",
+      "version": "1.9.2"
+    },
+    {
+      "hashes": [
+        {
+          "alg": "npm-integrity",
           "content": "sha512-uTII7OYF+/Mes/MrcIOYp5yOtSMLBWSIoLPpcgwipoiKbli6k322tcoFsxoIIxPDqW01SQGAgko4EzZi2BNv2w=="
         }
       ],

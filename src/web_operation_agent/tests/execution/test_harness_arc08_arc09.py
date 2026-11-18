@@ -444,6 +444,88 @@ class Arc09ConcurrentPureReadHookTests(unittest.TestCase):
         self.assertIn("application_unavailable", tool_msgs[0]["content"])
         self.assertIn("ok:good", tool_msgs[1]["content"])
 
+    def test_concurrent_read_batch_routes_through_invoke_tool_hook_and_syncs_turn_events(self):
+        url = "https://ledger.example/invoices"
+        observed_calls: list[tuple[str, str, str]] = []
+
+        class FailingConcurrentReadHandler:
+            def execute(self, arguments, *, context):
+                raise AssertionError("expected concurrent path")
+
+            def prepare_read(self, arguments, *, observation, operation):
+                if arguments["key"] == "bad":
+                    raise DataRefused("denied", permission_denied=False)
+                return {"key": arguments["key"]}
+
+            def commit_read(self, prepared, arguments, *, context):
+                return LoopToolResult(f"ok:{prepared['key']}", kind="read", state="completed")
+
+        proc = LoopProcedure(
+            _make_schema("batch_read", required=("key",)),
+            FailingConcurrentReadHandler(),
+            "read",
+            "records:read",
+        )
+        profile = ModelLoopProfile(
+            instructions="Use batch_read and finish.",
+            procedures=(proc,),
+            render_page=lambda obs, _m: f"URL:{obs.url}",
+            prepare=lambda _req, _ctx: "",
+        )
+        chat = _ScriptedChat(
+            [
+                _tool_reply(
+                    ("batch_read", {"key": "bad"}),
+                    ("batch_read", {"key": "good"}),
+                ),
+                _tool_reply(("finish", {"status": "done", "answer": "Done."})),
+            ]
+        )
+        channel = _HarnessChannel(url)
+        from web_operation_agent.execution.events import TurnEvents
+        sentinel_events = TurnEvents()
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = ModelDrivenTurnExecutor(
+                channel=channel,
+                config=AgentTurnConfig(
+                    supported_scope="Read invoices.",
+                    ledger_path=Path(tmp) / "audit.jsonl",
+                    confirm_page_operations=False,
+                ),
+                chat=chat,
+                application=_bound_adapter(),
+                goal_port=_DummyGoalPort(),
+                control=ReadOnlyControl(),
+                run_id_factory=lambda _m: "arc09-hook",
+                profile=profile,
+                verify=False,
+            )
+            executor.turn_events = sentinel_events
+            orig_invoke = executor._invoke_tool
+
+            def wrapped_invoke(s, name, args, turn):
+                try:
+                    res = orig_invoke(s, name, args, turn)
+                except BaseException as exc:
+                    observed_calls.append(("error", str(args.get("key")), type(exc).__name__))
+                    raise
+                observed_calls.append(("ok", str(args.get("key")), res.feedback))
+                return res
+
+            executor._invoke_tool = wrapped_invoke
+            with patch.object(harness_mod, "RemoteBrowserClient", _RemoteBrowser):
+                result = executor.execute(_message(url))
+
+        self.assertEqual(result.terminal_reason, "agent_finished")
+        self.assertIs(executor.harness.turn_events, sentinel_events)
+        self.assertEqual(
+            observed_calls,
+            [
+                ("error", "bad", "DataRefused"),
+                ("ok", "good", "ok:good"),
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

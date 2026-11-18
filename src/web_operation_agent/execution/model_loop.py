@@ -361,6 +361,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
         """Execute one already-dequeued wire turn via composed `TurnHarness`."""
         harness = self._ensure_harness()
         harness.permits_offline_start = self.permits_offline_start
+        harness.turn_events = self.turn_events
         state, current = harness.bind_turn(message)
         try:
             text = self._run(state)
@@ -906,6 +907,12 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
         return loop_guard.kept_handoff(self, s, action, args)
 
     def _invoke_tool(self, s, name, args, turn):
+        prepared_read = turn.pop("_prepared_concurrent_read", None) if hasattr(turn, "pop") else None
+        if prepared_read is not None:
+            ok, payload = prepared_read
+            if not ok:
+                raise payload
+            return self._concurrent_read_commit(s, name, args, payload, turn)
         writes = turn.get("writes")
         if name == "propose_operation" and self.direct_skill_operations and writes is not None:
             op_name = args.get("operation")
@@ -1442,14 +1449,13 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                 turn["forced_summary_at"] = taken
                 turn["forced_summary_kind"] = "tools"
             turn["runtime_used"] = True
-            if ok:
+            turn["_prepared_concurrent_read"] = (ok, payload)
+            try:
                 result = self._run_tool_safely(
-                    s, lambda n=name, a=args, p=payload: self._concurrent_read_commit(s, n, a, p, turn)
+                    s, lambda n=name, a=args: self._invoke_tool(s, n, a, turn)
                 )
-            else:
-                def _raise_worker_exc(exc=payload):
-                    raise exc
-                result = self._run_tool_safely(s, _raise_worker_exc)
+            finally:
+                turn.pop("_prepared_concurrent_read", None)
             commit_s = time.monotonic() - t_commit
             committed += 1
             (
