@@ -67,6 +67,6 @@ python -m pip install --no-deps --editable examples/yudao
 
 ## Documentation & Legal
 
-- **Docs:** [English](docs/index.md) · [简体中文](docs/zh-cn/index.md) · [Architecture](docs/architecture/overview.md) · [Quickstart & Ops](docs/integration/quickstart.md) · [L0–L3 Integration](docs/integration/levels.md) · [Verified Writes](docs/security/verified-writes.md) · [Protocol Reference](docs/reference/protocol-and-configuration.md)
+- **Docs:** [English](docs/index.md) · [简体中文](docs/zh-cn/index.md) · [Architecture](docs/architecture/overview.md) · [Execution & Runtime](docs/architecture/execution-and-runtime.md) · [Quickstart & Ops](docs/integration/quickstart.md) · [L0–L3 Integration](docs/integration/levels.md) · [Skills & Writes](docs/integration/skills-and-writes.md) · [Verified Writes](docs/security/verified-writes.md) · [Ops & Observability](docs/security/operations-and-observability.md) · [Protocol Reference](docs/reference/protocol-and-configuration.md) · [Tools & Capabilities](docs/reference/tools-and-capabilities.md)
 - **Docs site (`frontend/docs/`):** Built from `docs/` via Astro Starlight with `/llms.txt` & `/llms-full.txt`.
 - **Notice:** Alpha software; evaluate only against isolated synthetic data. [SECURITY](SECURITY.md) · [LICENSE](LICENSE) · [THIRD_PARTY](THIRD_PARTY.md)

@@ -67,41 +67,52 @@ export default defineConfig({
     starlight({
       title: 'PageHelm',
       description: 'Embedded AI operations helm for first-party web applications.',
+      logo: {
+        src: './src/assets/logo.svg',
+        alt: 'PageHelm',
+      },
       defaultLocale: 'root',
       locales: {
         root: { label: 'English', lang: 'en' },
         'zh-cn': { label: '简体中文', lang: 'zh-CN' },
       },
+      components: {
+        Header: './src/components/Header.astro',
+        Hero: './src/components/Hero.astro',
+      },
       customCss: ['./src/styles/custom.css'],
       sidebar: [
         {
-          label: 'Architecture',
-          translations: { 'zh-cn': '简介与架构' },
+          label: 'Architecture & Concepts',
+          translations: { 'zh-cn': '架构与核心原理' },
           items: [
-            { label: 'Overview', translations: { 'zh-cn': '系统总览' }, slug: 'index' },
-            { label: 'Architecture Overview', translations: { 'zh-cn': '架构概览' }, slug: 'architecture/overview' },
+            { label: 'Architecture Overview', translations: { 'zh-cn': '架构概览与信任边界' }, slug: 'architecture/overview' },
+            { label: 'Execution & Browser Runtime', translations: { 'zh-cn': '执行引擎与浏览器运行时' }, slug: 'architecture/execution-and-runtime' },
           ],
         },
         {
           label: 'Quickstart & Integration',
-          translations: { 'zh-cn': '快速上手与接入' },
+          translations: { 'zh-cn': '快速上手与应用接入' },
           items: [
             { label: '5-Min Quickstart & Ops', translations: { 'zh-cn': '5 分钟快速上手与运维' }, slug: 'integration/quickstart' },
             { label: 'L0–L3 Progressive Integration', translations: { 'zh-cn': 'L0–L3 分级接入指南' }, slug: 'integration/levels' },
+            { label: 'Authoring Skills & Writes', translations: { 'zh-cn': 'Skill、约定更新与提交编写' }, slug: 'integration/skills-and-writes' },
           ],
         },
         {
-          label: 'Security & Verified Writes',
-          translations: { 'zh-cn': '安全与核验写入' },
+          label: 'Security & Operations',
+          translations: { 'zh-cn': '安全治理与生产运维' },
           items: [
-            { label: 'Security & Verified Writes', translations: { 'zh-cn': '安全边界与核验写入' }, slug: 'security/verified-writes' },
+            { label: 'Security & Verified Writes', translations: { 'zh-cn': '安全边界与八阶段核验写入' }, slug: 'security/verified-writes' },
+            { label: 'Operations & Observability', translations: { 'zh-cn': '持久化运维、预算与可观测' }, slug: 'security/operations-and-observability' },
           ],
         },
         {
           label: 'Reference',
-          translations: { 'zh-cn': '协议与参考' },
+          translations: { 'zh-cn': '协议与参考手册' },
           items: [
-            { label: 'Protocol & Configuration', translations: { 'zh-cn': 'API 与协议配置参考' }, slug: 'reference/protocol-and-configuration' },
+            { label: 'Protocol & Configuration', translations: { 'zh-cn': '配置项与双端通信协议' }, slug: 'reference/protocol-and-configuration' },
+            { label: 'Tools, Capabilities & Checks', translations: { 'zh-cn': '内置工具、能力开关与程序检查' }, slug: 'reference/tools-and-capabilities' },
           ],
         },
       ],

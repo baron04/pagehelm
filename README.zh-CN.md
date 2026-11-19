@@ -67,6 +67,6 @@ python -m pip install --no-deps --editable examples/yudao
 
 ## 文档与合规声明
 
-- **文档入口：** [简体中文](docs/zh-cn/index.md) · [English](docs/index.md) · [架构概览](docs/zh-cn/architecture/overview.md) · [快速上手与运维](docs/zh-cn/integration/quickstart.md) · [L0–L3 接入](docs/zh-cn/integration/levels.md) · [核验写入](docs/zh-cn/security/verified-writes.md) · [协议与配置参考](docs/zh-cn/reference/protocol-and-configuration.md)
+- **文档入口：** [简体中文](docs/zh-cn/index.md) · [English](docs/index.md) · [架构概览](docs/zh-cn/architecture/overview.md) · [执行引擎与运行时](docs/zh-cn/architecture/execution-and-runtime.md) · [快速上手与运维](docs/zh-cn/integration/quickstart.md) · [L0–L3 接入](docs/zh-cn/integration/levels.md) · [Skill 与写入](docs/zh-cn/integration/skills-and-writes.md) · [核验写入](docs/zh-cn/security/verified-writes.md) · [运维与可观测性](docs/zh-cn/security/operations-and-observability.md) · [协议参考](docs/zh-cn/reference/protocol-and-configuration.md) · [工具与能力](docs/zh-cn/reference/tools-and-capabilities.md)
 - **文档站（`frontend/docs/`）：** 直接读取 `docs/` 由 Astro Starlight 构建，同步生成 `/llms.txt` 与 `/llms-full.txt`。
 - **提示：** Alpha 阶段框架，仅在隔离合成数据下使用。[SECURITY](SECURITY.md) · [LICENSE](LICENSE) · [THIRD_PARTY](THIRD_PARTY.md)

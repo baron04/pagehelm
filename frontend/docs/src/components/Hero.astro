@@ -1,0 +1,638 @@
+---
+import StarlightHero from '@astrojs/starlight/components/Hero.astro';
+
+const { starlightRoute } = Astro.locals;
+const entry = starlightRoute.entry;
+const isSplash = entry.data.template === 'splash';
+const isZh = (starlightRoute.lang || '').toLowerCase().startsWith('zh');
+
+const rawBase = import.meta.env.BASE_URL || '/';
+const basePrefix = rawBase === '/' ? '' : rawBase.replace(/\/+$/, '');
+const routePath = (rel: string) =>
+  `${basePrefix}/${rel.replace(/^\/+/, '')}`.replace(/\/{2,}/g, '/');
+const docPrefix = isZh ? 'zh-cn/' : '';
+
+const copy = isZh
+  ? {
+      eyebrow: '同源内嵌企业级 AI 操作台 · Python 3.13 + TypeScript',
+      title: '同源嵌入业务系统。查数更快，改数必经核验。',
+      lead:
+        'PageHelm 让企业管理后台原地长出双轨 AI 操作能力：大表聚合走同账号受控 API + 内存 SQL，导航预填走 Shadow DOM 语义控件，任何状态变更必经八阶段 WritePipeline 与鲜活可见审批卡。',
+      ctaPrimary: '5 分钟快速上手',
+      ctaSecondary: '阅读架构与信任边界',
+      installLabel: '快速体验本地沙盒：',
+      simTitle: 'PageHelm 实时运行台模拟',
+      simTabs: ['同账号 SQL 表格', '弹窗预填与撤销', '八阶段差异审批卡'],
+      modeHint: '切换安全档位，实时观察宿主生效开关：',
+      userQuery1: '汇总本月华东区未关闭销售合同金额，按金额降序展示完整表格。',
+      userQuery2: '在星河科技下预填联系人顾溪并设置初始密码，先交给我自己提交。',
+      userQuery3: '把联系人林舟的手机号改为 13911113332 并保存。',
+      tableTitle: 'TurnTables SQL 查询结果 · q1（3 行已脱敏）',
+      tableFilterPlaceholder: '输入关键词筛选表格…',
+      prefillTitle: '表单预填交接（受限字段绝不代填）',
+      prefillUndo: '撤销本次自动填写 (undoFormFill)',
+      prefillRestored: '已按原值还原（可重新模拟）',
+      diffTitle: '写入提案审批卡 · 单次消费确认',
+      diffEffect: '修改 CRM 联系人手机号（crm/contact #1042）',
+      diffGate: '已校验 event.isTrusted + 连续可见 ≥400ms',
+      levelsHead: 'L0 → L3 渐进接入代码阶梯',
+      levelsSub: '从单脚本纯页面感知起步，无需一次性改造全部业务后端，随信任等级逐层开放能力。',
+      levelTabs: [
+        'L0 · 单脚本嵌入与模式配置',
+        'L1 · 同账号端口与数据契约',
+        'L2 · 领域指南与多候选消歧',
+        'L3 · 核验写入与交接约定',
+      ],
+      levelDescs: [
+        {
+          title: '15 分钟挂载 Shadow DOM 面板与 1–3 行密钥',
+          body: '无需修改后端代码：在 .env 写入单一厂商 API Key，在 pagehelm.toml 选择 provider 与 read-only / assisted-draft 档位，宿主仅引入 /woa-agent/v1/runtime/assistant.js。',
+          href: routePath(`${docPrefix}integration/quickstart/`),
+          linkText: '查看快速上手指南 →',
+        },
+        {
+          title: '绑定可信身份、站内路由与 QueryEvidence',
+          body: '实现 ApplicationPorts 与 bind_application()，由服务端同源反查 PrincipalContext，大表自动装载至内存 TurnTables（sql）或直出 <DataTable>。',
+          href: routePath(`${docPrefix}integration/levels/`),
+          linkText: '查看 L0–L3 分级接入 →',
+        },
+        {
+          title: '领域口径手册与 2–4 项点击消歧胶囊',
+          body: '在 domain_playbooks/*.md 澄清“客户/会员”或自然月/日历口径，并在多条同名同账号记录时通过 finish(status="need_input", options=[...]) 让用户一键点选。',
+          href: routePath(`${docPrefix}reference/tools-and-capabilities/`),
+          linkText: '查看工具与能力清单 →',
+        },
+        {
+          title: '声明式 Skill、对称平铺更新与可撤销交接',
+          body: '无论走类型化 SKILL.md、ConventionWritePort 还是原生 SubmitPort，全部经过 WritePipeline、派发前重读与 ResultPostconditionVerifier 同账号回读核验。',
+          href: routePath(`${docPrefix}integration/skills-and-writes/`),
+          linkText: '查看 Skill 与写入开发 →',
+        },
+      ],
+      pipelineHead: '八阶段 WritePipeline：任何状态变更一票否决式护栏',
+      pipelineSub: '每条写入提案统一经过来源校验、效果投影、摘要锁定、人工手势确认、单次 CAS、派发重读、单次执行与同账号回读。',
+      stages: [
+        ['01', '值来源核验', '字段值必须溯源至用户原话、已选候选或工具回执'],
+        ['02', '同账号准备', '以当前登录人 PrincipalContext 读取现值与目标 ID'],
+        ['03', '锁定提案摘要', 'targets + 原值→新值 diff 哈希为不可变 proposal_digest'],
+        ['04', '鲜活可见审批', 'Shadow DOM 卡片防遮挡 + >=400ms 驻留 + event.isTrusted'],
+        ['05', '单次 CAS 认领', 'SQLiteMutationJournal 原子跃迁 prepared -> dispatching'],
+        ['06', '派发前实时重读', '提交前二次核对目标记录及实时表单状态无并发漂移'],
+        ['07', '受限许可派发', '至多执行一次；超时/5xx 置 INDETERMINATE 永不重试'],
+        ['08', '同账号回读核验', '按同一账号回读验证后置条件，未决写入可安全对账'],
+      ],
+      bentoHead: '全栈工程能力矩阵',
+      bentoSub: '每一个能力均可追溯至真实源码、协议契约与自动化检查，不依赖黑盒提示词祈祷。',
+      bento: [
+        {
+          title: '混合双轨执行引擎',
+          desc: 'ModelDrivenTurnExecutor 与 TurnHarness 将独立只读批处理并发化，并通过 ProgramCheckSpec 拦截重复空读与未溯源数值。',
+          href: routePath(`${docPrefix}architecture/execution-and-runtime/`),
+        },
+        {
+          title: '端到端隐私与反注入',
+          desc: 'AuditedChat 与递归 URL 解码脱敏在模型出站与写盘前拦截凭据，DOM 密码/上传字段源头剥离并禁用外域跳转。',
+          href: routePath(`${docPrefix}security/verified-writes/`),
+        },
+        {
+          title: '单机耐久恢复与预算护栏',
+          desc: 'SQLite WAL 在线热备、隔离恢复检验、INDETERMINATE 人工裁决 CLI、以及 TurnBudget / SQLiteSpendCap 原子额度预留。',
+          href: routePath(`${docPrefix}security/operations-and-observability/`),
+        },
+        {
+          title: '完整双端协议与限额参考',
+          desc: '详解 pagehelm.toml 全字段约束、EmbeddedGateway REST/SSE 端点及 panel_contract.json v2 状态与载荷字典。',
+          href: routePath(`${docPrefix}reference/protocol-and-configuration/`),
+        },
+        {
+          title: '工具集与能力声明目录',
+          desc: '逐项列出全部内置只读、SQL、页面、Skill、提交及源码检索工具参数与 GoalPort.capabilities() 可选能力清单。',
+          href: routePath(`${docPrefix}reference/tools-and-capabilities/`),
+        },
+        {
+          title: '可核验质量门禁与 CI 矩阵',
+          desc: 'scripts/check.py 按改动路径精准调度核心单测、边界扫描、SBOM 核对、文档站构建与真实 Chromium 回归。',
+          href: routePath(`${docPrefix}integration/quickstart/#五开发检查`),
+        },
+      ],
+      llmsTitle: 'AI-Native 文档索引：/llms.txt 与 /llms-full.txt',
+      llmsBody: '文档站构建期自动同步生成面向大模型与编码助手的结构化索引与中英全量语料，零手工维护漂移。',
+      llmsBtn1: '打开 /llms.txt',
+      llmsBtn2: '下载全量 /llms-full.txt',
+    }
+  : {
+      eyebrow: 'Same-Origin Embedded AI Operations Helm · Python 3.13 + TypeScript',
+      title: 'Embed Inside First-Party Apps. Read at API Speed, Mutate Behind Proof.',
+      lead:
+        'PageHelm pairs a server-owned ReAct executor with an isolated Shadow DOM Runtime in the signed-in user’s browser. Aggregate thousands of rows with same-actor APIs + in-memory SQL, prefill live dialogs safely, and gate every mutation through an 8-stage approval pipeline.',
+      ctaPrimary: '5-Min Quickstart',
+      ctaSecondary: 'Architecture & Trust Model',
+      installLabel: 'Try the local sandbox:',
+      simTitle: 'PageHelm Interactive Runtime Preview',
+      simTabs: ['Hybrid SQL + <DataTable>', 'Dialog Prefill & Undo', '8-Stage Diff Approval'],
+      modeHint: 'Switch safety tier to inspect active host capabilities:',
+      userQuery1: 'Summarize open sales contracts in East China this month, sorted by amount.',
+      userQuery2: 'Prefill contact Gu Xi under Starlight Tech and set an initial password; let me submit.',
+      userQuery3: 'Update contact Lin Zhou’s mobile number to 13911113332 and save.',
+      tableTitle: 'TurnTables SQL Result · q1 (3 redacted rows)',
+      tableFilterPlaceholder: 'Filter table rows live…',
+      prefillTitle: 'Guarded Dialog Handover (secrets never autofilled)',
+      prefillUndo: 'Undo autofill (undoFormFill)',
+      prefillRestored: 'Scalar fields reverted from previous_fields',
+      diffTitle: 'Write Approval Card · Single-Consume Diff',
+      diffEffect: 'Update CRM Contact mobile (crm/contact #1042)',
+      diffGate: 'Verified event.isTrusted + dwell >= 400ms',
+      levelsHead: 'L0 → L3 Progressive Integration Ladder',
+      levelsSub: 'Start with a single script tag and DOM navigation in minutes; layer typed reads, playbooks, and verified writes incrementally.',
+      levelTabs: [
+        'L0 · Embed & Config',
+        'L1 · Same-Actor Reads',
+        'L2 · Playbooks & Pills',
+        'L3 · Verified Writes',
+      ],
+      levelDescs: [
+        {
+          title: 'Single-script Shadow DOM panel with 1–3 line .env secrets',
+          body: 'Zero backend changes required: add one provider key to .env, pick provider and read-only / assisted-draft in pagehelm.toml, and mount /woa-agent/v1/runtime/assistant.js.',
+          href: routePath(`${docPrefix}integration/quickstart/`),
+          linkText: 'Open Quickstart Guide →',
+        },
+        {
+          title: 'Bind PrincipalContext, route allowlists & QueryEvidence',
+          body: 'Wire ApplicationPorts and bind_application() so reads execute under the signed-in user’s credentials, feeding TurnTables (sql) and <DataTable> pagination cleanly.',
+          href: routePath(`${docPrefix}integration/levels/`),
+          linkText: 'Explore L0–L3 Integration →',
+        },
+        {
+          title: 'Domain playbooks & 2–4 clickable disambiguation pills',
+          body: 'Clarify organizational terminology in domain_playbooks/*.md and emit finish(status="need_input", options=[...]) pills whenever duplicate named records exist.',
+          href: routePath(`${docPrefix}reference/tools-and-capabilities/`),
+          linkText: 'Browse Tools & Capabilities →',
+        },
+        {
+          title: 'Reviewed Skills, symmetric convention updates & undoable handoff',
+          body: 'Combine declarative SKILL.md operations, ConventionWritePort flat updates, or SubmitPort native form handovers—all enforced by WritePipeline and ResultPostconditionVerifier.',
+          href: routePath(`${docPrefix}integration/skills-and-writes/`),
+          linkText: 'Author Skills & Writes →',
+        },
+      ],
+      pipelineHead: 'The 8-Stage WritePipeline: Fail-Closed Safety by Construction',
+      pipelineSub: 'Every persistent write path passes through deterministic provenance checks, diff hashing, trusted human gestures, single-use SQLite CAS, pre-dispatch re-read, and same-actor verification.',
+      stages: [
+        ['01', 'Value Provenance', 'Every field must trace to user text, chosen candidate, or tool receipt'],
+        ['02', 'Same-Actor Prep', 'Adapter resolves record IDs & reads current values as PrincipalContext'],
+        ['03', 'Locked Digest', 'Targets and Before->After diffs hash into immutable proposal_digest'],
+        ['04', 'Visible Dwell Card', 'Shadow DOM overlap check + >=400ms visible dwell + event.isTrusted'],
+        ['05', 'Single-Use CAS', 'SQLiteMutationJournal atomically claims prepared -> dispatching once'],
+        ['06', 'Pre-Dispatch Re-Read', 'Secondary read verifies no concurrent drift right before mutation'],
+        ['07', 'Max-Once Dispatch', 'Executes at most once; timeouts/5xx record INDETERMINATE cleanly'],
+        ['08', 'Same-Actor Readback', 'Verifier confirms postconditions; unresolved writes reconcile safely'],
+      ],
+      bentoHead: 'Complete Engineering Documentation',
+      bentoSub: 'Every invariant, limit, and protocol field maps directly to shipped modules and automated test gates.',
+      bento: [
+        {
+          title: 'Hybrid Execution & Runtime Engine',
+          desc: 'ModelDrivenTurnExecutor + TurnHarness concurrent read batches, TurnTables SQLite engine, Decimal read_summary, and Element Plus DOM controls.',
+          href: routePath(`${docPrefix}architecture/execution-and-runtime/`),
+        },
+        {
+          title: 'Privacy, Egress & Prompt Isolation',
+          desc: 'Recursive URL-decoding redaction in AuditedChat, password/file DOM stripping, origin validation, and Shadow DOM host CSP boundaries.',
+          href: routePath(`${docPrefix}security/verified-writes/`),
+        },
+        {
+          title: 'Durable SQLite Ops & Observability',
+          desc: 'Online WAL backups, isolated restores, INDETERMINATE reconciliation CLI, 3-tier atomic spend caps, and content-free OTLP spans.',
+          href: routePath(`${docPrefix}security/operations-and-observability/`),
+        },
+        {
+          title: 'Wire Protocol & Configuration Reference',
+          desc: 'Full pagehelm.toml schema, .env resolution rules, REST/SSE /v1/sessions/ payloads, and panel_contract.json v2 state mappings.',
+          href: routePath(`${docPrefix}reference/protocol-and-configuration/`),
+        },
+        {
+          title: 'Tools, Capabilities & Guard Catalog',
+          desc: 'Schemas and behaviors for every built-in read, SQL, browser, Skill, submit, and source tool, plus GoalPort.capabilities() & ProgramCheckSpec.',
+          href: routePath(`${docPrefix}reference/tools-and-capabilities/`),
+        },
+        {
+          title: 'Change-Aware CI & Qualification Gates',
+          desc: 'How scripts/check.py plans Python, frontend, Starlight docs, SBOM, wheel isolation, and headless Chromium checks per diff.',
+          href: routePath(`${docPrefix}integration/quickstart/#5-development-checks`),
+        },
+      ],
+      llmsTitle: 'AI-Native Corpus: /llms.txt & /llms-full.txt',
+      llmsBody: 'Generated directly from the bilingual docs tree on every Starlight build so coding assistants read exact specs with zero drift.',
+      llmsBtn1: 'Open /llms.txt',
+      llmsBtn2: 'Read /llms-full.txt',
+    };
+
+const levelCodeSnippets = [
+`# 1. .env (1-3 lines, secrets never leave server)
+DEEPSEEK_API_KEY=sk-...
+
+# 2. pagehelm.toml (checked settings, no keys allowed)
+provider = "deepseek"
+mode = "assisted-draft"
+turn_timeout_s = 120
+
+<!-- 3. First-party host page mount -->
+<script src="/woa-agent/v1/runtime/assistant.js" defer></script>`,
+`from web_operation_agent.composition import ApplicationDescriptor, ApplicationPorts, bind_application
+from web_operation_agent.state.identity import bind_matching_identity
+
+bound = bind_application(ApplicationDescriptor(
+    application_id="erp.core",
+    public_origin="https://erp.example.com",
+    navigation_mode="spa",
+    page_controller_module="/woa-agent/page-controller.js",
+    catalog_sha256=tools.catalog_sha256,
+), ports=ApplicationPorts(
+    identity=same_origin_identity_port,   # binds PrincipalContext via bind_matching_identity
+    routes=declared_route_port,           # validates URLs & strips session handoff params
+    data_classifier=tools.classifier,     # annotates QueryEvidence (matched_count / count_exact)
+    ...
+))`,
+`# domain_playbooks/crm-sales.md (reviewed terminology handbook)
+When a user asks for "customers" inside CRM routes (/crm/*), resolve
+CRM Customers via /crm/customer/page rather than Mall Members.
+
+# Interactive choice pills emitted when 2-4 same-actor matches share a name:
+finish(
+    status="need_input",
+    answer="Found 2 matching records named Center Warehouse:",
+    options=[
+        {"id": "wh-101", "label": "Center Warehouse #101 (Main)", "prompt": "Select Center Warehouse #101"},
+        {"id": "wh-204", "label": "Center Warehouse #204 (Spare)", "prompt": "Select Center Warehouse #204"},
+    ],
+)`,
+`# skills/create-contact/agents/woa.toml
+schema_version = 1
+scope_entities = ["crm/contact"]
+scope_pages = ["/crm/contact"]
+write_operations = ["crm_contact_create"]
+
+# Adapter write chain via WritePipeline + ResultPostconditionVerifier:
+# 1. prepare_mutation()   -> resolve 1 target, project FieldDiff + targets
+# 2. approval card        -> event.isTrusted + >=400ms dwell, single-consume CAS
+# 3. execute_mutation()   -> re-check duplicates, dispatch <= 1 time
+# 4. ResultPostconditionVerifier.verify() -> same-actor readback or INDETERMINATE`,
+];
+---
+
+{isSplash ? (
+  <div class="ph-landing" data-ph-landing>
+    <section class="ph-hero-grid">
+      <div class="ph-hero-copy">
+        <span class="ph-eyebrow">
+          <span class="ph-eyebrow-dot" aria-hidden="true" />
+          {copy.eyebrow}
+        </span>
+        <h1 class="ph-hero-title">{copy.title}</h1>
+        <p class="ph-hero-lead">{copy.lead}</p>
+        <div class="ph-hero-actions">
+          <a class="ph-btn ph-btn-primary" href={routePath(`${docPrefix}integration/quickstart/`)}>
+            {copy.ctaPrimary}
+          </a>
+          <a class="ph-btn ph-btn-secondary" href={routePath(`${docPrefix}architecture/overview/`)}>
+            {copy.ctaSecondary}
+          </a>
+        </div>
+        <div class="ph-install-box" aria-label={copy.installLabel}>
+          <code class="ph-install-cmd">
+            cp .env.example .env &amp;&amp; cp pagehelm.example.toml pagehelm.toml &amp;&amp; ./local --synthetic-clock
+          </code>
+          <button
+            type="button"
+            class="ph-copy-btn"
+            data-copy-cmd="cp .env.example .env && cp pagehelm.example.toml pagehelm.toml && ./local --synthetic-clock"
+            data-copied-label={isZh ? '已复制' : 'Copied!'}
+          >
+            {isZh ? '复制' : 'Copy'}
+          </button>
+        </div>
+      </div>
+
+      <div class="ph-sim-card" data-ph-simulator>
+        <div class="ph-sim-topbar">
+          <div class="ph-sim-title">
+            <span>{copy.simTitle}</span>
+          </div>
+          <div class="ph-mode-group" role="group" aria-label={copy.modeHint}>
+            <button type="button" class="ph-mode-btn" data-ph-mode="read-only" aria-pressed="false">read-only</button>
+            <button type="button" class="ph-mode-btn" data-ph-mode="assisted-draft" aria-pressed="false">assisted-draft</button>
+            <button type="button" class="ph-mode-btn" data-ph-mode="verified-operate" aria-pressed="true">verified-operate</button>
+          </div>
+        </div>
+
+        <div class="ph-switch-bar" data-ph-switches>
+          <span class="ph-switch-pill" data-switch="writes" data-on="true">native_writes=true</span>
+          <span class="ph-switch-pill" data-switch="submit" data-on="true">native_submit=true</span>
+          <span class="ph-switch-pill" data-switch="prefill" data-on="true">native_edit_prefill=true</span>
+          <span class="ph-switch-pill" data-switch="prep" data-on="false">native_write_preparation=false</span>
+        </div>
+
+        <div class="ph-tab-row" role="tablist">
+          {copy.simTabs.map((label, idx) => (
+            <button
+              type="button"
+              class="ph-tab-btn"
+              role="tab"
+              data-ph-sim-tab={String(idx)}
+              aria-selected={idx === 0 ? 'true' : 'false'}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div class="ph-sim-body">
+          <div class="ph-sim-pane" data-ph-sim-pane="0">
+            <div class="ph-user-bubble">{copy.userQuery1}</div>
+            <div class="ph-step-line">
+              <span class="ph-chip">call_api(/crm/contract/page)</span>
+              <span>→</span>
+              <span class="ph-chip">sql(TurnTables → q1)</span>
+              <span>→</span>
+              <span class="ph-chip ph-chip-ok">0 server cookies</span>
+            </div>
+            <div class="ph-mini-table">
+              <div class="ph-mini-table-head">
+                <span>{copy.tableTitle}</span>
+                <input
+                  type="search"
+                  data-ph-table-filter
+                  placeholder={copy.tableFilterPlaceholder}
+                  style="font-size:0.74rem;padding:0.2rem 0.5rem;border-radius:0.35rem;border:1px solid var(--ph-border);background:var(--sl-color-bg);color:var(--ph-ink-strong);"
+                />
+              </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>{isZh ? '合同编号' : 'Contract'}</th>
+                    <th>{isZh ? '客户名称' : 'Customer'}</th>
+                    <th>{isZh ? '金额 (元)' : 'Amount'}</th>
+                    <th>{isZh ? '状态' : 'Stage'}</th>
+                  </tr>
+                </thead>
+                <tbody data-ph-table-body>
+                  <tr><td>HT-2026-081</td><td>{isZh ? '华东智造集团' : 'EastCloud Mfg'}</td><td>482,500.00</td><td>{isZh ? '执行中' : 'Active'}</td></tr>
+                  <tr><td>HT-2026-064</td><td>{isZh ? '沪上精密仪器' : 'Jiangnan Robotics'}</td><td>319,000.00</td><td>{isZh ? '已审批' : 'Approved'}</td></tr>
+                  <tr><td>HT-2026-052</td><td>{isZh ? '金桥工业云' : 'Pujiang Logistics'}</td><td>205,800.00</td><td>{isZh ? '执行中' : 'Active'}</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="ph-sim-pane" data-ph-sim-pane="1" hidden>
+            <div class="ph-user-bubble">{copy.userQuery2}</div>
+            <div class="ph-step-line">
+              <span class="ph-chip">fill_fields(dialog:new-contact)</span>
+              <span class="ph-chip ph-chip-ok">applied_fields: 2</span>
+              <span class="ph-chip ph-chip-warn">restricted_controls: password</span>
+            </div>
+            <div class="ph-diff-card">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
+                <strong style="font-size:0.86rem;color:var(--ph-ink-strong);">{copy.prefillTitle}</strong>
+                <button
+                  type="button"
+                  class="ph-copy-btn"
+                  data-ph-undo-btn
+                  data-label-undo={copy.prefillUndo}
+                  data-label-done={copy.prefillRestored}
+                >
+                  {copy.prefillUndo}
+                </button>
+              </div>
+              <div class="ph-diff-row">
+                <span>{isZh ? '客户名称' : 'Customer'}</span>
+                <span data-ph-undo-val data-filled={isZh ? '星河科技' : 'Starlight Tech'} data-prev="(empty)">
+                  <span class="ph-diff-new">{isZh ? '星河科技' : 'Starlight Tech'}</span>
+                </span>
+              </div>
+              <div class="ph-diff-row">
+                <span>{isZh ? '联系人姓名' : 'Contact'}</span>
+                <span data-ph-undo-val data-filled={isZh ? '顾溪' : 'Gu Xi'} data-prev="(empty)">
+                  <span class="ph-diff-new">{isZh ? '顾溪' : 'Gu Xi'}</span>
+                </span>
+              </div>
+              <div class="ph-diff-row">
+                <span>&lt;input type="password"&gt;</span>
+                <span class="ph-chip ph-chip-warn">{isZh ? '已跳过并滚动聚焦 · 请人工输入' : 'Skipped & auto-focused · human input only'}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="ph-sim-pane" data-ph-sim-pane="2" hidden>
+            <div class="ph-user-bubble">{copy.userQuery3}</div>
+            <div class="ph-diff-card">
+              <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.4rem;">
+                <strong style="font-size:0.86rem;color:var(--ph-ink-strong);">{copy.diffTitle}</strong>
+                <span class="ph-chip ph-chip-ok" data-ph-mode-note>mode=verified-operate</span>
+              </div>
+              <div style="font-size:0.8rem;color:var(--ph-ink-muted);">{copy.diffEffect}</div>
+              <div class="ph-diff-row">
+                <span>mobile</span>
+                <span>
+                  <span class="ph-diff-old">13800000001</span>
+                  <span>→</span>
+                  <span class="ph-diff-new">13911113332</span>
+                </span>
+              </div>
+              <div class="ph-step-line">
+                <span class="ph-chip ph-chip-ok">{copy.diffGate}</span>
+                <span class="ph-chip">CAS · max 1 dispatch</span>
+                <span class="ph-chip ph-chip-warn">INDETERMINATE: never retry</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="ph-section-head" style="margin-bottom:1rem;">
+        <h2>{copy.levelsHead}</h2>
+        <p>{copy.levelsSub}</p>
+      </div>
+      <div class="ph-levels-box" data-ph-levels>
+        <div class="ph-levels-tabs" role="tablist">
+          {copy.levelTabs.map((label, idx) => (
+            <button
+              type="button"
+              class="ph-level-btn"
+              role="tab"
+              data-ph-level-tab={String(idx)}
+              aria-selected={idx === 0 ? 'true' : 'false'}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {copy.levelDescs.map((info, idx) => (
+          <div class="ph-level-panel" data-ph-level-pane={String(idx)} hidden={idx !== 0}>
+            <div style="display:flex;flex-direction:column;gap:0.75rem;">
+              <h3 style="margin:0;font-size:1.15rem;color:var(--ph-ink-strong);">{info.title}</h3>
+              <p style="margin:0;color:var(--ph-ink-muted);line-height:1.65;">{info.body}</p>
+              <div>
+                <a class="ph-btn ph-btn-secondary" href={info.href}>{info.linkText}</a>
+              </div>
+            </div>
+            <pre class="ph-level-code"><code>{levelCodeSnippets[idx]}</code></pre>
+          </div>
+        ))}
+      </div>
+    </section>
+
+    <section>
+      <div class="ph-section-head" style="margin-bottom:1rem;">
+        <h2>{copy.pipelineHead}</h2>
+        <p>{copy.pipelineSub}</p>
+      </div>
+      <div class="ph-pipeline-grid">
+        {copy.stages.map(([num, title, desc]) => (
+          <div class="ph-stage-card">
+            <span class="ph-stage-num">STAGE {num}</span>
+            <strong>{title}</strong>
+            <span>{desc}</span>
+          </div>
+        ))}
+      </div>
+    </section>
+
+    <section>
+      <div class="ph-section-head" style="margin-bottom:1rem;">
+        <h2>{copy.bentoHead}</h2>
+        <p>{copy.bentoSub}</p>
+      </div>
+      <div class="ph-bento-grid">
+        {copy.bento.map((card) => (
+          <a class="ph-bento-card" href={card.href}>
+            <h3>{card.title}</h3>
+            <p>{card.desc}</p>
+          </a>
+        ))}
+      </div>
+    </section>
+
+    <section class="ph-llms-banner">
+      <div>
+        <strong style="font-size:1.05rem;color:var(--ph-ink-strong);">{copy.llmsTitle}</strong>
+        <p>{copy.llmsBody}</p>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:0.6rem;">
+        <a class="ph-btn ph-btn-secondary" href={routePath('/llms.txt')}>{copy.llmsBtn1}</a>
+        <a class="ph-btn ph-btn-primary" href={routePath('/llms-full.txt')}>{copy.llmsBtn2}</a>
+      </div>
+    </section>
+
+    <script is:inline>
+      (() => {
+        const root = document.querySelector('[data-ph-landing]');
+        if (!root || root.dataset.wired === 'true') return;
+        root.dataset.wired = 'true';
+
+        root.querySelectorAll('[data-copy-cmd]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const cmd = btn.getAttribute('data-copy-cmd') || '';
+            const orig = btn.textContent;
+            const done = btn.getAttribute('data-copied-label') || 'Copied!';
+            if (navigator.clipboard && cmd) {
+              navigator.clipboard.writeText(cmd).catch(() => {});
+            }
+            btn.textContent = done;
+            setTimeout(() => { btn.textContent = orig; }, 1400);
+          });
+        });
+
+        const modes = {
+          'read-only': { writes: false, submit: false, prefill: false, prep: false },
+          'assisted-draft': { writes: false, submit: false, prefill: true, prep: true },
+          'verified-operate': { writes: true, submit: true, prefill: true, prep: false },
+        };
+        const switchNames = {
+          writes: 'native_writes',
+          submit: 'native_submit',
+          prefill: 'native_edit_prefill',
+          prep: 'native_write_preparation',
+        };
+        const modeNote = root.querySelector('[data-ph-mode-note]');
+        root.querySelectorAll('[data-ph-mode]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const mode = btn.getAttribute('data-ph-mode');
+            const cfg = modes[mode];
+            if (!cfg) return;
+            root.querySelectorAll('[data-ph-mode]').forEach((b) =>
+              b.setAttribute('aria-pressed', String(b === btn))
+            );
+            root.querySelectorAll('[data-switch]').forEach((pill) => {
+              const key = pill.getAttribute('data-switch');
+              const val = Boolean(cfg[key]);
+              pill.setAttribute('data-on', String(val));
+              pill.textContent = `${switchNames[key]}=${val}`;
+            });
+            if (modeNote) {
+              modeNote.textContent = `mode=${mode}`;
+              modeNote.className = cfg.writes ? 'ph-chip ph-chip-ok' : 'ph-chip ph-chip-warn';
+            }
+          });
+        });
+
+        root.querySelectorAll('[data-ph-sim-tab]').forEach((tab) => {
+          tab.addEventListener('click', () => {
+            const target = tab.getAttribute('data-ph-sim-tab');
+            root.querySelectorAll('[data-ph-sim-tab]').forEach((t) =>
+              t.setAttribute('aria-selected', String(t === tab))
+            );
+            root.querySelectorAll('[data-ph-sim-pane]').forEach((pane) => {
+              pane.hidden = pane.getAttribute('data-ph-sim-pane') !== target;
+            });
+          });
+        });
+
+        root.querySelectorAll('[data-ph-level-tab]').forEach((tab) => {
+          tab.addEventListener('click', () => {
+            const target = tab.getAttribute('data-ph-level-tab');
+            root.querySelectorAll('[data-ph-level-tab]').forEach((t) =>
+              t.setAttribute('aria-selected', String(t === tab))
+            );
+            root.querySelectorAll('[data-ph-level-pane]').forEach((pane) => {
+              pane.hidden = pane.getAttribute('data-ph-level-pane') !== target;
+            });
+          });
+        });
+
+        const filterInput = root.querySelector('[data-ph-table-filter]');
+        const tableBody = root.querySelector('[data-ph-table-body]');
+        if (filterInput && tableBody) {
+          filterInput.addEventListener('input', () => {
+            const q = filterInput.value.trim().toLowerCase();
+            tableBody.querySelectorAll('tr').forEach((row) => {
+              row.style.display = !q || row.textContent.toLowerCase().includes(q) ? '' : 'none';
+            });
+          });
+        }
+
+        const undoBtn = root.querySelector('[data-ph-undo-btn]');
+        if (undoBtn) {
+          let undone = false;
+          undoBtn.addEventListener('click', () => {
+            undone = !undone;
+            root.querySelectorAll('[data-ph-undo-val]').forEach((el) => {
+              const span = el.querySelector('span');
+              if (!span) return;
+              span.textContent = undone ? (el.getAttribute('data-prev') || '(empty)') : (el.getAttribute('data-filled') || '');
+              span.className = undone ? 'ph-diff-old' : 'ph-diff-new';
+            });
+            undoBtn.textContent = undone
+              ? (undoBtn.getAttribute('data-label-done') || 'Restored')
+              : (undoBtn.getAttribute('data-label-undo') || 'Undo');
+          });
+        }
+      })();
+    </script>
+  </div>
+) : (
+  <StarlightHero />
+)}

@@ -1,37 +1,131 @@
 ---
-title: 安全边界与核验写入
-description: 写入默认关闭、三档模式权限矩阵、八阶段 WritePipeline、出站脱敏、Shadow DOM 与宿主 CSP 信任模型。
+title: 安全模型与可验证写入
+description: 三档安全模式、8 阶段 WritePipeline 写入管道、防遮挡可见性审批门禁、凭据脱敏与提示词注入隔离设计。
 ---
 
-> **概要：** 业务写入默认完全关闭（`read-only`）。开启 `verified-operate` 后，所有持久变更仍须经过**八阶段 `WritePipeline`**：严格核对值来源与效果投影、弹出鲜活可见审批卡（要求 `event.isTrusted` 与连续可见驻留）、SQLite 事务单次消费派发、提交前重读、同账号回读核验，且对 `INDETERMINATE` 未决状态**永不自动重试**。
+> **TL;DR：** PageHelm 默认关闭一切浏览器及后端状态写入。任何数据变更都必须经由统一的单飞 **8 阶段 `WritePipeline`**——依次完成结构化差异投影、人工可见审批（覆盖面积 >= 0.9、停留 >= 400ms、`event.isTrusted === true`）、派发前复读漂移校验、无自动重试单飞派发，以及同主体回读核验。
 
 [English](../../security/verified-writes.md)
 
-## 三档运行模式与权限矩阵
+## 一、三档执行安全模式
 
-| 模式（`pagehelm.toml` / CLI） | 页面观察与导航 | 表单预填 | 写入提案与审批卡 | 实际写入派发 |
-| --- | --- | --- | --- | --- |
-| `read-only`（线上生产默认） | 只读窗口与 GET 围栏下放行 | 禁止（`native_edit_prefill=false`） | 禁止（`native_writes=false`） | 禁止（`native_submit=false`） |
-| `assisted-draft` | 只读窗口与 GET 围栏下放行 | 核验草稿场景允许预填（`native_edit_prefill=true`） | 允许准备提案与交接（`native_write_preparation=true`） | **禁止实际派发变更** |
-| `verified-operate`（本地验收默认） | 只读窗口与 GET 围栏下放行 | 允许 | 完整开启 Skill、约定更新与原生提交提案 | 获批后单次派发并回读（`native_writes=true`、`native_submit=true`） |
+服务端在会话绑定与组合阶段锁定允许的能力等级，浏览器端无权自行提权：
 
-> **提示词、文档与历史会话均无写权限：** 系统规则、Skill 正文、接口返回值、页面文本和过往对话记录都不能授予任何写入许可。删除、作废或角色权限变更等危险动作即使在 `verified-operate` 下也必须先向用户说明影响并取得明确确认，才生成审批卡。
+| 安全模式 | 同主体 API / SQL 查询 | 页面跳转与筛选 | 非破坏性表单预填（`undoFormFill`） | 已确认的后端/提交写入 | 写后回读核验 |
+| --- | --- | --- | --- | --- | --- |
+| `read-only` | 允许 | 允许 | 禁止 | 禁止 | 不适用 |
+| `assisted-draft` | 允许 | 允许 | 允许（跳过密码密钥、可撤销） | 禁止 | 不适用 |
+| `verified-operate` | 允许 | 允许 | 允许 | **仅限通过 8 阶段 `WritePipeline`** | 强制执行（`ResultPostconditionVerifier`） |
 
-## 八阶段 `WritePipeline`
+系统提示词、Skill 文档、源码片段或历史会话记忆均**不具备写授权效力**；所有写操作均需部署配置与业务适配器显式开启。
 
-无论采用 Skill 写入、约定更新（`update_record` / `toggle_record_status`）还是原生表单提交（`SubmitPort`），统一通过 `BusinessWriteService`：
+---
 
-1. **值来源核验：** 助手写入的每个业务字段值都必须溯源自用户原话（含规范化日期与金额换算）、用户点选的真实候选、当轮工具换算回执，或附加保留校验过的记录原值。来源不明或缺少必填项直接以 `needs_input` 追问，严禁猜测。
-2. **同账号只读准备与效果投影：** 适配器持当前操作者自己的 `PrincipalContext` 解析确切记录 ID、读取当前值并构造最小变更负载，生成人眼可读的逐字段差异（`原值 → 新值`，未改字段可折叠）。
-3. **锁定提案摘要（`proposal_digest`）：** 将目标对象、操作人、回合号、请求形态与预期效果计算为不可变摘要；批准前后任何漂移都会令本次批准作废。
-4. **鲜活可见审批卡（`event.isTrusted` + 可见驻留）：** 仅当卡片连续实质可见（`useVisibilityGate`）且用户发出原生浏览器手势（`event.isTrusted === true`）时才可点按确认；若被宿主抽屉遮挡（配合 `--woa-drawer-offset` 检测）会拒绝确认点击。审批具备时效且不可跨轮复用。
-5. **单次消费原子认领（`SQLiteMutationJournal`）：** SQLite 事务在本地原子地将提案从 `prepared` 跃迁为 `dispatching`，保证一次批准至多派发一次，并阻塞同一业务键上的并发未决提案。
-6. **派发前实时重读：** 真实发出写请求前一刻，服务端（及原生提交的浏览器表单读取器）再次核对目标记录无并发改动与卡面一致性。
-7. **受限许可下单次派发：** 实际请求在窗口作用域守卫许可下至多执行一次，原生提交只放行与审批卡完全一致的接口路径、记录编号和差异字段。
-8. **同账号回读与 `INDETERMINATE` 不重试：** 派发后按同一登录账号回读目标记录逐项核验。遇超时、断连、5xx 或回读证据不全，立刻记为 **`INDETERMINATE`** 并停止本轮——**绝不自动重试**；可由用户触发只读对账或运维 `--writer-stopped` 核实结案。
+## 二、8 阶段 `WritePipeline` 全流程状态机
 
-## 出站隐私脱敏与间接提示词注入隔离
+`WritePipeline` (`src/web_operation_agent/business/write_pipeline.py`) 统一收口 typed 业务服务写入（`run_service_write`）、约定式平铺更新/状态流转以及原生 UI 表单提交（`run_submit_pipeline`）：
 
-- **凭据出站零泄露（`AuditedChat` + `privacy.py`）：** 所有发往外部大模型或落盘轨迹（`conversation-state.sqlite3`、`TurnTrace`、`audit.jsonl`）的内容都先经过支持多层 URL 解码的脱敏器，屏蔽密码、Bearer Token、API Key 与适配器声明的 `session_handoff_query_keys`（替换为 `[REDACTED]`），并通过二次校验拦截残余明文凭据。`<input type="password">` 与文件上传控件在观察阶段屏蔽取值且永不自动代填。
-- **控制面与不可信数据面分离：** 页面观察、接口返回值、Skill 与源码文本统一作为非可信数据喂给模型；浏览器 Runtime 没有任意 JS 执行与任意外网请求能力，且 `origins.py` 强制同源导航（拦截 `javascript:` 与站外跳转），阻断单据备注等文本里的间接提示词注入把内部数据外带。
-- **Shadow DOM 与宿主 CSP 边界（明示限制）：** 面板渲染在独立 `ShadowRoot` 内，无需放宽宿主严格 CSP（支持 `script-src 'self'`、`style-src 'self'` 与 `require-trusted-types-for 'script'`），但它与第一方宿主页面共享同一 JS 执行域，宿主应用必须自身无 XSS 漏洞；内嵌版不用于嵌入不可信第三方站点。
+```text
+  [1] 提案构建与结构化差异归一化
+        - FieldDiff / change_detail / create_detail / preserved_detail /
+          side_effect_detail / derived_detail / target_rule_detail / body_detail
+        - 计算并绑定唯一 proposal.content_digest 与精确目标实体标识
+         |
+         v
+  [2] 敏感字段与值来源校验
+        - 匹配 DEFAULT_SECRET_FIELD_PATTERN 过滤密码/密钥/Token 控件
+        - 检查候选值来源合法性与追加保留规则（append-preservation）
+         |
+         v
+  [3] 可见审批卡片渲染（ApprovalCard.tsx）
+        - 在 Shadow DOM 面板内渲染“旧值 -> 新值”差异与副作用提示
+         |
+         v
+  [4] 一次性审批授予与单飞并发锁
+        - VisibilityGate 校验 minVisibleRatio >= 0.9、停留 >= 400ms、event.isTrusted
+        - InflightWriteTracker.single_flight(proposal.content_digest, consume_on_enter=True)
+        - approval_id 严格单次消费（重放即返回 409）
+         |
+         v
+  [5] 派发前实时复读与漂移拒签（pre_dispatch_reread）
+        - 再次读取目标实体的当前状态并逐字段比对审批快照
+        - 若在审批等待期间发生意外变更，派发前直接拒签终止
+         |
+         v
+  [6] 单飞武装派发（严禁自动重试）
+        - 先向 SQLiteMutationJournal 写入 mutation_claimed 标记
+        - 若请求超时或连接断开，绝不自动重发二次写入
+         |
+         v
+  [7] 同主体回读后置核验
+        - 调用 ResultPostconditionVerifier / BusinessPostconditionVerifier
+        - 以同一操作员身份确认业务库或界面已反映预期终态
+         |
+         v
+  [8] 审计终态归档
+        +--> verified      （已回读确认目标终态）
+        +--> indeterminate （派发后结果未知；持久化保留待人工对账）
+        +--> refused / cancelled （未派发或派发前因漂移/取消拦截）
+```
+
+---
+
+## 三、客户端防遮挡与防脚本点击门禁
+
+仅靠“弹窗点一下确认”很容易在浏览器环境中被页面遮挡层覆盖、缩出视口，或被恶意脚本调用 `.click()` 伪造。`frontend/src/state/visibility.ts` 强制落实施加由 `frontend/src/presentation.json` 定义的视觉门禁参数：
+
+- `min_visible_ratio: 0.9`：沿祖先 DOM 节点遍历所有裁剪容器（`overflow` 为 `auto|scroll|hidden|clip`），结合 20 档 `IntersectionObserver` 阈值计算真实可见占比。分母取“卡片宽高 / 视口宽高 / 滚动视口”的最小交集，既防止长卡片无法达标，也杜绝仅露出一条缝却被点击的风险。
+- `min_visible_ms: 400`：卡片必须连续稳定露出至少 `400 ms` 后，批准按钮点击才被视为有效。
+- `event.isTrusted === true`：明确拒绝所有脚本合成点击事件。
+- **Shadow DOM 样式与事件隔离**：面板与审批卡片挂载在独立 Shadow DOM 容器中（`overlay_z_index: 2147483646`），不受宿主页面全局 CSS 覆盖。
+
+---
+
+## 四、凭据、会话接力参数与出站审计
+
+PageHelm 在 URL 边界、DOM 快照、审计日志、Trace 回放与大模型请求出口设置多层脱敏屏障：
+
+1. **接力参数与凭据赋值清洗（`src/web_operation_agent/privacy.py`）**：
+   - 基线接力键集合 `SESSION_HANDOFF_KEYS`（`externalLoginKey`、`externaLoginKey`、`externLoginKey`、`jsessionid`）支持各业务适配器通过 `SessionHandoffPolicy.extending(port.session_handoff_query_keys)` 追加自家参数。
+   - `SENSITIVE_CREDENTIAL_ASSIGNMENT` 覆盖 `password`、`passwd`、`pwd`、`secret`、`token`、`access_token`、`refresh_token`、`id_token`、`api_key`、`authorization` 等赋值形式，并通过递归 URL 解码检查（如 `url_decode_depth=3`）识破多重百分号编码绕过。
+2. **大模型出站非内容审计（`src/web_operation_agent/modeling/egress.py`）**：
+   - `AuditedChat` 包装底层模型客户端（同时兼容 `complete` 与 `complete_cancellable`），在每次发送至模型接口前先经过 `ProviderEgressPolicy.inspect(messages, tools)` 核验，并向审计账本追加不含业务正文的 `provider_egress` 投影记录。
+3. **Trace 回放写出前复检（`src/web_operation_agent/state/traceview.py`）**：
+   - 导出调试回放前再次用 `url_decode_depth=3` 扫描全部投影字段；一旦残余未脱敏凭据模式，立即拒绝落盘原文并仅保留事件结果状态。
+
+---
+
+## 五、按需开启的 `SourceTree` 源码白名单
+
+当部署选择开启源码辅助查错时，`SourceTree` (`src/web_operation_agent/planning/sourcetree.py`) 将读取权限收敛在显式白名单内：
+
+- 源码策略 JSON（`policies/<name>.json`）禁止自带本地路径，必须由宿主启动时注入绝对路径 `source_root`。
+- 策略显式配置 `allow_globs`、`deny_globs` 与单文件字节上限 `max_bytes_per_read`（默认 `262144` 字节），默认排除 `.env`、数据库文件、用户上传目录与业务内容。
+- `SourceTree.resolve(rel)` **同时对原始相对路径 `rel` 与真实解析路径 `canonical` 校验 `deny_globs` 与 `allow_globs`**，彻底堵死利用软链接或 `views/Foo.vue -> ../secrets/Foo.vue` 洗白敏感目录的路径穿越漏洞。
+
+---
+
+## 六、提示词注入与权限隔离
+
+来自页面 DOM 文本、客户备注、Skill Markdown 或模型自由输出的全部内容一律视为**不可信数据（Untrusted Input）**：
+
+- 任何不可信文本均无法签发 `approval_id`、修改安全模式、放宽 `SourceTree` 白名单或跳过单飞审批锁。
+- 审批卡片展示的结构化字段差异均由服务端归一化校验（`validate_details`），不盲从前端随意拼接的提示文案。
+- 协议层出现未知字段或越界载荷时，传输网关直接抛出类型化的 `RemoteProtocolError`，绝不降级容忍或靠匹配异常文本恢复逻辑。
+
+---
+
+## 七、生产环境 CSP 配置检查清单
+
+将 `assistant.js` 接入启用了严格 Content Security Policy 的后台页面时，请核对以下配置：
+
+- 以同源或受信网关源加载 `assistant.js` 与 `assistant.css`（`script-src 'self'`、`style-src 'self'` —— 运行时基于 Shadow DOM 渲染，无需启用 `unsafe-eval`）。
+- 在 `connect-src` 中放行同源 `/v1/sessions/*` 接口调用与 `/events` SSE 长连接。
+- 结合同源 Cookie 与 HTTPS 反向代理部署，并按 `frontend/src/presentation.json` 中的 `start.final_statuses: [401, 403]` 约定优雅处理登录态失效。
+
+---
+
+## 下一步阅读
+
+- 了解 SQLite 备份恢复、未知写入人工对账、三层费用治理与 OTLP 遥测：[运维与可观测性](./operations-and-observability.md)。
+- 查阅 `/v1/sessions/*` 完整 HTTP/SSE 线协议与配置项：[协议与配置参考](../reference/protocol-and-configuration.md)。

@@ -6,7 +6,7 @@ import hooks from 'eslint-plugin-react-hooks'
 export default [
   {ignores: ['dist', 'storybook-static', 'src/styles/_tokens.generated.scss', 'node_modules',
     'test-results', 'playwright-report', 'docs/.astro', 'docs/dist', 'docs/node_modules',
-    'docs/public/llms*.txt']},
+    'docs/public/llms*.txt', 'docs/**/*.astro']},
   js.configs.recommended,
   {
     files: ['scripts/**/*.mjs'],

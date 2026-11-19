@@ -10,16 +10,24 @@ const publicDir = path.resolve(siteRoot, 'public')
 const SECTIONS = [
   { rel: 'index.md', route: '/', lang: 'en' },
   { rel: 'architecture/overview.md', route: '/architecture/overview/', lang: 'en' },
+  { rel: 'architecture/execution-and-runtime.md', route: '/architecture/execution-and-runtime/', lang: 'en' },
   { rel: 'integration/quickstart.md', route: '/integration/quickstart/', lang: 'en' },
   { rel: 'integration/levels.md', route: '/integration/levels/', lang: 'en' },
+  { rel: 'integration/skills-and-writes.md', route: '/integration/skills-and-writes/', lang: 'en' },
   { rel: 'security/verified-writes.md', route: '/security/verified-writes/', lang: 'en' },
+  { rel: 'security/operations-and-observability.md', route: '/security/operations-and-observability/', lang: 'en' },
   { rel: 'reference/protocol-and-configuration.md', route: '/reference/protocol-and-configuration/', lang: 'en' },
+  { rel: 'reference/tools-and-capabilities.md', route: '/reference/tools-and-capabilities/', lang: 'en' },
   { rel: 'zh-cn/index.md', route: '/zh-cn/', lang: 'zh-cn' },
   { rel: 'zh-cn/architecture/overview.md', route: '/zh-cn/architecture/overview/', lang: 'zh-cn' },
+  { rel: 'zh-cn/architecture/execution-and-runtime.md', route: '/zh-cn/architecture/execution-and-runtime/', lang: 'zh-cn' },
   { rel: 'zh-cn/integration/quickstart.md', route: '/zh-cn/integration/quickstart/', lang: 'zh-cn' },
   { rel: 'zh-cn/integration/levels.md', route: '/zh-cn/integration/levels/', lang: 'zh-cn' },
+  { rel: 'zh-cn/integration/skills-and-writes.md', route: '/zh-cn/integration/skills-and-writes/', lang: 'zh-cn' },
   { rel: 'zh-cn/security/verified-writes.md', route: '/zh-cn/security/verified-writes/', lang: 'zh-cn' },
+  { rel: 'zh-cn/security/operations-and-observability.md', route: '/zh-cn/security/operations-and-observability/', lang: 'zh-cn' },
   { rel: 'zh-cn/reference/protocol-and-configuration.md', route: '/zh-cn/reference/protocol-and-configuration/', lang: 'zh-cn' },
+  { rel: 'zh-cn/reference/tools-and-capabilities.md', route: '/zh-cn/reference/tools-and-capabilities/', lang: 'zh-cn' },
 ]
 
 function parseFrontmatter(raw) {

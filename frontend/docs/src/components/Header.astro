@@ -1,0 +1,124 @@
+---
+import config from 'virtual:starlight/user-config';
+import LanguageSelect from 'virtual:starlight/components/LanguageSelect';
+import Search from 'virtual:starlight/components/Search';
+import SiteTitle from 'virtual:starlight/components/SiteTitle';
+import ThemeSelect from 'virtual:starlight/components/ThemeSelect';
+
+const { starlightRoute } = Astro.locals;
+const isZh = (starlightRoute.lang || '').toLowerCase().startsWith('zh');
+const rawBase = import.meta.env.BASE_URL || '/';
+const basePrefix = rawBase === '/' ? '' : rawBase.replace(/\/+$/, '');
+const routePath = (rel: string) =>
+  `${basePrefix}/${rel.replace(/^\/+/, '')}`.replace(/\/{2,}/g, '/');
+
+const localePrefix = isZh ? 'zh-cn/' : '';
+const currentSlug = starlightRoute.entry?.id || '';
+
+const navLinks = [
+  {
+    label: isZh ? '架构' : 'Architecture',
+    href: routePath(`${localePrefix}architecture/overview/`),
+    active: currentSlug.includes('architecture/'),
+  },
+  {
+    label: isZh ? '快速上手' : 'Quickstart',
+    href: routePath(`${localePrefix}integration/quickstart/`),
+    active: currentSlug.endsWith('integration/quickstart'),
+  },
+  {
+    label: isZh ? '分级接入' : 'Integration',
+    href: routePath(`${localePrefix}integration/levels/`),
+    active: currentSlug.includes('integration/levels') || currentSlug.includes('integration/skills'),
+  },
+  {
+    label: isZh ? '安全与运维' : 'Security',
+    href: routePath(`${localePrefix}security/verified-writes/`),
+    active: currentSlug.includes('security/'),
+  },
+  {
+    label: isZh ? '参考手册' : 'Reference',
+    href: routePath(`${localePrefix}reference/protocol-and-configuration/`),
+    active: currentSlug.includes('reference/'),
+  },
+  {
+    label: 'llms.txt',
+    href: routePath('/llms.txt'),
+    active: false,
+  },
+];
+
+const shouldRenderSearch =
+  config.pagefind || config.components.Search !== '@astrojs/starlight/components/Search.astro';
+---
+
+<div class="header">
+  <div class="title-wrapper sl-flex">
+    <SiteTitle />
+    <nav class="ph-topnav print:hidden" aria-label={isZh ? '主导航' : 'Primary navigation'}>
+      {navLinks.map((item) => (
+        <a href={item.href} aria-current={item.active ? 'true' : undefined}>
+          {item.label}
+        </a>
+      ))}
+    </nav>
+  </div>
+  <div class="sl-flex print:hidden">{shouldRenderSearch && <Search />}</div>
+  <div class="sl-hidden md:sl-flex print:hidden right-group">
+    <ThemeSelect />
+    <LanguageSelect />
+  </div>
+</div>
+
+<style>
+  @layer starlight.core {
+    .header {
+      display: flex;
+      gap: var(--sl-nav-gap);
+      justify-content: space-between;
+      align-items: center;
+      height: 100%;
+    }
+
+    .title-wrapper {
+      overflow: clip;
+      padding: 0.25rem;
+      margin: -0.25rem;
+      min-width: 0;
+      align-items: center;
+    }
+
+    .right-group {
+      gap: 0.75rem;
+      align-items: center;
+    }
+
+    @media (min-width: 50rem) {
+      :global(:root[data-has-sidebar]) {
+        --__sidebar-pad: calc(2 * var(--sl-nav-pad-x));
+      }
+      :global(:root:not([data-has-toc])) {
+        --__toc-width: 0rem;
+      }
+      .header {
+        --__sidebar-width: max(0rem, var(--sl-content-inline-start, 0rem) - var(--sl-nav-pad-x));
+        --__main-column-fr: calc(
+          (
+            100% + var(--__sidebar-pad, 0rem) - var(--__toc-width, var(--sl-sidebar-width)) -
+              (2 * var(--__toc-width, var(--sl-nav-pad-x))) - var(--sl-content-inline-start, 0rem) -
+              var(--sl-content-width)
+          ) / 2
+        );
+        display: grid;
+        grid-template-columns:
+          minmax(
+            calc(var(--__sidebar-width) + max(0rem, var(--__main-column-fr) - var(--sl-nav-gap))),
+            auto
+          )
+          1fr
+          auto;
+        align-content: center;
+      }
+    }
+  }
+</style>

@@ -1,24 +1,40 @@
 ---
-title: Progressive Integration (L0–L3)
-description: Adopt PageHelm incrementally from Level 0 browser panel + Element Plus integration helpers to Level 3 Skill writes, convention updates, and native form handover.
+title: L0–L3 Progressive Integration
+description: Adopt PageHelm step by step from L0 embedded panel and Element Plus helpers to L1 same-actor reads, L2 domain playbooks, and L3 verified writes.
 ---
 
-> **TL;DR:** Integrate PageHelm in four incremental stages inside this repository: **L0** embeds `assistant.js` and reuses in-repo `element-plus/` helpers; **L1** wires `ApplicationDescriptor`, `ApplicationPorts`, and same-actor reads (`testapps/contacts`); **L2** adds Markdown domain playbooks and disambiguation pills; **L3** enables reviewed Skill writes, symmetric `ConventionWritePort` updates, and native form prefill/submit handover.
+> **TL;DR:** Adopt PageHelm incrementally: **L0** embeds `assistant.js` and reuses `frontend/src/integrations/element-plus/`; **L1** wires `ApplicationDescriptor`, `ApplicationPorts`, and typed reads (`testapps/contacts/adapter.py`); **L2** adds Markdown domain playbooks, compiled rules, and `need_input` pills; **L3** enables `WritePipeline`, symmetric `ConventionWritePort` updates, reviewed write Skills, and reversible form handoff (`SubmitPort`).
 
 [简体中文](../zh-cn/integration/levels.md)
 
-## Overview of stages
+## 1. Progressive integration ladder
 
-| Level | Backend changes needed | Capabilities unlocked | Repository reference |
+```text
+  L0: Embedded Panel & DOM Helpers     -> /v1/runtime/assistant.js + /bootstrap + PageController
+         |
+         v
+  L1: Same-Actor Identity & Reads      -> ApplicationDescriptor + ApplicationPorts + QueryEvidence
+         |                                (TurnTables SQL + <DataTable> + read_summary)
+         v
+  L2: Domain Disambiguation & Rules    -> domain_playbooks/*.md + compiled entity_rules + need_input pills
+         |
+         v
+  L3: Verified Writes & Form Handoff   -> WritePipeline + SKILL.md write ops + ConventionWritePort
+                                          + SubmitPort / MutationPrefillOffer + undoFormFill
+```
+
+| Level | Required integration work | Capabilities unlocked | Repository reference |
 | --- | --- | --- | --- |
-| **L0** | `/bootstrap` auth exchange only | Shadow DOM panel, semantic page observation, safe navigation & UI helpers | `frontend/src/integrations/element-plus/` |
-| **L1** | Identity, routes & read ports | Same-actor API queries, in-memory `TurnTables` SQL, `<DataTable>` rendering | `testapps/contacts/adapter.py` |
-| **L2** | Domain conventions & rules | Module disambiguation playbooks, compiled `entity_rules`, clickable `need_input` pills | `examples/yudao/src/.../domain_playbooks/` |
-| **L3** | Write journal, verifier & Skills | Typed Skill writes, flat `update_record` / `toggle_record_status`, native submit & undoable form prefill | `WritePipeline`, `SubmitPort`, `YudaoHost` |
+| **L0** | Mount `assistant.js` + `/bootstrap` endpoint | Shadow DOM panel, DOM snapshots (`<= 200`), Element Plus helpers | `frontend/src/integrations/element-plus/` |
+| **L1** | `ApplicationDescriptor`, Identity, Routes & read ports | Same-actor queries, `TurnTables` SQL, `<DataTable>` delivery | `testapps/contacts/adapter.py` |
+| **L2** | `domain_playbooks/*.md`, `entity_rules`, disambiguation | Terminology resolution, prerequisite explanations, `need_input` pills | `examples/yudao/` domain playbooks |
+| **L3** | Write journal, verifier, Skills / `ConventionWritePort` / `SubmitPort` | Confirmed typed Skill writes, flat `update_record`, native submit + undo prefill | `src/web_operation_agent/business/write_pipeline.py` |
 
-## L0: Browser Runtime & UI Component Layer
+---
 
-Host pages load one self-contained bundle served directly from `EmbeddedGateway` at `/v1/runtime/assistant.js`:
+## 2. L0: Browser Runtime & UI Component Layer
+
+Host applications mount one version-pinned bundle served by `EmbeddedGateway` at `/v1/runtime/assistant.js`:
 
 ```html
 <script
@@ -28,40 +44,57 @@ Host pages load one self-contained bundle served directly from `EmbeddedGateway`
 ></script>
 ```
 
-The bootstrap endpoint exchanges the host's authenticated session for a short-lived capability via `EmbeddedGateway.bootstrap_config(...)`, keeping tokens out of local bundles and browser storage leaks. Your origin must also serve a pinned same-origin `PageController` module exporting `PageController` and `getElementByIndex`.
+On load, the runtime requests `data-woa-bootstrap`, where the backend validates the operator's live application session and calls `EmbeddedGateway.bootstrap_config(...)` to mint a short-lived capability—never shipping model API keys or static tokens inside HTML. Your origin also hosts a pinned same-origin `PageController` module exporting `PageController` and `getElementByIndex`.
 
-### Reusing in-repo Element Plus integration helpers
+### Reusing `frontend/src/integrations/element-plus/`
 
-Apps built on Vue 3 + Element Plus do not need custom DOM scrapers. `frontend/src/integrations/element-plus/` extracts shared framework handlers away from core runtime code (`frontend/src/runtime/` remains zero `.el-*`):
+For Vue 3 + Element Plus applications, PageHelm separates all UI library DOM knowledge cleanly outside `frontend/src/runtime/` into five shared helpers under `frontend/src/integrations/element-plus/`:
 
-- `table.js`, `select.js`, `tree-select` support, `date-picker.js`, `form.js`, and `vue.js` handle mounted popovers, option labels, table row identities, and drawer push offsets (`--woa-drawer-offset`);
-- `frontend/scripts/build-yudao.mjs` compiles the Element Plus layer together with app-specific route facts into served JS assets (`frontend/dist/integrations/yudao/`).
+- `table.js` — extracts tabular columns, visible rows, and row identity bindings.
+- `select.js` — reads `body`-mounted dropdown candidates (`readElSelectVisibleCandidates`) without triggering inner-input loops (`shouldAvoidSelectInnerInput`).
+- `date-picker.js` — recognizes range/date pickers (`isElDateRangeInput`) and emits native updates cleanly.
+- `form.js` — extracts field labels and drawer offsets (`--woa-drawer-offset`) within `depth: 8`, `nodes: 6000`, `bytes: 200000`.
+- `vue.js` — binds component reactivity state cleanly when filling managed controls.
 
-Applications using another UI library implement their own sibling directory under `frontend/src/integrations/<app>/` exporting `readElementPageControl`, optional `openPage(url)`, and `readPageBlocker()`.
+Applications built with another frontend framework mirror that structure under `frontend/src/integrations/<app>/` exporting `readElementPageControl`, optional `openPage(url)`, and `readPageBlocker()`.
 
-## L1: Minimal Backend Adapter (`testapps/contacts`)
+---
 
-Study `testapps/contacts/adapter.py` as a complete runnable blueprint structurally distinct from `yudao`:
+## 3. L1: Minimal Read Adapter (`testapps/contacts/adapter.py`)
 
-1. **Declare versioned metadata (`ApplicationDescriptor`):** Specify `application_id`, exact `public_origin`, `navigation_mode` (`"document"` or `"spa"`), same-origin `page_controller_module`, and `business_tools.catalog_sha256` so stale bundles fail fast at startup.
-2. **Bind `ApplicationPorts` via `bind_application(adapter)`:**
-   - `identity` (`ApplicationIdentityPort`): resolves trusted server identity (`PrincipalContext` with `tenant_id`, `actor_id`, `scopes`) from same-origin credentials—never trusting DOM text or browser-supplied user IDs.
-   - `routes` (`DeclaredRoutePort`): validates navigable URLs and declares `session_handoff_query_keys` for outbound redaction.
-   - `reads` / `data_classifier`: registers typed read operations on `BusinessToolRuntime`, annotates `QueryEvidence` (`matched_count`, `count_exact`, `looked_for`, `exact_matches`), and optionally feeds rows into `TurnTables` (`sql` + `<DataTable>` attachment on `finish`).
-3. **Verify contracts before touching real models:** Run the core black-box suites against your test app (`scripts/check.py` Contacts lane runs both offline contracts and headless Chromium integration).
+`testapps/contacts/adapter.py` demonstrates a complete runnable adapter structurally distinct from `yudao`:
 
-## L2: Domain Playbooks, Conventions & Disambiguation
+1. **Declare `ApplicationDescriptor`:** Pin `application_id`, `public_origin`, `navigation_mode` (`"document"` or `"spa"`), `page_controller_module`, and `business_tools.catalog_sha256` so stale client assets fail cleanly rather than operating mismatched APIs.
+2. **Compose `ApplicationPorts` via `bind_application(adapter)`:**
+   - `IdentityPort`: maps authenticated host headers/cookies into `PrincipalContext(tenant_id, actor_id, scopes)` — never trusting user IDs from DOM text or request JSON.
+   - `ApplicationRoutePort`: validates internal routes and lists `session_handoff_query_keys` scrubbed before observations enter logs or models.
+   - `EntityReadTools` / `ReferenceLookupTools` / `PageEntryTools` / `GoalCandidateTools`: register read-only queries inside `BusinessToolRuntime`, emitting structured `QueryEvidence` (`matched_count`, `count_exact`, `looked_for`, `exact_matches`) and feeding `TurnTables` SQL or `<DataTable>` responses (`bind_matching_identity`).
+   - `GoalPort.capabilities()`: explicitly declare optional capabilities (`facets`, `paging`, `sections`, `lines`, `handoffs`, `fill`, `search`, `source`, `values`, `updates`)—never fake unsupported capabilities.
 
-To prevent terminology mix-ups without writing fragile per-page scripts:
+---
 
-- **Domain playbooks (`domain_playbooks/*.md`):** Supply organization-reviewed Markdown definitions for module-scoped terms (for example, "customer" meaning CRM Customer vs ERP Counterparty depending on active module) and organizational calendar semantics (`date_range`), accessed lazily via `load_domain_guide`.
-- **Compiled business rules (`entity_rules`):** Expose verified backend delete/status transition guards extracted at build/deploy time from source allowlists, cited cleanly when explaining why a record cannot be deleted.
-- **Interactive disambiguation pills:** When `find_record` or read lookups return 2–4 real same-actor candidates sharing a name, `finish(status="need_input", options=[...])` renders clickable choice pills (`input_options`) inside the panel while keeping strict sanitization on payloads.
+## 4. L2: Domain Playbooks, Rules & Disambiguation Pills
 
-## L3: Verified Writes, Convention Updates & Handover
+Eliminate enterprise terminology confusion without writing per-screen workflow scripts:
 
-Writes remain disabled (`read-only`) until explicitly opted in. Once enabled, every mutation routes through the shared `WritePipeline` (`BusinessWriteService`):
+- **Domain playbooks (`domain_playbooks/*.md`):** Concise Markdown explaining domain distinctions (e.g., how CRM leads convert to customers vs ERP partners, fiscal period definitions), loaded lazily by `load_domain_guide`.
+- **Compiled rules (`entity_rules`):** Precondition summaries extracted via `SourceTree` allowlists from reviewed backend validators so the assistant accurately explains why a delete or status transition is blocked.
+- **Disambiguation pills (`finish(status="need_input", options=[...])`):** When a name search hits 2–4 matching records visible to the same actor, render verified selectable `input_options` chips instead of guessing which record the operator intended.
 
-1. **Reviewed typed Skill writes (`SKILL.md` + `agents/woa.toml`):** Author declarative packages scoped to exact entities/pages and verified `ToolDefinition.effect_contract` projections; register `ResultPostconditionVerifier` and `MutationReconciliation`.
-2. **Symmetric flat convention updates (`ConventionWritePort`):** Opt into `"updates"` capability to expose generic `update_record` (only where create/update and detail GET expose 1:1 symmetric flat writable fields without nested line arrays or password/status fields) and `toggle_record_status` (strictly reversible two-state transitions), verified via shared contract tests across both `testapps/contacts` and `yudao`.
-3. **Native form submit & undoable prefill (`SubmitPort`):** Declare `SubmitConventions` (`volatile_keys`, `record_key`, `line_key`, `name_key`, `epoch_zone`, `decode_write`) for approved native form submissions, or offer `"Prefill form only"` / partial restricted-control handover (`password` / file inputs are never autofilled, auto-scrolled/focused for human input, and prior autofilled scalar values can be reverted with one click via `undoFormFill`).
+---
+
+## 5. L3: Verified Writes, Convention Updates & Form Handover
+
+Only enable writes once L1 reads and actor isolation pass contract checks (`mode = "verified-operate"`). All state-changing paths route through `WritePipeline`:
+
+1. **Reviewed Skill Operations (`SKILL.md` + `agents/woa.toml`):** See [Skills & Typed Writes](./skills-and-writes.md) for package structure, `prepare_mutation` / `execute_mutation`, `ResultPostconditionVerifier`, and `MutationReconciliation`.
+2. **Symmetric Convention Updates (`ConventionWritePort`):** Declaring the `"updates"` capability derives flat `update_record` specs for entities with 1:1 update/get scalar field symmetry (auto-excluding secret fields and nested line arrays) and two-state reversible `toggle_record_status` switches.
+3. **Native Form Submission & Undoable Prefill (`SubmitPort`):** Declaring `SubmitConventions` lets `request_submit` show the full diff card (`target`, field transitions, button), obtain one-time approval, press once, and verify by readback—or fall back to reversible form prefill with `undoFormFill(turnId)` and focus transfer on secret/upload fields.
+
+### Adapter verification checklist
+
+Before shipping an adapter change, verify all contract layers without hitting paid LLMs:
+
+- Run core neutral boundary checks (`scripts/check_core_boundary.py`)
+- Run adapter contract tests (`testapps/contacts` or your adapter test module under `scripts/check.py`)
+- Exercise end-to-end browser flows (`L0` panel mount, `L1` table filter, `L2` `need_input`, `L3` approval + readback) against synthetic resettable test data.

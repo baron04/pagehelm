@@ -3,58 +3,146 @@ title: Architecture Overview
 description: How PageHelm separates server planning, the browser Runtime, and application adapters to deliver hybrid same-actor reads and safe UI actions.
 ---
 
-> **TL;DR:** PageHelm splits responsibilities cleanly across three layers: a **first-party browser Runtime** (`assistant.js`) for DOM observation and fixed UI primitives, an **application-neutral Server** for model planning, policy, approvals, and audit, and a thin **Application Adapter** providing identity, routes, reads, and verified writes.
+> **TL;DR:** PageHelm splits responsibilities cleanly across three layers: a **first-party browser Runtime** (`assistant.js`) running inside the active tab for DOM observation and fixed UI primitives, an **application-neutral Server** owning model planning, policy, approvals, and audit, and a thin **Application Adapter** providing identity, routes, typed reads, and verified writes.
 
 [简体中文](../zh-cn/architecture/overview.md)
 
-## Three-layer architecture
+## 1. Three-layer architecture
 
 ```text
-+-------------------------------------------------------------------+
-| First-party Page (Same Origin)                                    |
-|  - Embedded Runtime + Shadow DOM Panel (assistant.js)             |
-|  - PageController semantic snapshot & fixed UI tools              |
-|  - Approval card visibility dwell + event.isTrusted gate          |
-+-------------------------------------------------------------------+
-          ^ authenticated observations / actions / decisions (HTTPS)
-          v
-+-------------------------------------------------------------------+
-| Application-Neutral Server (web_operation_agent)                  |
-|  -TurnExecutor & TurnHarness  | Outbound secret redaction         |
-|  -WritePipeline               | Budget, quota & SQLite stores     |
-|  -ProgramCheckSpec checks     | TurnTrace & timeline projection   |
-+-------------------------------------------------------------------+
-          ^ typed ports (ApplicationPorts & GoalData)
-          v
-+-------------------------------------------------------------------+
-| Application Adapter (e.g. examples/yudao, testapps/contacts)      |
-|  - Identity & route validation | Same-actor API & SQL reads       |
-|  - Domain playbooks & Skills   | Convention & form write handlers |
-+-------------------------------------------------------------------+
++-----------------------------------------------------------------------+
+| First-Party Browser Tab (Same Origin)                                 |
+|  - Embedded Runtime + Shadow DOM Panel (assistant.js)                 |
+|  - PageController bounded snapshot (<= 200 elements) & fixed UI tools |
+|  - Tab lock (Web Locks + sessionStorage) & duplicate-tab isolation    |
+|  - ApprovalCard visibility gate (ratio >= 0.9, dwell >= 400ms,        |
+|    event.isTrusted === true)                                          |
++-----------------------------------------------------------------------+
+             ^ HTTPS /v1/sessions/<id>/* + SSE (/events)
+             | (observations, receipts, approvals; zero secrets/plans)
+             v
++-----------------------------------------------------------------------+
+| Application-Neutral Server Core (src/web_operation_agent/)            |
+|  - Transport Gateway & Channel Lease State Machine                    |
+|  - ModelDrivenTurnExecutor + TurnHarness + TurnBudget                 |
+|  - AuditedChat egress policy + SessionHandoffPolicy redaction         |
+|  - WritePipeline (8-stage approval, drift check, single-flight, read) |
+|  - SQLiteSessionStore, SQLiteMutationJournal, SQLiteSpendCap          |
++-----------------------------------------------------------------------+
+             ^ ApplicationPorts SPI (explicit capability declaration)
+             v
++-----------------------------------------------------------------------+
+| Application Adapter + Domain Skills (adapters / Skill packs)          |
+|  - ApplicationDescriptor, IdentityPort, ApplicationRoutePort          |
+|  - EntityReadPort, ReferenceLookupTools, TurnTables SQL / summarize   |
+|  - ResultPostconditionVerifier, ConventionWritePort / SubmitPort      |
+|  - Optional SourceTree allowlist & domain_playbooks / SKILL.md        |
++-----------------------------------------------------------------------+
 ```
 
-### Design principles
+Most enterprise assistant architectures fail at opposite extremes:
 
-1. **Credentials and knowledge never enter the browser:** Model API keys, prompts, Skill manuals, source indexes, and evaluation expectations remain on the server. A compromised DOM script cannot read model secrets or hidden application rules.
-2. **Every tool result returns to the same server agent:** Every click, navigation, API read, or approval decision produces a typed receipt plus a fresh page observation fed back before the model chooses its next action.
-3. **Runtime facts outrank static prose:** Observed URLs, live DOM state, and same-actor API readbacks supersede Skill documentation or compiled source hints whenever they disagree.
-4. **Application neutrality in core:** Neither `src/web_operation_agent/` nor `frontend/src/runtime/` contains application names, business routes, or UI-framework CSS selectors (enforced automatically by `scripts/check_core_boundary.py`).
+- **API-only bots** answer counts or lookups well, yet cannot open the right edit screen, drive client-side validation, or hand over an interactive prefilled form to the operator.
+- **Headless RPA browsers** scrape paginated DOM tables slowly, hold privileged cookies outside the user's browser session, and burn context tokens walking through list screens one page at a time.
 
-## Hybrid execution: same-actor APIs + semantic DOM
+PageHelm uses **hybrid same-actor execution**: read-heavy questions run through server-side typed reads (`read_summary`, `TurnTables` SQL, `<DataTable>` exports) bound strictly to the browser user's active session identity, while screen navigation, filters, and form handoff execute live in the user's open tab under server planning.
 
-PageHelm uses a single ReAct turn executor (`ModelDrivenTurnExecutor` paired with `TurnHarness`) across two complementary data/action paths:
+---
 
-- **Same-actor API and SQL reads:** Read tools such as `call_api` execute on the server using the signed-in user's delegated token (never a shared superuser key), so row-level permissions and tenant boundaries come directly from the host backend. Tabular results load into per-turn in-memory SQLite (`TurnTables`) queryable via `tables` / `sql` / `date_range`, and large structured responses attach directly to `finish` as a `<DataTable>` payload (client-side 10/25/50/all pagination, filter, sort, TSV/CSV export) instead of asking the model to transcribe long lists. Independent pure reads within one model reply execute concurrently in worker threads and commit sequentially on the turn thread.
-- **Semantic DOM navigation and form prefill:** Browser actions (`goto`, `click`, `input`, `select`, `fill_fields`, `scroll`, `highlight`) address interactive elements by epoch-scoped semantic references (`PageController`). Controls inside active dialogs and popovers are prioritized within the per-observation budget; settled actions include a fresh observation summary directly in the action receipt (`settled_action_observation`) to eliminate redundant `observe` round-trips. Wait instrumentation suppresses same-value attribute rewrites and long background connections so `settle` returns rapidly.
+## 2. End-to-end turn sequence
 
-## Session isolation & observability
+```text
+Operator (Browser Tab)          assistant.js Runtime             PageHelm Server               Model Provider          App Backend API
+        |                               |                              |                             |                        |
+        |--- Enter prompt ------------->|                              |                             |                        |
+        |                               |-- POST /messages + lease --->|                             |                        |
+        |                               |                              |-- AuditedChat check ------->|                        |
+        |                               |                              |<-- tool call (read/api) ----|                        |
+        |                               |                              |-- same-actor read --------->|                        |
+        |                               |                              |<-- rows / total / page -----|                        |
+        |                               |                              | (TurnTables SQL / Decimal)  |                        |
+        |                               |<-- SSE panel_state / action -|                             |                        |
+        |                               |    (e.g., observe / prefill) |                             |                        |
+        |                               |-- ActionReceipt + obs ------>|                             |                        |
+        |                               |                              |-- WritePipeline propose --->|                        |
+        |<-- Render ApprovalCard -------|<-- SSE approval_request -----|                             |                        |
+        |    (ratio>=0.9, dwell>=400ms) |                              |                             |                        |
+        |--- Trusted Click Approve ---->|                              |                             |                        |
+        |                               |-- POST /approvals (1-use) -->|                             |                        |
+        |                               |                              |-- pre_dispatch_reread ----->|                        |
+        |                               |                              |-- single-flight dispatch -->|                        |
+        |                               |                              |-- same-actor readback ----->|                        |
+        |<-- Render Verified Diff / <DataTable> <-- SSE finish --------|                             |                        |
+```
 
-- **Per-tab isolation:** Each browser tab holds a capability-bound session tied to `(application_id, principal_digest, runtime_instance_id)` stored in `sessionStorage` with Web Lock deduplication across duplicate tabs. Opening a second tab never steals or cancels another tab's active turn.
-- **Bounded history without stale facts:** `ConversationState` keeps at most the last 4 turns (`32 KiB` total, redacted before persistence) as conversational pointers only; numeric facts and UI routes from prior turns are never treated as live truth without re-reading.
-- **Structured timeline & tracing:** `TurnTrace` records per-step model calls, tool durations, wait/UI timings, `first_route_kind`, `ProgramCheckSpec` checks, and redacted payloads for HTML replay via `trace_replay.html`.
+Every tool result and settled browser observation returns to the **same server turn loop** before the model makes its next decision. The browser never decides the next plan step on its own.
 
-## Current operational boundaries
+---
 
-- **Single-node deployment model:** Session stores, `SQLiteMutationJournal`, and provider quotas use local SQLite (`WAL`); multi-node active-active session migration is not supported.
-- **First-party trust assumption:** The panel isolates styles with Shadow DOM and requires trusted user gestures (`event.isTrusted`) plus continuous visibility on approval cards, but shares the host document's JS realm. Host pages must remain free of XSS and configure strict CSP headers ([Security & Verified Writes](../security/verified-writes.md)).
-- **Alpha accuracy scope:** Reference integrations include the full-featured `yudao` adapter and the synthetic `contacts` test app; passing integration contracts does not establish general benchmark accuracy across unseen tasks.
+## 3. Trust and authority matrix
+
+| Concern | Owned by Server Core | Owned by Browser Runtime | Notes |
+| --- | --- | --- | --- |
+| Model prompts, API keys & tool routing | Yes | No | Models never run inside the browser bundle |
+| Session authorization & write mode | Yes | No | Server enforces `read-only` / `assisted-draft` / `verified-operate` |
+| Business entity/field metadata | Adapter + Skills | No | Browser never embeds app schemas |
+| DOM snapshot & interactive element map | No | Yes | Bounded to `MAX_OBSERVATION_ELEMENTS = 200` |
+| Panel copy, tones & progress labels | Yes (`panel_contract.json`) | Renders only | Protocol v2 projected state via `/timeline` & `/events` |
+| Approval card click-jacking guard | Policy (`presentation.json`) | Enforces visually | `min_visible_ratio: 0.9`, `min_visible_ms: 400`, `event.isTrusted` |
+| Credentials & URL handoff keys | Redacts before model/logs | Redacts on egress | `SessionHandoffPolicy` + recursive decode checks |
+| Persistent ledger & spend meter | Yes (`SQLite`) | No | `SQLiteMutationJournal` + `SQLiteSpendCap` |
+
+---
+
+## 4. Tab identity and duplicate-tab isolation
+
+Enterprise operators frequently press **Duplicate Tab** in their browser. A naive `sessionStorage` token alone would clone the original tab's session identifier, causing two open tabs to collide on SSE cursors, leases, and approval prompts.
+
+PageHelm prevents split-brain ownership in `frontend/src/runtime/tabid.ts`:
+
+1. Each tab persists its current ID under `sessionStorage` key `woa.assistant.tab.v1` so same-tab reloads cleanly reclaim their ongoing session.
+2. On boot, `tabId()` calls `navigator.locks.request('woa.assistant.tab.' + id, { ifAvailable: true }, ...)`.
+3. A **same-tab reload** finds the previous document's lock released on unload and reclaims the same session.
+4. A **duplicated tab** finds the lock still held by the original tab, triggers rotation (clearing cloned client session caches), mints a fresh `crypto.randomUUID()` tab ID, and binds a new isolated lease.
+
+---
+
+## 5. Multi-turn conversation state boundaries
+
+`ConversationState` (`src/web_operation_agent/state/conversation.py`) intentionally bounds conversational memory to prevent subtle staleness and authority leakage across turns:
+
+- **Defaults:** `max_turns = 4`, `max_bytes = 32 * 1024` (`32 KiB` total serialized JSON), `max_business_bytes = 16 * 1024` (`16 KiB` business slice).
+- **Hard configurable ceilings:** `max_turns <= 20`, `max_bytes <= 256 KiB`, `max_business_bytes <= 128 KiB` (`max_business_bytes <= max_bytes`).
+- **Zero inherited authority:** Retained history gives conversational continuity for pronouns or follow-up questions; every new turn must still re-observe the live page or query the application backend under the current actor before acting.
+- **Clean reset (`POST /v1/sessions/<id>/conversation` with `{"action": "new"}`):** Clears retained turns, `pending_clarification`, and `page_operation_granted`, while preserving the immutable `SessionLedger` audit trail and spend records.
+
+---
+
+## 6. Core neutrality and boundary enforcement
+
+PageHelm runs CI structural enforcement (`scripts/check_core_boundary.py`) on every change touching core Python or browser runtime modules:
+
+1. **No application leakage in core Python:** An AST- and token-aware scanner inspects executable Python statements in `src/web_operation_agent/` (excluding comments/docstrings) and fails if application-specific product names or route paths appear.
+2. **No adapter imports in core:** Core code and core tests must never import any `web_operation_agent_*` adapter distribution or `evals`.
+3. **No UI framework coupling in browser runtime:** `frontend/src/runtime/` cannot hardcode reference-app URLs or Element Plus `.el-*` selectors; reusable UI library glue lives under `frontend/src/integrations/`.
+4. **No local paths or unredacted fixtures:** Site checks verify no developer filesystem paths leak into build outputs or documentation bundles.
+
+---
+
+## 7. Explicit operational boundaries
+
+| Situation | PageHelm behavior |
+| --- | --- |
+| Task requires cross-origin external websites or CAPTCHA solving | Refuses or asks operator to take over; never solves or bypasses anti-bot gates |
+| Requested aggregate spans truncated/paginated slice (`truncated=True`) | Refuses to fabricate an exact total from a partial slice; widens query or states coverage explicitly |
+| Ambiguous record/action target during a write or draft | Calls `finish(status="need_input", options=[...])` with verified candidates rather than guessing |
+| Mutation times out after single-flight `mutation_claimed` | Marks transaction `INDETERMINATE`; never automatically retries |
+| Undeclared adapter capability | Explains the boundary clearly without asking for unsupported tools |
+
+---
+
+## Next steps
+
+- Dive into turn orchestration, concurrent reads, `TurnTables` SQL, and DOM settling in [Execution & Runtime](./execution-and-runtime.md).
+- Inspect the 8-stage mutation fence in [Security & Verified Writes](../security/verified-writes.md).
+- Connect your own backend step by step in [L0–L3 Progressive Integration](../integration/levels.md).
