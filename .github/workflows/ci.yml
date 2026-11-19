@@ -27,7 +27,8 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Pinned to Ubuntu 24.04 LTS to match requirements.lock (playwright 1.52.x) and the cloud host.
+    runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.profile == 'release' && 60 || 15 }}
     env:
       STORYBOOK_DISABLE_TELEMETRY: "1"
