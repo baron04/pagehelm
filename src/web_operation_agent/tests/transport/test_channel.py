@@ -862,13 +862,18 @@ class ChannelTests(unittest.TestCase):
             actor = principal(int(time.time() * 1000))
             grant, channel = registry.create(
                 allowed_origins=[ORIGIN], session_id="sqlite-transient", principal=actor)
+            def _busy_error() -> sqlite3.OperationalError:
+                err = sqlite3.OperationalError("database is locked")
+                err.sqlite_errorcode = sqlite3.SQLITE_BUSY
+                return err
+
             try:
                 lease = channel.accept_hello(hello(
                     grant.session_id, application_id="sample",
                     principal_digest=actor.binding_digest))["lease_id"]
                 with mock.patch.object(
                         store, "message",
-                        side_effect=sqlite3.OperationalError("database is locked")):
+                        side_effect=_busy_error()):
                     with self.assertRaises(RemoteProtocolError) as caught:
                         channel.accept_message(
                             {"message_id": "m-retry", "text": "Retry me",
@@ -888,7 +893,7 @@ class ChannelTests(unittest.TestCase):
                 )
                 with mock.patch.object(
                         store, "transition",
-                        side_effect=sqlite3.OperationalError("database is locked")):
+                        side_effect=_busy_error()):
                     channel.accept_cancellation(
                         CancellationRequest(1, grant.session_id, "m-retry"),
                         lease_id=lease)
@@ -898,7 +903,7 @@ class ChannelTests(unittest.TestCase):
                 # Renew contention returns recoverable 503 without closing session.
                 with mock.patch.object(
                         store, "renew",
-                        side_effect=sqlite3.OperationalError("database is locked")):
+                        side_effect=_busy_error()):
                     with self.assertRaises(RemoteProtocolError) as renew_err:
                         channel.accept_message(
                             {"message_id": "m-next", "text": "Next",

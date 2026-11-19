@@ -26,11 +26,6 @@ def _is_transient_sqlite_error(exc: BaseException) -> bool:
     """Return whether a storage failure reflects transient contention/I/O vs corruption."""
     if isinstance(exc, DurableStateError):
         return False
-    if isinstance(exc, sqlite3.OperationalError):
-        code = getattr(exc, "sqlite_errorcode", None)
-        if code is None:
-            return True
-        return (code & 0xFF) in _TRANSIENT_SQLITE_PRIMARY_CODES
     if isinstance(exc, sqlite3.DatabaseError):
         code = getattr(exc, "sqlite_errorcode", None)
         if code is None:
