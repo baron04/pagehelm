@@ -408,11 +408,17 @@ class LiveProductSession:
         if self._on_close is not None:
             self._on_close(self.grant.session_id)
 
+    def _join_worker(self, timeout_s: float = 2.0) -> None:
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread() and thread.is_alive():
+            thread.join(timeout=max(0.0, timeout_s))
+
     def __enter__(self) -> "LiveProductSession":
         return self.start()
 
     def __exit__(self, *_exc) -> None:
         self.close()
+        self._join_worker()
 
 
 class LiveProductCapacityError(RuntimeError):
@@ -608,6 +614,12 @@ class LiveProductServer:
             session.close()
         self.registry.retire_all("server_stopped")
         self.gateway.close()
+        deadline = time.monotonic() + 2.0
+        for session in sessions:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            session._join_worker(remaining)
 
     def __enter__(self) -> "LiveProductServer":
         return self.start()

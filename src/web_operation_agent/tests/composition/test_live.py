@@ -810,6 +810,43 @@ class LiveProductSessionTests(unittest.TestCase):
         finally:
             server.close()
 
+    def test_server_close_joins_started_session_workers_before_returning(self):
+        started = threading.Event()
+        teardown_done = False
+
+        class _DrainingRunner:
+            def __init__(self, channel, marker: Path):
+                self.channel = channel
+                self.marker = marker
+
+            def run_once(self):
+                started.set()
+                while True:
+                    try:
+                        self.channel.wait_for_message(timeout_s=None)
+                    except TimeoutError:
+                        continue
+                    except RemoteSessionClosed:
+                        time.sleep(0.05)
+                        self.marker.write_text("flushed", encoding="utf-8")
+                        nonlocal teardown_done
+                        teardown_done = True
+                        return ()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "teardown.txt"
+            server = LiveProductServer(max_sessions=2, sse_wait_s=.01)
+            session = server.create_session(
+                allowed_origin=ORIGIN,
+                page_controller_module=ORIGIN + "/page-controller.js",
+                runner_factory=lambda channel: _DrainingRunner(channel, marker),
+                session_id="join-on-close").start()
+            self.assertTrue(started.wait(timeout=2.0))
+            server.close()
+            self.assertTrue(teardown_done)
+            self.assertFalse(session.status().running)
+            self.assertEqual(marker.read_text(encoding="utf-8"), "flushed")
+
     def test_live_result_can_be_projected_to_one_case_replay(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
