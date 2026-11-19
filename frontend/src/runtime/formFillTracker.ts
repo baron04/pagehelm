@@ -18,6 +18,16 @@ import {observedSelectedRadio, radioChoices, radioGroup, radioLabel, selectedRad
 import type {Redactor} from './redaction'
 import type {JsonObject} from './types'
 
+export interface CapturedFieldValue {
+  value: string
+  checked?: boolean
+  isCombobox?: boolean
+  modelTracked?: boolean
+  modelProp?: string
+  hasModelKey?: boolean
+  previousModelValue?: unknown
+}
+
 interface UndoFieldEntry {
   fieldKey: string
   element: Element
@@ -25,6 +35,11 @@ interface UndoFieldEntry {
   scope: string | null
   previousValue: string
   previousChecked?: boolean
+  isCombobox: boolean
+  modelTracked: boolean
+  modelProp: string
+  hasModelKey: boolean
+  previousModelValue: unknown
 }
 
 interface RestrictedEntry {
@@ -74,7 +89,7 @@ function isElementOpenAndVisible(node: Element): boolean {
 
 function isElementWritableAndOpen(node: Element, allowReadonlyCombobox = false): boolean {
   if (!isElementOpenAndVisible(node)) return false
-  const combobox = allowReadonlyCombobox && listboxCombobox(node as ElementLike)
+  const combobox = allowReadonlyCombobox && isComboboxControl(node as ElementLike)
   const formEl = node as Partial<HTMLInputElement>
   const ariaDisabled = node.getAttribute('aria-disabled') === 'true'
   const ariaReadonly = node.getAttribute('aria-readonly') === 'true'
@@ -169,10 +184,61 @@ function setNativeValue(element: HTMLInputElement | HTMLTextAreaElement, value: 
   element.dispatchEvent(new Event('change', {bubbles: true}))
 }
 
+function isComboboxControl(element: ElementLike | null | undefined): boolean {
+  if (!element) return false
+  if (listboxCombobox(element)) return true
+  return typeof HTMLInputElement !== 'undefined' && element instanceof HTMLInputElement &&
+    Boolean(element.readOnly) && explicitAttribute(element, 'role') === 'combobox'
+}
+
+function clonePlainValue<T>(value: T): T {
+  if (value === undefined || value === null || typeof value !== 'object') return value
+  if (typeof structuredClone === 'function') {
+    try { return structuredClone(value) } catch { /* fall through */ }
+  }
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
+function resolveModelProp(
+  element: ElementLike,
+  modelRead: FormModelRead,
+  redactor: Redactor,
+): string {
+  const direct = formFieldName(element)
+  if (direct && !redactor.isSensitiveName(direct) && !modelRead.withheld.includes(direct) &&
+      (Object.hasOwn(modelRead.model, direct) || modelRead.items.some(item => item.prop === direct))) {
+    return direct
+  }
+  const label = formControlLabel(element)
+  if (label) {
+    const matched = modelRead.items.filter(item => item.label === label && item.prop)
+    if (matched.length === 1) {
+      const prop = matched[0]!.prop
+      if (!redactor.isSensitiveName(prop) && !modelRead.withheld.includes(prop)) return prop
+    }
+  }
+  return ''
+}
+
 export class FormFillTracker {
   private readonly turns = new Map<string, TurnFillState>()
+  private readonly baselineByField = new Map<string, {
+    element: Element
+    baselineText: string
+    undo: UndoFieldEntry
+  }>()
 
   constructor(private readonly redactor: Redactor) {}
+
+  private baselineKey(element: Element, fieldKey: string): string {
+    return `${formInstance(element) ?? ''}::${formControlScope(element) ?? ''}::${fieldKey}`
+  }
+
+  private pruneDisconnectedBaselines(): void {
+    for (const [key, item] of this.baselineByField) {
+      if (!item.element.isConnected) this.baselineByField.delete(key)
+    }
+  }
 
   private ensureTurn(turnId: string): TurnFillState {
     let state = this.turns.get(turnId)
@@ -205,21 +271,55 @@ export class FormFillTracker {
     return clean
   }
 
-  captureCurrentValue(element: ElementLike | null | undefined): {value: string; checked?: boolean} {
+  captureCurrentValue(
+    element: ElementLike | null | undefined,
+    readFormModel?: ((element: ElementLike) => FormModelRead | null) | undefined,
+  ): CapturedFieldValue {
     if (!element || isSensitiveFormControl(element, this.redactor)) return {value: ''}
+    const combobox = isComboboxControl(element)
+    let value = ''
+    let checked: boolean | undefined
     const group = radioGroup(element)
     if (group) {
-      return {value: selectedRadio(group) ?? observedSelectedRadio(group) ?? ''}
-    }
-    if (typeof HTMLInputElement !== 'undefined' && element instanceof HTMLInputElement) {
+      value = selectedRadio(group) ?? observedSelectedRadio(group) ?? ''
+    } else if (typeof HTMLInputElement !== 'undefined' && element instanceof HTMLInputElement) {
       if (element.type.toLowerCase() === 'checkbox') {
-        return {value: element.checked ? 'true' : 'false', checked: element.checked}
+        checked = element.checked
+        value = element.checked ? 'true' : 'false'
+      } else if (combobox) {
+        value = selectedComboboxOption(element) ?? String(element.value ?? '')
+      } else {
+        value = String(element.value ?? '')
       }
-      if (listboxCombobox(element)) {
-        return {value: selectedComboboxOption(element) ?? String(element.value ?? '')}
+    } else {
+      value = String(element.value ?? '')
+    }
+    let modelMeta: Partial<CapturedFieldValue> = {}
+    if (readFormModel) {
+      try {
+        const modelRead = readFormModel(element)
+        if (modelRead) {
+          const modelProp = resolveModelProp(element, modelRead, this.redactor)
+          if (modelProp && modelProp !== 'id') {
+            const hasModelKey = Object.hasOwn(modelRead.model, modelProp)
+            modelMeta = {
+              modelTracked: true,
+              modelProp,
+              hasModelKey,
+              previousModelValue: hasModelKey ? clonePlainValue(modelRead.model[modelProp]) : undefined,
+            }
+          }
+        }
+      } catch {
+        // Unreadable or non-ElForm controls fall back to DOM tracking.
       }
     }
-    return {value: String(element.value ?? '')}
+    return {
+      value,
+      ...(checked !== undefined ? {checked} : {}),
+      ...(combobox ? {isCombobox: true} : {}),
+      ...modelMeta,
+    }
   }
 
   scanFormContainer(turnId: string, element: ElementLike | null | undefined): RestrictedEntry[] {
@@ -238,25 +338,59 @@ export class FormFillTracker {
     turnId: string,
     fieldKey: string,
     element: ElementLike | null | undefined,
-    before: {value: string; checked?: boolean},
+    before: CapturedFieldValue,
     appliedValue: string,
   ): void {
     if (!turnId || !fieldKey) return
     if (isSensitiveFormControl(element, this.redactor) || this.redactor.isSensitiveName(fieldKey)) return
+    this.pruneDisconnectedBaselines()
     const state = this.ensureTurn(turnId)
     state.undone = false
     this.scanFormContainer(turnId, element)
     if (!Object.hasOwn(state.previousFields, fieldKey)) {
-      state.previousFields[fieldKey] = this.redactor.redactString(before.value).slice(0, 300)
       if (typeof Element !== 'undefined' && element instanceof Element) {
-        state.undoEntries.set(fieldKey, {
-          fieldKey,
-          element,
-          instance: formInstance(element),
-          scope: formControlScope(element),
-          previousValue: before.value,
-          ...(before.checked !== undefined ? {previousChecked: before.checked} : {}),
-        })
+        const bKey = this.baselineKey(element, fieldKey)
+        const existing = this.baselineByField.get(bKey)
+        if (existing && existing.element === element && existing.element.isConnected) {
+          state.previousFields[fieldKey] = existing.baselineText
+          state.undoEntries.set(fieldKey, {
+            ...existing.undo,
+            previousModelValue: existing.undo.modelTracked && existing.undo.hasModelKey
+              ? clonePlainValue(existing.undo.previousModelValue)
+              : existing.undo.previousModelValue,
+          })
+        } else {
+          const baselineText = this.redactor.redactString(before.value).slice(0, 300)
+          const entry: UndoFieldEntry = {
+            fieldKey,
+            element,
+            instance: formInstance(element),
+            scope: formControlScope(element),
+            previousValue: before.value,
+            ...(before.checked !== undefined ? {previousChecked: before.checked} : {}),
+            isCombobox: Boolean(before.isCombobox || isComboboxControl(element)),
+            modelTracked: Boolean(before.modelTracked && before.modelProp),
+            modelProp: before.modelProp ?? '',
+            hasModelKey: Boolean(before.hasModelKey),
+            previousModelValue: before.modelTracked && before.hasModelKey
+              ? clonePlainValue(before.previousModelValue)
+              : undefined,
+          }
+          state.previousFields[fieldKey] = baselineText
+          state.undoEntries.set(fieldKey, entry)
+          this.baselineByField.set(bKey, {
+            element,
+            baselineText,
+            undo: {
+              ...entry,
+              previousModelValue: entry.modelTracked && entry.hasModelKey
+                ? clonePlainValue(entry.previousModelValue)
+                : entry.previousModelValue,
+            },
+          })
+        }
+      } else {
+        state.previousFields[fieldKey] = this.redactor.redactString(before.value).slice(0, 300)
       }
     }
     state.appliedFields[fieldKey] = this.redactor.redactString(appliedValue).slice(0, 300)
@@ -356,32 +490,53 @@ export class FormFillTracker {
       if (!entry.element.isConnected) return false
       if (entry.instance && formInstance(entry.element) !== entry.instance) return false
       if (entry.scope && formControlScope(entry.element) !== entry.scope) return false
-      if (!isElementWritableAndOpen(entry.element, listboxCombobox(entry.element as ElementLike))) {
+      if (!isElementWritableAndOpen(entry.element,
+          Boolean(entry.isCombobox || isComboboxControl(entry.element as ElementLike)))) {
         return false
+      }
+    }
+    const clearUndoneBaselines = (): void => {
+      for (const entry of entries) {
+        const bKey = this.baselineKey(entry.element, entry.fieldKey)
+        const held = this.baselineByField.get(bKey)
+        if (held?.element === entry.element) this.baselineByField.delete(bKey)
       }
     }
     if (options.restoreFormModel && options.readFormModel) {
       const anchor = entries[0]!.element as ElementLike
       const modelRead = options.readFormModel(anchor)
-      if (modelRead && !modelRead.withheld.length) {
+      if (modelRead) {
         const values: Record<string, unknown> = {}
+        const unset: string[] = []
         const allMappable = entries.every(entry => {
-          const prop = formFieldName(entry.element as ElementLike) || entry.fieldKey
-          if (prop && Object.hasOwn(modelRead.model, prop) && prop !== 'id') {
-            values[prop] = entry.previousValue
+          if (!entry.modelTracked || !entry.modelProp || entry.modelProp === 'id') return false
+          if (entry.hasModelKey) {
+            if (!Object.hasOwn(modelRead.model, entry.modelProp)) return false
+            values[entry.modelProp] = clonePlainValue(entry.previousModelValue)
             return true
           }
-          return false
+          unset.push(entry.modelProp)
+          return true
         })
-        if (allMappable && Object.keys(values).length) {
-          const ok = await options.restoreFormModel(anchor, {expected: modelRead.model, values})
+        if (allMappable && (Object.keys(values).length > 0 || unset.length > 0)) {
+          const ok = await options.restoreFormModel(anchor, {
+            expected: modelRead.model,
+            values,
+            ...(unset.length ? {unset} : {}),
+            allowInvalid: true,
+          })
           if (ok) {
             state.undone = true
+            clearUndoneBaselines()
             options.onRestored?.()
             return true
           }
+          return false
         }
       }
+    }
+    if (entries.some(entry => entry.isCombobox || isComboboxControl(entry.element as ElementLike))) {
+      return false
     }
     for (const entry of entries) {
       const el = entry.element
@@ -415,11 +570,13 @@ export class FormFillTracker {
       }
     }
     state.undone = true
+    clearUndoneBaselines()
     options.onRestored?.()
     return true
   }
 
   clear(): void {
     this.turns.clear()
+    this.baselineByField.clear()
   }
 }

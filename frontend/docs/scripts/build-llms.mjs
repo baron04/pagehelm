@@ -6,6 +6,8 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const siteRoot = path.resolve(here, '..')
 const docsRoot = path.resolve(siteRoot, '../../docs')
 const publicDir = path.resolve(siteRoot, 'public')
+const rawBase = (process.env.ASTRO_BASE || '/').trim()
+const basePrefix = rawBase === '/' ? '' : '/' + rawBase.replace(/^\/+|\/+$/g, '')
 
 const SECTIONS = [
   { rel: 'index.md', route: '/', lang: 'en' },
@@ -65,15 +67,15 @@ const indexLines = [
   '',
   '## English Documentation',
   '',
-  ...docs.filter((d) => d.lang === 'en').map((d) => `- [${d.title}](${d.route}): ${d.description}`),
+  ...docs.filter((d) => d.lang === 'en').map((d) => `- [${d.title}](${basePrefix}${d.route}): ${d.description}`),
   '',
   '## 简体中文文档',
   '',
-  ...docs.filter((d) => d.lang === 'zh-cn').map((d) => `- [${d.title}](${d.route}): ${d.description}`),
+  ...docs.filter((d) => d.lang === 'zh-cn').map((d) => `- [${d.title}](${basePrefix}${d.route}): ${d.description}`),
   '',
   '## Full Corpus',
   '',
-  '- [Full bilingual documentation text](/llms-full.txt)',
+  `- [Full bilingual documentation text](${basePrefix}/llms-full.txt)`,
   '',
 ]
 
@@ -82,7 +84,7 @@ const fullChunks = [
   '',
   ...docs.flatMap((d) => [
     `================================================================================`,
-    `SOURCE: docs/${d.rel} (${d.route})`,
+    `SOURCE: docs/${d.rel} (${basePrefix}${d.route})`,
     `TITLE: ${d.title}`,
     `================================================================================`,
     '',

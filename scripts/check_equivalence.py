@@ -218,7 +218,9 @@ from testapps.contacts.model_loop import ContactsModelGoalPort, contacts_profile
 
 ORIGIN = "https://synthetic.test"
 TODAY = "2026-10-13"
-REGISTERED_ALLOWANCES = frozenset({"ops-03", "cln-08", "arc-08", "arc-09", "arc-12"})
+REGISTERED_ALLOWANCES = frozenset({
+    "ops-03", "cln-08", "arc-08", "arc-09", "arc-12", "approval-refusal",
+})
 _CLN08_POLICY_MODULE_RE = re.compile(
     r"^web_operation_agent_yudao\.(?:host|executor|reads|writes|rules|goal_compat)\.([A-Za-z0-9_]+)$"
 )
@@ -358,6 +360,8 @@ def apply_registered_allowances(capture: dict[str, Any], allow: set[str]) -> dic
                 ev = rec.get("event", "")
                 if "arc-12" in allow and ev == "check_fired":
                     continue
+                if "approval-refusal" in allow and ev in {"approval_click_refused", "approval_gate_refusals"}:
+                    continue
                 if "arc-08" in allow and (ev in _ARC08_EVENT_NAMES or ev.endswith("_timing")):
                     continue
                 if "ops-03" in allow and ev == "business_mutation_indeterminate":
@@ -379,6 +383,8 @@ def apply_registered_allowances(capture: dict[str, Any], allow: set[str]) -> dic
                         rec = {**rec, "stages": new_stages}
                 if "arc-08" in allow:
                     rec = {k: v for k, v in rec.items() if k not in _ARC08_KEYS}
+                if "approval-refusal" in allow and "gate_refusals" in rec:
+                    rec = {k: v for k, v in rec.items() if k != "gate_refusals"}
                 filtered_audit.append(rec)
             if "arc-09" in allow:
                 idx = 0
@@ -404,7 +410,7 @@ def apply_registered_allowances(capture: dict[str, Any], allow: set[str]) -> dic
                             idx = end + 2
                             continue
                     idx += 1
-            if "arc-08" in allow or "arc-09" in allow or "arc-12" in allow:
+            if "arc-08" in allow or "arc-09" in allow or "arc-12" in allow or "approval-refusal" in allow:
                 for idx, rec in enumerate(filtered_audit, 1):
                     if isinstance(rec, dict) and "seq" in rec:
                         rec["seq"] = idx

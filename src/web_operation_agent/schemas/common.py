@@ -24,6 +24,7 @@ SCHEMA_VERSIONS = {
     "TaskEvent": 1,
     "ApprovalRequest": 1,
     "ApprovalDecision": 1,
+    "ApprovalRefusalReport": 1,
     "CancellationRequest": 1,
     "ReconciliationRequest": 1,
     "ControlPlan": 1,

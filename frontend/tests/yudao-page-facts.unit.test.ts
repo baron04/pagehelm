@@ -1361,6 +1361,47 @@ describe('native editor mode is current application state', () => {
   // Seven interpreter spawns per run: under a loaded machine each cold start alone
   // eats the default timeout, so this case gets its own.
   }, 30_000)
+
+  it('supports allowInvalid + unset + clearValidate for empty create-form undo even with a password sibling', async () => {
+    const state = mountedPage('/synthetic/create-user', 'CreateUser')
+    const form = document.createElement('form'); form.className = 'el-form'
+    const input = document.createElement('input'); form.append(input); state.element.append(form)
+    form.getBoundingClientRect = () => ({width: 500, height: 300} as DOMRect)
+    const model: Record<string, unknown> = {customerId: 7, nickname: '顾溪', password: 'secret-value'}
+    const validate = vi.fn(async () => false)
+    const clearValidate = vi.fn()
+    const native = {...state.instance, type: {name: 'ElForm'}, props: {model},
+      subTree: {type: 'form', el: form}, vnode: {ctx: state.instance}, exposed: {validate, clearValidate}}
+    state.instance.subTree.children = [{component: native}] as unknown as NativeVNode[]
+
+    const readBefore = readElementFormModel(input)
+    expect(readBefore).toMatchObject({withheld: ['password'], mode: 'create'})
+
+    // Default (non-undo) path still refuses when withheld or invalid
+    expect(await restoreElementFormModel(input, {expected: readBefore!.model, values: {nickname: ''}})).toBe(false)
+    expect(model.password).toBe('secret-value')
+
+    // Undo path with allowInvalid + unset clears validation and preserves password
+    expect(await restoreElementFormModel(input, {
+      expected: readBefore!.model,
+      values: {nickname: ''},
+      unset: ['customerId'],
+      allowInvalid: true,
+    })).toBe(true)
+    expect(model.nickname).toBe('')
+    expect(model.customerId).toBeUndefined()
+    expect(model.password).toBe('secret-value')
+    expect(clearValidate).toHaveBeenCalledWith(['nickname', 'customerId'])
+    expect(validate).not.toHaveBeenCalled()
+
+    // Trying to unset or overwrite a secret key is still rejected
+    expect(await restoreElementFormModel(input, {
+      expected: {nickname: ''},
+      values: {},
+      unset: ['password'],
+      allowInvalid: true,
+    })).toBe(false)
+  })
   it('recognizes the real query form despite more than 8192 unrelated option VNodes', () => {
     const state = mountedPage('/synthetic/inventory', 'SyntheticInventory')
     state.element.innerHTML = '<form class="el-form"><div class="el-form-item"><input></div></form><aside></aside>'

@@ -74,6 +74,11 @@ class YudaoMutationReconciler:
         bk = business_key if isinstance(business_key, dict) else {}
         ev = evidence if isinstance(evidence, dict) else {}
         unverified_effect = ev.get("unverified_effect") or bk.get("unverified_effect")
+        if not unverified_effect and isinstance(ev.get("effects"), list):
+            for item in ev["effects"]:
+                if isinstance(item, dict) and item.get("verified") is False:
+                    unverified_effect = str(item.get("effect") or "postcondition")
+                    break
         if unverified_effect:
             return MutationReconciliation(
                 outcome="unknown",
@@ -82,7 +87,10 @@ class YudaoMutationReconciler:
             )
 
         entity = str(ev.get("entity") or bk.get("entity") or "").strip("/")
-        record_id = ev.get("id") if ev.get("id") is not None else bk.get("id")
+        record_id = (
+            ev.get("id") if ev.get("id") is not None
+            else (ev.get("record_id") if ev.get("record_id") is not None else bk.get("id"))
+        )
         expected = ev.get("expected") if isinstance(ev.get("expected"), dict) else bk.get("expected")
         before = ev.get("before") if isinstance(ev.get("before"), dict) else bk.get("before")
 
@@ -159,7 +167,16 @@ class YudaoMutationReconciler:
                 requires_human=True,
                 reason="readback response did not match target record id",
             )
-        if all(record.get(k) == v for k, v in expected.items()):
+        def _field_matches(key: str, wanted) -> bool:
+            actual = record.get(key)
+            if key in {"contactIds", "businessIds"}:
+                return (
+                    isinstance(actual, list) and isinstance(wanted, list)
+                    and len(actual) == len(wanted) and set(actual) == set(wanted)
+                )
+            return actual == wanted
+
+        if all(_field_matches(k, v) for k, v in expected.items()):
             return MutationReconciliation(
                 outcome="completed",
                 requires_human=False,

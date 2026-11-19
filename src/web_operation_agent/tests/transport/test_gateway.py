@@ -596,6 +596,219 @@ class GatewayTests(unittest.TestCase):
             time.sleep(0.05)
         self.assertEqual(captured.getvalue(), "")
 
+    def _setup_approval_turn_scenario(self, tmpdir: str, *, ttl_s: int):
+        from types import SimpleNamespace as NS
+        from web_operation_agent.business.control import ApprovalGate
+        from web_operation_agent.execution.harness import TurnHarness
+        from web_operation_agent.execution.receipt import TurnReceipt
+        from web_operation_agent.execution.turn_trace import TurnTrace
+        from web_operation_agent.privacy import BASELINE_SESSION_HANDOFFS
+        from web_operation_agent.schemas import ControlPlan, ControlTicket
+        from web_operation_agent.state.ledger import SessionLedger
+
+        root = Path(tmpdir)
+        now = int(time.time() * 1000)
+        actor = principal(now)
+        sid = f"http-ttl-{ttl_s}-{now}"
+        grant, channel = self.registry.create(
+            allowed_origins=[ORIGIN], session_id=sid, principal=actor)
+        _, _, raw_hello = self.request(
+            "POST", f"/v1/sessions/{sid}/hello",
+            hello(sid, application_id=actor.application_id,
+                  principal_digest=actor.binding_digest).to_json(),
+            token=grant.client_token)
+        lease = json.loads(raw_hello)["lease_id"]
+        turn_id = f"m-ttl-{ttl_s}-{now}"
+        channel.accept_message(
+            {"message_id": turn_id, "text": "修改张三手机", "page_url": ORIGIN + "/crm/contact"},
+            lease_id=lease)
+        channel.wait_for_message(timeout_s=1)
+        op_ctx = OperationContext(
+            principal=actor,
+            session_id=sid,
+            turn_id=turn_id,
+            operation_id="op-ttl-1",
+            issued_at=now,
+            expires_at=now + 60_000,
+        )
+        ledger = SessionLedger(root / "audit.jsonl", "run-1")
+        trace = TurnTrace(root / "turns", BASELINE_SESSION_HANDOFFS)
+        harness = TurnHarness.detached()
+        harness.channel = channel
+        harness.config = NS(max_user_answer_chars=8000)
+        plan = ControlPlan("plan-1", "task-1", (ControlTicket(
+            "contact", "crm_contact_update", ({"id": 7},), {"mobile": "13900000000"}),))
+        gate = ApprovalGate(channel, ledger)
+        dispatched: list[str] = []
+        outcome: dict[str, object] = {}
+
+        def _worker():
+            terminal_reason = "agent_finished"
+            answer = "已保存修改"
+            try:
+                grant_res = gate.approve_plan(
+                    plan,
+                    effect="更新联系人电话",
+                    targets=("张三",),
+                    ttl_s=ttl_s,
+                    context=op_ctx,
+                )
+                dispatched.append(grant_res.approval_id)
+            except Exception as exc:
+                outcome["error"] = exc
+                terminal_reason = getattr(exc, "code", "") or type(exc).__name__
+                answer = f"未完成：{terminal_reason}"
+            state = NS(
+                run_id="run-1",
+                started_at=time.time() - 0.1,
+                step=1,
+                page_actions=0,
+                terminal_reason=terminal_reason,
+                stop_reason=terminal_reason,
+                detail="",
+                clarification=None,
+                write_intent=True,
+                chinese=True,
+                source_answer="",
+                source_complete=True,
+                cancelled=lambda: False,
+                message=NS(message_id=turn_id, text="修改张三手机"),
+                ledger=ledger,
+                receipt=TurnReceipt(),
+                budget=NS(projection=lambda: {"terminal_reason": terminal_reason}),
+                writes=NS(end_control=lambda: None),
+                approvals=NS(operation_result=lambda: None, principal=actor),
+                answer_targets=(),
+                mutation_outcomes=(
+                    [{"position": 0, "effect": "更新联系人电话", "targets": ["张三"], "verified": True}]
+                    if dispatched else []
+                ),
+                first_route_kind="business_tool",
+                tool_timings=(),
+                model_calls=0,
+            )
+            harness.settle(state, None, answer, trace=trace,
+                           decision_strategy="model-driven", verifies_finish=False)
+
+        return sid, grant, channel, lease, actor, op_ctx, root, turn_id, dispatched, outcome, _worker
+
+    def _wait_for_approval_event(self, channel, lease: str, outcome: dict[str, object]) -> dict:
+        cursor = ""
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            if "error" in outcome:
+                raise outcome["error"]  # type: ignore[misc]
+            events = channel.events_after(cursor, lease_id=lease, wait_s=0.1)
+            for item in events:
+                cursor = item.event_id
+                if item.kind == "approval_required":
+                    return item.payload
+        raise AssertionError("timed out waiting for approval_required event")
+
+    def test_late_approval_within_ttl_after_gate_refusals_dispatches_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sid, grant, channel, lease, actor, op_ctx, root, turn_id, dispatched, outcome, worker_fn = \
+                self._setup_approval_turn_scenario(tmp, ttl_s=2)
+            t = threading.Thread(target=worker_fn)
+            t.start()
+            approval_id = self._wait_for_approval_event(channel, lease, outcome)["approval_id"]
+
+            for code in ("insufficient_coverage", "insufficient_dwell"):
+                st, _, raw = self.request(
+                    "POST", f"/v1/sessions/{sid}/approval_refusals",
+                    {"schema_version": SCHEMA_VERSIONS["ApprovalRefusalReport"],
+                     "session_id": sid, "approval_id": approval_id,
+                     "code": code, "turn_id": turn_id},
+                    token=grant.client_token, lease=lease)
+                self.assertEqual(st, 200)
+                self.assertTrue(json.loads(raw)["accepted"])
+
+            self.assertEqual(dispatched, [])
+            time.sleep(0.35)
+            st, _, raw = self.request(
+                "POST", f"/v1/sessions/{sid}/approvals",
+                ApprovalDecision(
+                    1, sid, approval_id, "approved",
+                    principal_digest=actor.binding_digest,
+                    turn_id=turn_id,
+                    operation_id=op_ctx.operation_id,
+                ).to_json(),
+                token=grant.client_token, lease=lease)
+            self.assertEqual(st, 200)
+            self.assertEqual(json.loads(raw), {"accepted": True, "duplicate": False})
+            t.join(timeout=2)
+            self.assertFalse(t.is_alive())
+            self.assertNotIn("error", outcome)
+            self.assertEqual(dispatched, [approval_id])
+
+            audit_rows = [json.loads(line) for line in (root / "audit.jsonl").read_text().splitlines() if line]
+            decided = [r for r in audit_rows if r.get("event") == "approval_decided"][-1]
+            self.assertEqual(decided["gate_refusals"], {"count": 2, "last_code": "insufficient_dwell"})
+            gate_ev = [r for r in audit_rows if r.get("event") == "approval_gate_refusals"][-1]
+            self.assertEqual(gate_ev["cards"], [{
+                "approval_id": approval_id, "kind": "write",
+                "count": 2, "last_code": "insufficient_dwell",
+            }])
+
+            trace_doc = json.loads((root / "turns" / "0001.json").read_text())
+            self.assertEqual(trace_doc["approval_refusals"], [{
+                "approval_id": approval_id, "kind": "write",
+                "count": 2, "last_code": "insufficient_dwell",
+            }])
+
+    def test_approval_arriving_after_ttl_expiry_never_dispatches_and_logs_refusals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sid, grant, channel, lease, actor, op_ctx, root, turn_id, dispatched, outcome, worker_fn = \
+                self._setup_approval_turn_scenario(tmp, ttl_s=1)
+            t = threading.Thread(target=worker_fn)
+            t.start()
+            approval_id = self._wait_for_approval_event(channel, lease, outcome)["approval_id"]
+
+            st, _, raw = self.request(
+                "POST", f"/v1/sessions/{sid}/approval_refusals",
+                {"schema_version": SCHEMA_VERSIONS["ApprovalRefusalReport"],
+                 "session_id": sid, "approval_id": approval_id,
+                 "code": "insufficient_coverage", "turn_id": turn_id},
+                token=grant.client_token, lease=lease)
+            self.assertEqual(st, 200)
+            self.assertEqual(json.loads(raw)["count"], 1)
+
+            t.join(timeout=3)
+            self.assertFalse(t.is_alive())
+            self.assertIn("error", outcome)
+            self.assertEqual(getattr(outcome["error"], "code", ""), "approval_expired")
+
+            # A late click after TTL expiry is rejected and never dispatches.
+            st, _, body = self.request(
+                "POST", f"/v1/sessions/{sid}/approvals",
+                ApprovalDecision(
+                    1, sid, approval_id, "approved",
+                    principal_digest=actor.binding_digest,
+                    turn_id=turn_id,
+                    operation_id=op_ctx.operation_id,
+                ).to_json(),
+                token=grant.client_token, lease=lease)
+            self.assertEqual(st, 409)
+            self.assertEqual(json.loads(body)["code"], "approval_expired")
+            self.assertEqual(dispatched, [])
+
+            audit_rows = [json.loads(line) for line in (root / "audit.jsonl").read_text().splitlines() if line]
+            refused = [r for r in audit_rows if r.get("event") == "approval_click_refused"][-1]
+            self.assertEqual(refused["approval_id"], approval_id)
+            self.assertEqual(refused["count"], 1)
+            self.assertEqual(refused["last_code"], "insufficient_coverage")
+            gate_ev = [r for r in audit_rows if r.get("event") == "approval_gate_refusals"][-1]
+            self.assertEqual(gate_ev["cards"], [{
+                "approval_id": approval_id, "kind": "write",
+                "count": 1, "last_code": "insufficient_coverage",
+            }])
+
+            trace_doc = json.loads((root / "turns" / "0001.json").read_text())
+            self.assertEqual(trace_doc["approval_refusals"], [{
+                "approval_id": approval_id, "kind": "write",
+                "count": 1, "last_code": "insufficient_coverage",
+            }])
+
 
 if __name__ == "__main__":
     unittest.main()

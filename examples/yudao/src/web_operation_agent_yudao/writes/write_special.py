@@ -329,32 +329,59 @@ class NativeSpecialHandler:
             preserved = reread_state["preserved"]
             if is_state:
                 if any(actual.get(k) != v for k, v in preserved.items()):
-                    raise BusinessMutationIndeterminate("customer transition changed unrelated business fields", phase="postcondition")
+                    raise BusinessMutationIndeterminate(
+                        "customer transition changed unrelated business fields",
+                        phase="postcondition",
+                        reconciliation={"id": record_id, "entity": args["entity"],
+                                        "effects": effects, "unverified_effect": "unrelated_field_preservation"},
+                    )
                 effects.append({"effect": "unrelated_field_preservation", "verified": True})
                 if self.operation not in STATE_FIELDS:
                     contacts = self._contacts(record_id)
                     wanted = [{**c, "ownerUserId": None} for c in args["contacts"]] if pool else args["contacts"]
+                    contact_effect = "related_owner_clear" if pool else "related_owner_preservation"
                     if contacts != wanted:
-                        raise BusinessMutationIndeterminate("complete related contact ownership is not verified", phase="postcondition")
-                    effects.append({"effect": "related_owner_clear" if pool else "related_owner_preservation", "verified": True})
+                        raise BusinessMutationIndeterminate(
+                            "complete related contact ownership is not verified",
+                            phase="postcondition",
+                            reconciliation={"id": record_id, "entity": args["entity"],
+                                            "effects": effects, "unverified_effect": contact_effect},
+                        )
+                    effects.append({"effect": contact_effect, "verified": True})
                     grants = self._grants(record_id)
                     if pool:
                         if any(str(g["level"]) == "1" for g in grants) or grants != [g for g in args["grants"] if str(g["level"]) != "1"]:
-                            raise BusinessMutationIndeterminate("customer OWNER permission removal is not verified", phase="postcondition")
+                            raise BusinessMutationIndeterminate(
+                                "customer OWNER permission removal is not verified",
+                                phase="postcondition",
+                                reconciliation={"id": record_id, "entity": args["entity"],
+                                                "effects": effects, "unverified_effect": "owner_permission_removal"},
+                            )
                         effects.append({"effect": "owner_permission_removal", "verified": True})
                     else:
-                        self._verify_owner(grants, actor["id"])
+                        self._verify_owner(grants, actor["id"], entity=args["entity"], record_id=record_id, effects=effects)
                         effects.append({"effect": "owner_permission", "verified": True})
             elif self.operation == "crm_receivable_plan_create":
-                self._verify_owner(self._grants(record_id, 8), args["body"]["ownerUserId"])
+                self._verify_owner(self._grants(record_id, 8), args["body"]["ownerUserId"],
+                                   entity=args["entity"], record_id=record_id, effects=effects)
                 if actual.get("receivableId") is not None:
-                    raise BusinessMutationIndeterminate("new plan unexpectedly links an actual receivable", phase="postcondition")
+                    raise BusinessMutationIndeterminate(
+                        "new plan unexpectedly links an actual receivable",
+                        phase="postcondition",
+                        reconciliation={"id": record_id, "entity": args["entity"],
+                                        "effects": effects, "unverified_effect": "plan_derivation"},
+                    )
                 effects += [{"effect": "plan_derivation", "verified": True}, {"effect": "owner_permission", "verified": True}]
             else:
                 actual_receivers = actual.get("receiverUserIds")
                 if (str(actual.get("publisherUserId")) != str(actor["id"]) or not isinstance(actual_receivers, list)
                         or sorted(actual_receivers) != reread_state["receivers"] or len(set(actual_receivers)) != len(actual_receivers)):
-                    raise BusinessMutationIndeterminate("announcement receiver relations are not verified", phase="postcondition")
+                    raise BusinessMutationIndeterminate(
+                        "announcement receiver relations are not verified",
+                        phase="postcondition",
+                        reconciliation={"id": record_id, "entity": args["entity"],
+                                        "effects": effects, "unverified_effect": "receiver_relations"},
+                    )
                 effects.append({"effect": "receiver_relations", "verified": True, "count": len(actual_receivers)})
             name = actual.get("name") or actual.get("title") or "回款计划"
             return BusinessToolResult(
@@ -384,9 +411,20 @@ class NativeSpecialHandler:
         )
 
     @staticmethod
-    def _verify_owner(grants, owner):
+    def _verify_owner(grants, owner, *, entity: str = "", record_id=None, effects=None):
         if not any(str(g["userId"]) == str(owner) and str(g["level"]) == "1" for g in grants):
-            raise BusinessMutationIndeterminate("native OWNER permission is not verified", phase="postcondition")
+            reconciliation = {"unverified_effect": "owner_permission"}
+            if entity:
+                reconciliation["entity"] = entity
+            if record_id is not None:
+                reconciliation["id"] = record_id
+            if effects is not None:
+                reconciliation["effects"] = effects
+            raise BusinessMutationIndeterminate(
+                "native OWNER permission is not verified",
+                phase="postcondition",
+                reconciliation=reconciliation,
+            )
 
 
 def special_tools(client, goal_data, handler_factory, *, dictionary_rows=None):

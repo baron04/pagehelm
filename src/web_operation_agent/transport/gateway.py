@@ -25,13 +25,15 @@ from .panel_view import label_keys, panel_limits
 from .channel import SessionGrant
 from .protocol import RemoteProtocolError
 from .registry import RemoteSessionRegistry
-from ..schemas import (ActionResultEnvelope, ApprovalDecision, CancellationRequest, ClientHello,
-                      ObservationEnvelope, ReconciliationRequest, SchemaError, canonical_json)
+from ..schemas import (ActionResultEnvelope, ApprovalDecision, ApprovalRefusalReport,
+                      CancellationRequest, ClientHello, ObservationEnvelope,
+                      ReconciliationRequest, SchemaError, canonical_json)
 
 MAX_BODY_BYTES = 1024 * 1024
 SESSION_PATH = re.compile(
     r"^/v1/sessions/([A-Za-z0-9_-]{1,128})/"
-    r"(hello|observations|claims|results|messages|approvals|cancellations|reconciliations|events|timeline|conversation)$"
+    r"(hello|observations|claims|results|messages|approvals|approval_refusals|"
+    r"cancellations|reconciliations|events|timeline|conversation)$"
 )
 WEB_RUNTIME = Path(__file__).resolve().parent.parent / "web_runtime"
 #: The one script a host page includes to have the assistant: the boot supervisor, the
@@ -398,6 +400,9 @@ def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float,
                 elif endpoint == "approvals":
                     reply = channel.accept_approval(
                         ApprovalDecision.from_json(body), lease_id=lease_id)
+                elif endpoint == "approval_refusals":
+                    reply = channel.accept_approval_refusal(
+                        ApprovalRefusalReport.from_json(body), lease_id=lease_id)
                 elif endpoint == "cancellations":
                     reply = channel.accept_cancellation(
                         CancellationRequest.from_json(body), lease_id=lease_id)

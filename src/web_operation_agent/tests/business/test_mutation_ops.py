@@ -83,6 +83,54 @@ class MutationOpsTests(unittest.TestCase):
                           principal=replace(p, actor_id='other-actor'))
             self.assertEqual(adapter.ports.reconciliation.reconcile.call_count, 1)
 
+    def test_reconcile_forwards_post_dispatch_metadata_to_adapter_evidence(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        import time
+        from web_operation_agent.business.operations import online_reconcile, reconcile, unresolved_report
+        from web_operation_agent.composition.ports import MutationReconciliation
+        from web_operation_agent.tests.support.identity import principal
+
+        now = int(time.time() * 1000)
+        p = principal(issued_at=now, expires_at=now + 60_000)
+        identity = {k: v for k, v in p.audit_projection().items()
+                    if k in {"tenant_digest", "workspace_digest", "actor_digest"}}
+        adapter = SimpleNamespace(
+            descriptor=SimpleNamespace(application_id="sample"),
+            ports=SimpleNamespace(identity=Mock(), reconciliation=Mock()),
+        )
+        adapter.ports.reconciliation.reconcile.return_value = MutationReconciliation(
+            "unknown", True, "partial effect requires human verification")
+        with tempfile.TemporaryDirectory() as tmp:
+            journal_path = Path(tmp) / "journal.db"
+            journal = SQLiteMutationJournal(journal_path)
+            digest = "e" * 64
+            journal.register(
+                digest, "b" * 64, expires_at=now + 60_000, now_ms=now,
+                reconciliation={"application_id": "sample", "tool": "update_record",
+                                "args": {"entity": "crm/customer"}, "identity": identity})
+            journal.claim(digest, "b" * 64, now_ms=now + 1)
+            journal.finish(
+                digest, "indeterminate", now_ms=now + 2,
+                reconciliation={
+                    "id": 77,
+                    "unverified_effect": "unrelated_field_preservation",
+                    "effects": [{"effect": "record", "verified": True, "id": 77}],
+                },
+            )
+            reconcile(journal, digest, application=adapter, principal=p)
+            _tool, _args = adapter.ports.reconciliation.reconcile.call_args.args
+            evidence = adapter.ports.reconciliation.reconcile.call_args.kwargs["evidence"]
+            self.assertEqual(evidence["id"], 77)
+            self.assertEqual(evidence["unverified_effect"], "unrelated_field_preservation")
+            self.assertEqual(evidence["effects"], [{"effect": "record", "verified": True, "id": 77}])
+            self.assertIn("result_digest", evidence)
+
+            online = online_reconcile(journal, digest, application=adapter, principal=p, now_ms=now + 3)
+            self.assertEqual(online["outcome"], "unknown")
+            self.assertFalse(online["settled"])
+            self.assertEqual(unresolved_report(journal.get(digest), journal_path=journal_path)["record_id"], "77")
+
     def test_online_reconcile_handles_completed_failed_unknown_and_active_lease(self):
         from types import SimpleNamespace
         from unittest.mock import Mock

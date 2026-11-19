@@ -21,6 +21,7 @@ import {
   formFieldMatches, type FormHandoffField, type FormSubmitTarget, type Page,
   type PageHighlight, type PageOpener,
 } from './page'
+import {readPageFormModel} from './pageForm'
 import {summarizeObservation} from './pageSnapshot'
 import {classifyTransportError, type TransportVerdict} from './panelHost'
 import type {Redactor} from './redaction'
@@ -730,13 +731,16 @@ export async function dispatchAction(
   const turnId = executing.turn_id || ctx.stored?.activeMessageId || ''
   const isFieldAction = action.command.action === 'fill' || action.command.action === 'select'
   let targetElement: ReturnType<Page['element']> | undefined
-  let beforeFieldValue: {value: string; checked?: boolean} | undefined
+  let beforeFieldValue: ReturnType<FormFillTracker['captureCurrentValue']> | undefined
   let fieldKey = ''
   if (isFieldAction && tracker) {
     try {
       targetElement = ctx.page.element(action.command.args?.ref)
       fieldKey = tracker.resolveFieldKey(targetElement, String(action.command.args?.ref || ''))
-      beforeFieldValue = tracker.captureCurrentValue(targetElement)
+      beforeFieldValue = tracker.captureCurrentValue(
+        targetElement,
+        el => readPageFormModel(el, ctx.page.formModelReader, ctx.page.sourceAccepter).read,
+      )
       if (targetElement) tracker.scanFormContainer(turnId, targetElement)
     } catch {
       // Missing/unloaded page fails in execution below.

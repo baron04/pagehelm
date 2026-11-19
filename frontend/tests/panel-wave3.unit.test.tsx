@@ -565,7 +565,7 @@ describe('UX-03 + UX-05 handoff summary card & prefill approval choice', () => {
     expect(host.querySelector<HTMLButtonElement>('[data-testid="woa-approve"]')!.textContent)
       .toBe(labels.saveChoice)
     act(() => { gatedPrefill.click() })
-    expect(onRefused).toHaveBeenCalledWith('panel_not_visible')
+    expect(onRefused).toHaveBeenCalledWith('untrusted_gesture')
     expect(onDecide).not.toHaveBeenCalled()
 
     // Once visibility gate passes, clicking prefill dispatches 'prefill' and approve dispatches 'approved'.
@@ -594,5 +594,58 @@ describe('UX-03 + UX-05 handoff summary card & prefill approval choice', () => {
       }))
     })
     expect(host.querySelector('[data-testid="woa-prefill"]')).toBeNull()
+  })
+
+  it('forwards visibility-gate refusal codes from PanelWindow to host.reportApprovalRefused without deciding', () => {
+    vi.mocked(useVisibilityGate).mockReturnValue({
+      attach: () => undefined,
+      refusalFor: () => 'insufficient_coverage',
+    })
+    const reportApprovalRefused = vi.fn()
+    const decide = vi.fn()
+    const snap = makeSnapshot({
+      pendingApproval: {
+        schema_version: 1,
+        approval_id: 'ap-refuse-1',
+        effect: '更新联系人手机',
+        targets: ['联系人 林舟'],
+        expires_at: Date.now() + 60_000,
+        principal_digest: '',
+        turn_id: 't-refuse-1',
+        operation_id: 'op-refuse-1',
+        kind: 'write',
+      },
+    })
+    const panelHost = makeHost(snap, {decide, reportApprovalRefused})
+    act(() => {
+      root.render(createElement(PanelWindow, {host: panelHost, allowedOrigins: []}))
+    })
+    openPanel(host)
+    const approveBtn = host.querySelector<HTMLButtonElement>('[data-testid="woa-approve"]')!
+    expect(approveBtn).not.toBeNull()
+    act(() => { approveBtn.click() })
+    expect(reportApprovalRefused).toHaveBeenCalledWith('ap-refuse-1', 'insufficient_coverage')
+    expect(decide).not.toHaveBeenCalled()
+    expect(host.textContent).toContain(labels.approvalObscured)
+  })
+
+  it('clears restored composer draft before calling host.reload on failed optimistic retry', () => {
+    const reload = vi.fn()
+    const snap = makeSnapshot({
+      optimistic: {turnId: 't-fail', text: '重发这一句', failed: true},
+      notice: {code: 'submit_failed', retryable: true, turnId: 't-fail'},
+    })
+    const panelHost = makeHost(snap, {reload})
+    act(() => {
+      root.render(createElement(PanelWindow, {host: panelHost, allowedOrigins: []}))
+    })
+    openPanel(host)
+    const composer = host.querySelector<HTMLTextAreaElement>('textarea')!
+    expect(composer.value).toBe('重发这一句')
+    const retryBtn = host.querySelector<HTMLButtonElement>('.woa-inline-error__retry')!
+    expect(retryBtn).not.toBeNull()
+    act(() => { retryBtn.click() })
+    expect(reload).toHaveBeenCalledOnce()
+    expect(composer.value).toBe('')
   })
 })

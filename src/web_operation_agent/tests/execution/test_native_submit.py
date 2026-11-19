@@ -78,6 +78,10 @@ class Approvals:
 
     def __init__(self, approved=True):
         self.approved, self.cards = approved, []
+        self.indeterminate_calls = 0
+
+    def mutation_indeterminate(self):
+        self.indeterminate_calls += 1
 
     def context(self, step, tool, hold_ms=0):
         return NS(binding_digest="a" * 64, audit_projection=lambda: {})
@@ -979,6 +983,22 @@ class HandoffWaitTests(_Setup, unittest.TestCase):
         note = self.ex._await_handoff_press(self.ex.s, self.ex.turn)
         self.assertEqual(seen, [True])
         self.assertIn("已接受", note)
+
+
+class NativeSubmitIndeterminateAccountingTests(_Setup, unittest.TestCase):
+    def test_partial_blocked_extra_request_records_mutation_indeterminate_on_approvals(self):
+        self.ex.clicks.append(("DELETE", PREFIX + "delete", {"id": 7}))
+        out = self.run_request()
+        self.assertEqual(out.state, "indeterminate")
+        self.assertEqual(self.ex.s.terminal_reason, "indeterminate_write")
+        self.assertEqual(self.ex.s.approvals.indeterminate_calls, 1)
+
+    def test_uncertain_lost_response_submit_records_mutation_indeterminate_on_approvals(self):
+        self.ex.status = None
+        out = self.run_request()
+        self.assertEqual(out.state, "indeterminate")
+        self.assertEqual(self.ex.s.terminal_reason, "indeterminate_write")
+        self.assertEqual(self.ex.s.approvals.indeterminate_calls, 1)
 
 
 if __name__ == "__main__":

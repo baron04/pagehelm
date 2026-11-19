@@ -17,7 +17,7 @@ import browserContract from '@contract/browser_contract.json'
 import type {
   ApprovalRequest, HandoffRestrictedControl, PanelConfiguration, PanelState, ReconciliationStatus,
 } from '../contract/panel'
-import {postApprovalDecision, type ApprovalContext} from './approvalController'
+import {postApprovalDecision, postApprovalRefusal, type ApprovalContext} from './approvalController'
 import {contained, detach, listen, soon, type Cancel} from './contain'
 import {
   mayNavigate, navigationExpectation, type NavigationExpectation,
@@ -569,6 +569,11 @@ export class EmbeddedWebRuntime {
         if (!request || request.approval_id !== approvalId) return
         detach('decide', this._postApproval(request, decision).catch(error => this._raise(error)))
       },
+      reportApprovalRefused: (approvalId, code) => {
+        const request = this.panelHost?.snapshot().pendingApproval
+        if (!request || request.approval_id !== approvalId) return
+        detach('approval refused', this._postApprovalRefusal(request, code))
+      },
       newConversation: () => {
         detach('new conversation', (async () => {
           // The page may start a fresh session entirely: this Runtime's session keeps
@@ -582,6 +587,14 @@ export class EmbeddedWebRuntime {
       },
       loadOlder: before => {
         detach('load older', this._loadOlder(before).catch(error => this._raise(error)))
+      },
+      retryNotice: () => {
+        detach('retry notice', (async () => {
+          await this._refreshTimeline()
+          if (!this.stopped) {
+            this._panelState(this.stored.cancellationPending ? 'stopping' : 'ready')
+          }
+        })().catch(error => this._raise(error)))
       },
       reconcile: (turnId, proposalDigest) => this.reconcileTurn(turnId, proposalDigest),
       undoFormFill: turnId => this.undoFormFill(turnId),
@@ -701,6 +714,11 @@ export class EmbeddedWebRuntime {
   /** Record the decision before dispatching it, so a reload replays rather than re-asks. */
   _postApproval(request: ApprovalRequest, decision: 'approved' | 'denied' | 'prefill'): Promise<void> {
     return postApprovalDecision(approvalContextOf(this), request, decision)
+  }
+
+  /** Report a client visibility-gate click refusal for server audit diagnostics. */
+  _postApprovalRefusal(request: ApprovalRequest, code: string): Promise<void> {
+    return postApprovalRefusal(approvalContextOf(this), request, code)
   }
 
   // -- the timeline the panel shows ------------------------------------------------------

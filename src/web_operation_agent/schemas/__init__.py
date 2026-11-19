@@ -16,8 +16,9 @@ from .browser import (BROWSER_ACTIONS, INTERNAL_BROWSER_ACTIONS,
                       MAX_SCROLL_PAGES, POTENTIALLY_WRITING_ACTIONS, RECEIPT_ERRORS,
                       ActionCommand, ActionReceipt, ElementRef, PageObservation)
 from .protocol import (ACTION_RESULT_ERRORS, ACTION_RESULT_STATUSES, APPROVAL_KINDS,
-                       TASK_EVENT_KINDS, ActionEnvelope, ActionResultEnvelope,
-                       ApprovalDecision, ApprovalRequest, CancellationRequest, ClientHello,
+                       APPROVAL_REFUSAL_CODES, TASK_EVENT_KINDS, ActionEnvelope,
+                       ActionResultEnvelope, ApprovalDecision, ApprovalRefusalReport,
+                       ApprovalRequest, CancellationRequest, ClientHello,
                        ObservationEnvelope, ReconciliationRequest, TaskEvent)
 from .control import ControlPlan, ControlTicket
 

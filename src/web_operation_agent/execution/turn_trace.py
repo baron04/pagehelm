@@ -63,6 +63,7 @@ class TurnTrace:
         self.stage_timings: dict[str, float] = {}
         self.tool_timings: list[dict] = []
         self.checks: list[dict] = []
+        self.approval_refusals: list[dict] = []
 
     def note_first_route(self, route_kind: str) -> None:
         """Record the first tool/route kind dispatched during this turn."""
@@ -105,6 +106,18 @@ class TurnTrace:
             "outcome": str(outcome or "")[:40],
             "attempt": max(1, int(attempt)),
             "answer_preserved": bool(answer_preserved),
+        })
+
+    def record_approval_refusal(self, *, approval_id: str, kind: str, count: int,
+                                last_code: str) -> None:
+        """Record structural client visibility-gate click refusal counts for one card."""
+        if not isinstance(approval_id, str) or not approval_id.strip():
+            return
+        self.approval_refusals.append({
+            "approval_id": approval_id.strip()[:80],
+            "kind": str(kind or "write")[:24],
+            "count": max(1, int(count)),
+            "last_code": str(last_code or "")[:64],
         })
 
     def record_delivery(self, *, reference: str, projection: dict, rendered_text: str,
@@ -192,6 +205,8 @@ class TurnTrace:
             record["tool_timings"] = list(self.tool_timings)
         if self.checks:
             record["checks"] = list(self.checks)
+        if self.approval_refusals:
+            record["approval_refusals"] = list(self.approval_refusals)
         if (self.handoffs.has_unredacted(record, url_decode_depth=3)
                 or has_unredacted_sensitive_assignment(record, url_decode_depth=3)):
             record = {**outcome, "withheld": "credential_form"}

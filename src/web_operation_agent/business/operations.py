@@ -45,7 +45,12 @@ def reconcile(journal: MutationJournal, proposal_digest: str, *,
             or metadata.get("identity", {}) != expected_identity):
         raise MutationJournalError("reconciliation identity does not match the original actor")
     verdict = application.ports.reconciliation.reconcile(
-        metadata["tool"], metadata["args"], evidence={"result_digest": intent.result_digest},
+        metadata["tool"], metadata["args"],
+        evidence={
+            **{k: v for k, v in metadata.items()
+               if k not in {"application_id", "tool", "args", "identity"}},
+            "result_digest": intent.result_digest,
+        },
         principal=principal)
     # A read can describe current state but cannot establish that an old HTTP request
     # stopped executing. This report never resolves the journal or retries the mutation.
@@ -149,7 +154,12 @@ def unresolved_report(intent, *, journal_path: Path) -> dict:
         # have been sent; `acknowledgement` and `readback` mean it certainly was.
         "phase": str(metadata.get("phase") or ""),
         # The application's own identifier for what was written, when the adapter had one.
-        "record_id": str(metadata.get("record_id") or ""),
+        "record_id": str(
+            metadata.get("record_id")
+            or metadata.get("id")
+            or (metadata.get("args") if isinstance(metadata.get("args"), dict) else {}).get("id")
+            or ""
+        ),
         "resolve_command": (
             f"python -m web_operation_agent.business.operations --journal {journal_path} "
             f"resolve {intent.proposal_digest} "

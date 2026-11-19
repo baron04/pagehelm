@@ -134,8 +134,10 @@ export interface PanelActions {
   submit(text: string): void
   cancel(): void
   decide(approvalId: string, decision: 'approved' | 'denied' | 'prefill'): void
+  reportApprovalRefused?(approvalId: string, code: string): void
   newConversation(): void
   loadOlder(before: string): void
+  retryNotice?(): void
   panelVisibility?(open: boolean): void
   openAnswerTarget?(address: string): boolean
   reconcile?(turnId: string, proposalDigest?: string): Promise<ReconciliationStatus> | ReconciliationStatus
@@ -452,6 +454,10 @@ export class PanelHost implements PanelHostContract {
     this.verbs.decide(String(approvalId), decision)
   }
 
+  reportApprovalRefused(approvalId: string, code: string): void {
+    this.bound?.reportApprovalRefused?.(String(approvalId), String(code || ''))
+  }
+
   newConversation(): void {
     this.verbs.newConversation()
   }
@@ -504,6 +510,16 @@ export class PanelHost implements PanelHostContract {
     if (this.retryStart) {
       this.clearNotice()
       this.retryStart()
+      return
+    }
+    if (this.state.optimistic?.failed) {
+      this.clearNotice()
+      this.retrySubmit()
+      return
+    }
+    if (this.bound !== null && !this.state.closed) {
+      this.clearNotice()
+      this.bound.retryNotice?.()
       return
     }
     if (typeof location !== 'undefined') location.reload()

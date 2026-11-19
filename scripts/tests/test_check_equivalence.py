@@ -322,6 +322,30 @@ class EquivalenceHarnessTests(unittest.TestCase):
         next(r for r in bad_scen["audit_records"] if r.get("event") == "action_effect_consumed")["policy_type"] = "Tampered"
         self.assertFalse(ce.compare_captures(self.capture_a, bad_type, allow={"cln-08"})[0])
 
+    def test_allow_registered_approval_refusal_scoping(self):
+        modified = copy.deepcopy(self.capture_a)
+        scen = next(s for s in modified["scenarios"] if s["scenario"] == "yudao_skill_write_approved")
+        decided = next(r for r in scen["audit_records"] if r.get("event") == "approval_decided")
+        decided["gate_refusals"] = {"count": 1, "last_code": "insufficient_coverage"}
+        scen["audit_records"].append({
+            "seq": len(scen["audit_records"]) + 1,
+            "event": "approval_gate_refusals",
+            "cards": [{"approval_id": "id_1", "kind": "write", "count": 1, "last_code": "insufficient_coverage"}],
+        })
+
+        self.assertFalse(ce.compare_captures(self.capture_a, modified)[0])
+        ok_allowed, diff = ce.compare_captures(self.capture_a, modified, allow={"approval-refusal"})
+        self.assertTrue(ok_allowed, diff)
+
+        for mutator in (
+            lambda s: s["model_calls"][0]["messages"][0].__setitem__("content", "changed"),
+            lambda s: s["result"].__setitem__("user_answer", "changed answer"),
+            lambda s: s["tool_receipts"]["tool_messages"][0].__setitem__("content", "changed receipt"),
+        ):
+            bad = copy.deepcopy(modified)
+            mutator(next(s for s in bad["scenarios"] if s["scenario"] == "yudao_skill_write_approved"))
+            self.assertFalse(ce.compare_captures(self.capture_a, bad, allow={"approval-refusal"})[0])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -105,6 +105,7 @@ export function beginPageSettleWatch(options: SettleOptions = {}): PageSettleWat
   const ignoreUrl = options.ignoreUrl ?? ((url: string) => defaultIgnoreUrl(url, win))
 
   let lastMutationAt = 0
+  let wallLastMutationAt = 0
   let ignoredMutations = 0
   let nextRequestId = 1
   const inFlight = new Map<number, number>()
@@ -118,6 +119,7 @@ export function beginPageSettleWatch(options: SettleOptions = {}): PageSettleWat
         for (const record of records) {
           if (isSubstantiveMutation(record, options.panelContainer)) {
             lastMutationAt = now()
+            wallLastMutationAt = Date.now()
           } else {
             ignoredMutations += 1
           }
@@ -222,7 +224,6 @@ export function beginPageSettleWatch(options: SettleOptions = {}): PageSettleWat
     return new Promise<SettleResult>(resolve => {
       let stopTimer: Cancel | null = null
       let maxIgnoredLongTail = 0
-      let wallLastMutationAt = 0
 
       const finish = (settled: boolean, reason: 'quiet' | 'timeout') => {
         if (stopTimer) {
@@ -249,7 +250,6 @@ export function beginPageSettleWatch(options: SettleOptions = {}): PageSettleWat
         const net = countRecentInFlightRequests(timestamps, current, longTailMs)
         maxIgnoredLongTail = Math.max(maxIgnoredLongTail, net.ignoredLongTail)
         const busy = Boolean(options.isBusy?.())
-        if (lastMutationAt > 0 && wallLastMutationAt === 0) wallLastMutationAt = wallCurrent
         const quietElapsed = lastMutationAt === 0
           ? elapsed >= quietMs
           : Math.max(current - lastMutationAt, wallCurrent - wallLastMutationAt) >= quietMs

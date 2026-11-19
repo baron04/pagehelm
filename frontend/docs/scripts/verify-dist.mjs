@@ -7,7 +7,7 @@ const siteRoot = path.resolve(here, '..')
 const distDir = path.join(siteRoot, 'dist')
 
 const baseArgIndex = process.argv.indexOf('--base')
-const rawBase = baseArgIndex >= 0 ? process.argv[baseArgIndex + 1] : '/'
+const rawBase = baseArgIndex >= 0 ? process.argv[baseArgIndex + 1] : (process.env.ASTRO_BASE || '/')
 const base = rawBase === '/' ? '/' : `/${rawBase.replace(/^\/+|\/+$/g, '')}`
 
 const required = ['index.html', 'zh-cn/index.html', 'llms.txt', 'llms-full.txt']
@@ -81,7 +81,39 @@ for (const htmlFile of htmlFiles) {
   }
 }
 
+const llmsPath = path.join(distDir, 'llms.txt')
+const llmsContent = fs.readFileSync(llmsPath, 'utf8')
+const mdLinkPattern = /\[[^\]]+\]\(([^)]+)\)/g
+let llmsLinksChecked = 0
+for (const match of llmsContent.matchAll(mdLinkPattern)) {
+  const rawHref = match[1].trim()
+  if (!rawHref || rawHref.startsWith('#') || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(rawHref) || rawHref.startsWith('//')) {
+    continue
+  }
+  const clean = rawHref.split('#')[0].split('?')[0]
+  if (!clean) continue
+  llmsLinksChecked += 1
+  if (!clean.startsWith('/')) {
+    broken.push(`llms.txt -> ${rawHref} (expected root-relative link)`)
+    continue
+  }
+  let distRelative = clean
+  if (base !== '/') {
+    if (clean !== base && !clean.startsWith(`${base}/`)) {
+      broken.push(`llms.txt -> ${rawHref} (missing base ${base})`)
+      continue
+    }
+    distRelative = clean.slice(base.length) || '/'
+  }
+  if (!targetExists(distRelative)) {
+    broken.push(`llms.txt -> ${rawHref} (resolved: ${distRelative})`)
+  }
+}
+if (llmsLinksChecked < 20) {
+  throw new Error(`Expected >= 20 internal links in llms.txt, found ${llmsLinksChecked}`)
+}
+
 if (broken.length > 0) {
   throw new Error(`Broken documentation links found for base=${base}:\n${broken.join('\n')}`)
 }
-console.log(`Verified ${htmlFiles.length} HTML files, llms.txt, and llms-full.txt for base=${base} (0 broken links, 0 leaks).`)
+console.log(`Verified ${htmlFiles.length} HTML files, llms.txt (${llmsLinksChecked} links), and llms-full.txt for base=${base} (0 broken links, 0 leaks).`)

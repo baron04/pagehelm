@@ -243,6 +243,35 @@ describe('ACC-04(b,c,d): scroll room hints, async option probe, and resilient pa
       {quietMs: 20, maxWaitMs: 200},
     )).resolves.toEqual({success: true})
   })
+
+  it('keeps waiting across continuous substantive DOM mutations until quiet window elapses', async () => {
+    const host = document.createElement('div')
+    document.body.append(host)
+    const started = Date.now()
+    let step = 0
+    const mutator = window.setInterval(() => {
+      step += 1
+      const item = document.createElement('span')
+      item.textContent = `row-${step}`
+      host.append(item)
+      if (step >= 7) {
+        window.clearInterval(mutator)
+      }
+    }, 20)
+    try {
+      const watch = beginPageSettleWatch({quietMs: 70, maxWaitMs: 600})
+      const result = await watch.settle()
+      const totalElapsed = Date.now() - started
+      expect(result.settled).toBe(true)
+      expect(result.reason).toBe('quiet')
+      expect(step).toBe(7)
+      // 7 mutations at 20ms (~140ms) + 70ms quiet floor (~210ms); must never settle at 70ms!
+      expect(totalElapsed).toBeGreaterThanOrEqual(170)
+    } finally {
+      window.clearInterval(mutator)
+      host.remove()
+    }
+  })
 })
 
 describe('ACC-05: observation_summary on settled click/select/goto receipts', () => {
@@ -456,5 +485,92 @@ describe('ACC-13 + UX-03 + UX-05: form fill tracking, undoFormFill, restricted c
     expect(ok).toBe(true)
     expect(fileInput.scrollIntoView).toHaveBeenCalled()
     expect(fileInput.focus).toHaveBeenCalled()
+  })
+
+  it('preserves typed model props, multi-turn baseline, and unset keys during undoTurn; refuses combobox DOM fallback atomically', async () => {
+    document.body.innerHTML = ''
+    const dialog = document.createElement('div')
+    dialog.setAttribute('role', 'dialog')
+    dialog.innerHTML = `
+      <form class="el-form">
+        <label for="f-cust">客户</label>
+        <input id="f-cust" role="combobox" readonly aria-controls="lb-cust" value="" />
+        <ul id="lb-cust" role="listbox"><li role="option" aria-selected="false">合成星河</li></ul>
+        <label for="f-note">备注</label>
+        <input id="f-note" name="remark" type="text" value="" />
+      </form>
+    `
+    document.body.append(dialog)
+    const custInput = document.getElementById('f-cust') as HTMLInputElement
+    const noteInput = document.getElementById('f-note') as HTMLInputElement
+    for (const el of [custInput, noteInput]) {
+      el.getBoundingClientRect = () => ({width: 140, height: 28} as DOMRect)
+    }
+
+    // Readonly combobox without formModelReader -> DOM fallback refuses atomically without corrupting remark
+    const domTracker = new FormFillTracker(redactor)
+    const bNote = domTracker.captureCurrentValue(noteInput)
+    noteInput.value = '新备注'
+    domTracker.recordApplied('t-dom', '备注', noteInput, bNote, '新备注')
+    const bCust = domTracker.captureCurrentValue(custInput)
+    custInput.value = '合成星河'
+    domTracker.recordApplied('t-dom', '客户', custInput, bCust, '合成星河')
+    await expect(domTracker.undoTurn('t-dom')).resolves.toBe(false)
+    expect(noteInput.value).toBe('新备注')
+    expect(custInput.value).toBe('合成星河')
+
+    // With formModelReader + restoreFormModel: keeps typed number + unset + cross-turn baseline even with password withheld
+    const tracker = new FormFillTracker(redactor)
+    const model: Record<string, unknown> = {customerId: undefined, remark: '初始', password: 'secret'}
+    const readFormModel = () => ({
+      model: Object.fromEntries(Object.entries(model).filter(([k, v]) => k !== 'password' && v !== undefined)),
+      items: [
+        {prop: 'customerId', label: '客户', display: ''},
+        {prop: 'remark', label: '备注', display: ''},
+      ],
+      mode: 'create' as const,
+      record_id: '',
+      title: '新建',
+      check: 'chk',
+      withheld: ['password'],
+      invalid: ['customerId'],
+    })
+    const restoreCalls: unknown[] = []
+    const restoreFormModel = vi.fn(async (_el: unknown, req: unknown) => {
+      restoreCalls.push(req)
+      const typed = req as {values?: Record<string, unknown>; unset?: string[]; allowInvalid?: boolean}
+      expect(typed.allowInvalid).toBe(true)
+      for (const [k, v] of Object.entries(typed.values ?? {})) model[k] = v
+      for (const k of typed.unset ?? []) model[k] = undefined
+      return true
+    })
+
+    // Turn 1 sets customerId (was undefined/unset) and remark='第一轮'
+    noteInput.value = '初始'
+    const beforeNoteT1 = tracker.captureCurrentValue(noteInput, readFormModel)
+    const beforeCustT1 = tracker.captureCurrentValue(custInput, readFormModel)
+    model.remark = '第一轮'
+    noteInput.value = '第一轮'
+    tracker.recordApplied('t1', '备注', noteInput, beforeNoteT1, '第一轮')
+    model.customerId = 42
+    custInput.value = '合成星河'
+    tracker.recordApplied('t1', '客户', custInput, beforeCustT1, '合成星河')
+
+    // Turn 2 updates remark='第二轮' on the SAME open form -> must keep Turn 1 baseline '初始'!
+    const beforeNoteT2 = tracker.captureCurrentValue(noteInput, readFormModel)
+    model.remark = '第二轮'
+    noteInput.value = '第二轮'
+    tracker.recordApplied('t2', '备注', noteInput, beforeNoteT2, '第二轮')
+    expect(tracker.receiptFields('t2')).toMatchObject({previousFields: {备注: '初始'}})
+
+    await expect(tracker.undoTurn('t1', {readFormModel, restoreFormModel})).resolves.toBe(true)
+    expect(model.remark).toBe('初始')
+    expect(model.customerId).toBeUndefined()
+    expect(model.password).toBe('secret')
+    expect(restoreCalls[0]).toMatchObject({
+      values: {remark: '初始'},
+      unset: ['customerId'],
+      allowInvalid: true,
+    })
   })
 })

@@ -256,6 +256,20 @@ elif tool=='curl':
         self.assertEqual("old", (self.host / "current").resolve().name)
         self.assertIn("restored releases/old", result.stderr)
 
+    def test_compose_stop_grace_period_and_local_serve_graceful_drain(self):
+        cloud_compose = (REPO / "examples/yudao/deploy/compose.cloud.yaml").read_text(encoding="utf-8")
+        local_compose = (REPO / "examples/yudao/deploy/local/compose.yaml").read_text(encoding="utf-8")
+        for label, text in (("compose.cloud.yaml", cloud_compose), ("local/compose.yaml", local_compose)):
+            with self.subTest(file=label):
+                self.assertIn("stop_grace_period: 25s", text)
+
+        serve_src = (REPO / "examples/yudao/deploy/local/serve.py").read_text(encoding="utf-8")
+        self.assertIn("host.begin_drain()", serve_src)
+        self.assertIn("host.cleanup()", serve_src)
+        self.assertIn("host.drain()", serve_src)
+        self.assertLess(serve_src.index("host.drain()"), serve_src.index("boot.shutdown()"))
+        self.assertLess(serve_src.index("host.drain()"), serve_src.index("host.close()"))
+
 
 if __name__ == "__main__":
     unittest.main()

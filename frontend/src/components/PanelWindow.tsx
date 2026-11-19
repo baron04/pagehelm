@@ -88,7 +88,14 @@ export function PanelWindow({host, allowedOrigins}: {
     call(() => host.retrySubmit())
   }, [call, clearRestoredDraft, host])
   const cancel = useCallback(() => call(() => host.cancel()), [call, host])
-  const reload = useCallback(() => call(() => host.reload()), [call, host])
+  const reload = useCallback(() => {
+    const isClosed = CLOSED_STATES.has(snapshot.connection.state) || snapshot.closed
+    if (!isClosed && snapshot.optimistic?.failed && snapshot.notice?.code !== 'start_failed') {
+      clearRestoredDraft()
+    }
+    call(() => host.reload())
+  }, [call, clearRestoredDraft, host, snapshot.closed, snapshot.connection.state,
+      snapshot.notice?.code, snapshot.optimistic?.failed])
   const setOpen = useCallback((value: boolean) => {
     rememberOpen(value)
     setOpenState(value)
@@ -332,7 +339,8 @@ export function PanelWindow({host, allowedOrigins}: {
                 footer={pending && approvalLive && (
                   <ApprovalCard approval={pending} labels={labels} limits={limits}
                                 visibility={visibility} busy={deciding}
-                                onDecide={decide} onRefused={() => undefined} />
+                                onDecide={decide}
+                                onRefused={code => call(() => host.reportApprovalRefused?.(pending.approval_id, code))} />
                 )} />
 
         {(snapshot.notice ?? panelFailure ?? (pending && !approvalLive)) && (

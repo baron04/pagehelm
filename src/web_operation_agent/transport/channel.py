@@ -158,6 +158,7 @@ class RemoteSessionChannel(ChannelIngress, ChannelPanel, ChannelServer, ChannelS
         self._reconciliations: dict[str, dict] = {}
         self._approvals: dict[str, ApprovalRequest] = {}
         self._approval_decisions: dict[str, ApprovalDecision] = {}
+        self._approval_refusals: dict[str, dict] = {}
         self._pending_approval_id = ""
         self._event_times: dict[int, int] = {}
         self._event_durable_sequences: dict[int, int] = {}

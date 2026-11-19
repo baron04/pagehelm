@@ -239,11 +239,17 @@ def main():
                         state=Path("/var/lib/woa-yudao"), listen_host="0.0.0.0")
     settings.state.mkdir(parents=True, exist_ok=True, mode=0o700)
     stop = threading.Event()
-    signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    signal.signal(signal.SIGINT, lambda *_: stop.set())
+    host = boot = None
+
+    def _on_stop(*_):
+        if host is not None:
+            host.begin_drain()
+        stop.set()
+
+    signal.signal(signal.SIGTERM, _on_stop)
+    signal.signal(signal.SIGINT, _on_stop)
     front = Front(settings)
     threading.Thread(target=front.serve_forever, daemon=True).start()
-    host = boot = None
     try:
         host = native.YudaoHost(host_config(settings, env))
         host.server.start()
@@ -254,8 +260,11 @@ def main():
         print(f"环境{settings.environment}就绪：{settings.origin}", flush=True)
         while not stop.wait(60):
             host.forget_closed()
+            host.cleanup()
     finally:
         front.ready = False
+        if host is not None:
+            host.drain()
         if boot:
             boot.shutdown()
             boot.server_close()

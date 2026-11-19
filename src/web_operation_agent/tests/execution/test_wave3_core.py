@@ -298,6 +298,30 @@ class Wave3Arc04Arc06Arc07UxTests(unittest.TestCase):
             self.assertEqual(fx.state.terminal_reason, "agent_refused")
             self.assertIn("模型请求失败", answer)
 
+        # 3. Compound task with prior corrections, failed_reads, page_failures, completion_reviews,
+        #    or subsequent tool calls after the verified write -> NEVER synthesized as agent_finished
+        for bad_turn_fields in (
+            {"corrections": 1},
+            {"failed_reads": {("call_api", "{}"): "404"}},
+            {"page_failures": 1},
+            {"completion_reviews": 1},
+            {"tool_calls": 2, "last_verified_mutation_call": 1},
+        ):
+            with self.subTest(bad_turn_fields=bad_turn_fields):
+                with tempfile.TemporaryDirectory() as tmp:
+                    fx = _Wave3Fixture(
+                        Path(tmp),
+                        [ProviderError("timeout", code="provider_deadline")],
+                        lambda *_: None,
+                    )
+                    fx.state.mutation_outcomes = [
+                        {"position": 0, "effect": "更新", "targets": ["张三"], "verified": True}
+                    ]
+                    fx.turn.update(bad_turn_fields)
+                    answer = fx.run("修改 A 并修改 B")
+                    self.assertEqual(fx.state.terminal_reason, "agent_refused")
+                    self.assertIn("模型请求失败", answer)
+
     def test_ux02_need_input_options_and_ux03_ux05_offer_prefill_and_handoff_payload(self):
         # UX-02: need_input options -> published on needs_input progress payload & projected by panel_view
         with tempfile.TemporaryDirectory() as tmp:

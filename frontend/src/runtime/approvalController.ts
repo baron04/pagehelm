@@ -53,6 +53,26 @@ export async function postApprovalDecision(
   ctx.panelState(decision === 'denied' ? 'cancelled' : 'acting')
 }
 
+/** Report a panel visibility-gate refusal for server audit diagnostics without consuming the card. */
+export async function postApprovalRefusal(
+  ctx: ApprovalContext,
+  request: ApprovalRequest,
+  code: string,
+): Promise<void> {
+  if (!code) return
+  try {
+    await ctx.post('/approval_refusals', {
+      schema_version: WIRE_VERSION,
+      session_id: ctx.sessionId,
+      approval_id: request.approval_id,
+      code: String(code),
+      turn_id: String(request.turn_id || ''),
+    })
+  } catch {
+    // Diagnostic-only telemetry: never consume the pending card or raise a panel notice.
+  }
+}
+
 export async function handleApprovalRequiredEvent(
   ctx: ApprovalContext,
   payload: JsonObject,

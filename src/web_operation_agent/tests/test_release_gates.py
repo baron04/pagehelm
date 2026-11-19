@@ -250,6 +250,22 @@ class TheRepositoryHygieneGateCatchesWhatItNames(unittest.TestCase):
 
             (root / ".env.local").write_text("AGENT_OPENAI_API_KEY=" + "sk-" + "Ab3dEf9hIjKlMnOpQrStUvWx\n")
             self.assertEqual(_run("check_repo_hygiene.py", cwd=root).returncode, 1)
+            (root / ".env.local").unlink()
+
+            (root / "deepseek.env").write_text("DEEPSEEK_API_KEY=" + "Ab3dEf9Gh2Jk5Lm8Np1Qr4St7Uv0Wx\n")
+            self.assertEqual(_run("check_repo_hygiene.py", cwd=root).returncode, 1)
+            (root / "deepseek.env").unlink()
+
+            (root / "creds.json").write_text('{"password": "' + "Str0ngProdPassw0rd!2026_XyZ" + '"}\n')
+            self.assertEqual(_run("check_repo_hygiene.py", cwd=root).returncode, 1)
+            (root / "creds.json").unlink()
+
+            (root / "pat.txt").write_text("github_" + "pat_11ABCDEFG0123456789abcdef_XYZ\n")
+            self.assertEqual(_run("check_repo_hygiene.py", cwd=root).returncode, 1)
+            (root / "pat.txt").unlink()
+
+            (root / "safe.env").write_text("DEEPSEEK_API_KEY=replace-with-your-example-token\n")
+            self.assertEqual(_run("check_repo_hygiene.py", cwd=root).returncode, 0)
 
 
 class TheWheelGateCatchesWhatItNames(unittest.TestCase):

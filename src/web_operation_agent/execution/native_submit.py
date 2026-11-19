@@ -1007,6 +1007,7 @@ class NativeSubmitMixin:
         blocked = [r for r in permit.blocked() if r.decision != "duplicate"]
         if state == "completed":
             turn["written"].append(label)
+            turn["last_verified_mutation_call"] = turn.get("tool_calls", 0)
             details = [f"{d.label}：{d.text}"[:200] for d in card.details() if d.kind in ("change", "body")][:12]
             if not details and baseline is not None and self._last_readback is not None:
                 details = _readback_changes(baseline, self._last_readback, zone=conventions.epoch_zone)
@@ -1044,6 +1045,8 @@ class NativeSubmitMixin:
             turn["final"] = f"{label}：应用拒绝了这次请求，没有生效。不会自动重试。"
             return LoopToolResult(turn["final"], kind="write", state="refused", terminal_reason=s.terminal_reason)
         accepted = [r for r in permit.allowed() if r.status is not None and 200 <= r.status < 300]
+        if hasattr(s, "approvals") and callable(getattr(s.approvals, "mutation_indeterminate", None)):
+            s.approvals.mutation_indeterminate()
         s.terminal_reason, s.detail = "indeterminate_write", state
         if state == "partial":
             turn["final"] = (f"{label}：只有一部分生效（已被应用接受的请求 {len(accepted)} 个"

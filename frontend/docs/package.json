@@ -11,7 +11,7 @@
     "prebuild": "node scripts/build-llms.mjs",
     "build": "astro build",
     "dev": "node scripts/build-llms.mjs && astro dev",
-    "check:site": "node scripts/build-llms.mjs && astro build && node scripts/verify-dist.mjs --base / && ASTRO_BASE=/pagehelm astro build && node scripts/verify-dist.mjs --base /pagehelm"
+    "check:site": "ASTRO_BASE=/pagehelm node scripts/build-llms.mjs && ASTRO_BASE=/pagehelm astro build && node scripts/verify-dist.mjs --base /pagehelm && node scripts/build-llms.mjs && astro build && node scripts/verify-dist.mjs --base /"
   },
   "devDependencies": {
     "@astrojs/starlight": "0.43.1",

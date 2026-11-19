@@ -312,7 +312,9 @@ class _StatusHandler:
                                                     phase="postcondition", reconciliation={"id": record_id, "entity": entity})
             if any(actual.get(k) != v for k, v in args["preserved"].items()):
                 raise BusinessMutationIndeterminate("status transition changed unrelated header fields",
-                                                    phase="postcondition", reconciliation={"id": record_id, "entity": entity})
+                                                    phase="postcondition",
+                                                    reconciliation={"id": record_id, "entity": entity,
+                                                                    "unverified_effect": "unrelated_field_preservation"})
             effects = [{"effect": "record", "verified": True, "id": record_id},
                        {"effect": "unrelated_field_preservation", "verified": True}]
             label = actual.get("no") or actual.get("name") or str(record_id)

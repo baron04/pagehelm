@@ -268,6 +268,13 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             return None
         if turn.get("submit_handoff_blocked"):
             return None
+        if (turn.get("corrections", 0) > 0
+                or bool(turn.get("failed_reads"))
+                or turn.get("page_failures", 0) > 0
+                or turn.get("completion_reviews", 0) > 0
+                or bool(turn.get("numbers_sent_back"))
+                or turn.get("tool_calls", 0) > (turn.get("last_verified_mutation_call") or 0)):
+            return None
         written = [str(line).strip() for line in (turn.get("written") or ()) if str(line).strip()]
         if not written:
             for item in outcomes:
@@ -2427,6 +2434,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             details = '；'.join(detail_list)[:1500]
             done = f"{proposal.effect} — {'、'.join(proposal.targets)}" + (f'（{details}）' if details else '') + (f"；记录：{content['reference']}" if content.get('reference') else '')
             turn['written'].append(done)
+            turn['last_verified_mutation_call'] = turn.get('tool_calls', 0)
             return result('已执行并核对（用户已批准，应用回读确认）：' + done)
         if outcome.state == 'repeated':
             return result('这项写入本轮已经执行并核对过，不会重复执行。')

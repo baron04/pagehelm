@@ -136,9 +136,9 @@ export function useVisibilityGate(options: {
   }, [])
 
   const refusalFor = useCallback((event: {isTrusted: boolean}) => {
-    if (!event.isTrusted) return 'panel_not_visible'
+    if (!event.isTrusted) return 'untrusted_gesture'
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-      return 'panel_not_visible'
+      return 'document_hidden'
     }
     // The click itself is the question: measure what it can see at this instant rather
     // than trusting observer records, which arrive on a lag a fast honest answer can
@@ -146,10 +146,10 @@ export function useVisibilityGate(options: {
     // its first record does mount time stand in -- the earliest the card could have
     // been read -- so a card hidden until just now still fails the dwell.
     const node = element.current
-    if (!node || !node.isConnected) return 'panel_not_visible'
-    if (coverage(node) < minVisibleRatio) return 'panel_not_visible'
+    if (!node || !node.isConnected) return 'card_not_mounted'
+    if (coverage(node) < minVisibleRatio) return 'insufficient_coverage'
     const since = reported.current ? visibleSince.current : mountedAt.current
-    if (!since || performance.now() - since < minVisibleMs) return 'panel_not_visible'
+    if (!since || performance.now() - since < minVisibleMs) return 'insufficient_dwell'
     return ''
   }, [minVisibleRatio, minVisibleMs])
 

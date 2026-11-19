@@ -874,6 +874,115 @@ class LiveProductSessionTests(unittest.TestCase):
             self.assertTrue((root / "replay.html").exists())
             self.assertTrue((root / "trace-data.json").exists())
 
+    def test_native_submit_indeterminate_reconciliation_returns_unknown_and_missing_turn_404(self):
+        from types import SimpleNamespace
+        from web_operation_agent.business.mutation import SQLiteMutationJournal
+
+        now = int(time.time() * 1000)
+        actor = PrincipalContext(
+            schema_version=1,
+            application_id="sample",
+            tenant_id="t1",
+            workspace_id="w1",
+            actor_id="u1",
+            scopes=("sample.read",),
+            issued_at=now - 1000,
+            expires_at=now + 60_000,
+            delegation_id="d1",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = SQLiteMutationJournal(Path(tmp) / "journal.db")
+            registry = RemoteSessionRegistry()
+            grant, channel = registry.create(
+                allowed_origins=[ORIGIN], session_id="live-native-reconcile", principal=actor)
+            lease = channel.accept_hello(ClientHello(
+                schema_version=SCHEMA_VERSIONS["ClientHello"],
+                session_id=grant.session_id,
+                client_id="tab-1",
+                runtime="test-runtime/1",
+                runtime_instance_id="doc-1",
+                capabilities=("dom.observe",),
+                page_origin=ORIGIN,
+                application_id="sample",
+                principal_digest=actor.binding_digest,
+            ))["lease_id"]
+            executor = SimpleNamespace(
+                application=SimpleNamespace(
+                    descriptor=SimpleNamespace(application_id="sample"),
+                    business_tools=SimpleNamespace(mutation_journal=journal),
+                    ports=SimpleNamespace(identity=SimpleNamespace(validate=lambda *_a, **_kw: None)),
+                ),
+                config=None,
+                ledger_factory=None,
+                execute=lambda _msg: None,
+            )
+            LiveConversationRunner(channel, executor=executor)
+            channel.publish("progress", {
+                "state": "indeterminate",
+                "terminal_reason": "indeterminate_write",
+                "message": "结果不明",
+            }, turn_id="m-native-indet")
+
+            reply = channel.accept_reconciliation(
+                ReconciliationRequest(1, grant.session_id, turn_id="m-native-indet"),
+                lease_id=lease)
+            self.assertEqual(reply["outcome"], "unknown")
+            self.assertFalse(reply["settled"])
+            timeline = channel.panel_timeline(lease_id=lease)
+            self.assertEqual(timeline["entries"][-1]["reconciliation"], reply)
+
+            with self.assertRaises(RemoteProtocolError) as err:
+                channel.accept_reconciliation(
+                    ReconciliationRequest(1, grant.session_id, turn_id="m-never-existed"),
+                    lease_id=lease)
+            self.assertEqual(err.exception.status, 404)
+            self.assertEqual(err.exception.code, "unknown_reconciliation")
+
+    def test_transient_sqlite_busy_on_new_event_returns_503_without_closing_channel(self):
+        import sqlite3
+        from unittest import mock
+        from web_operation_agent.state.store import SQLiteSessionStore
+
+        now = int(time.time() * 1000)
+        actor = PrincipalContext(
+            schema_version=1,
+            application_id="sample",
+            tenant_id="t1",
+            workspace_id="w1",
+            actor_id="u1",
+            scopes=("sample.read",),
+            issued_at=now - 1000,
+            expires_at=now + 60_000,
+            delegation_id="d1",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteSessionStore(Path(tmp) / "durable.db", lease_ms=60_000)
+            registry = RemoteSessionRegistry(durable_store=store)
+            grant, channel = registry.create(
+                allowed_origins=[ORIGIN], session_id="busy-event", principal=actor)
+            channel.accept_hello(ClientHello(
+                schema_version=SCHEMA_VERSIONS["ClientHello"],
+                session_id=grant.session_id,
+                client_id="tab-1",
+                runtime="test-runtime/1",
+                runtime_instance_id="doc-1",
+                capabilities=("dom.observe",),
+                page_origin=ORIGIN,
+                application_id="sample",
+                principal_digest=actor.binding_digest,
+            ))
+            busy_exc = sqlite3.OperationalError("database is locked")
+            busy_exc.sqlite_errorcode = sqlite3.SQLITE_BUSY
+            with mock.patch.object(store, "append", side_effect=busy_exc):
+                with self.assertRaises(RemoteProtocolError) as ctx:
+                    channel.publish("progress", {"state": "running", "message": "busy"}, turn_id="t1")
+                self.assertEqual(ctx.exception.status, 503)
+                self.assertEqual(ctx.exception.code, "gateway_error")
+            self.assertFalse(channel._closed)
+            ev = channel.publish("progress", {"state": "running", "message": "recovered"}, turn_id="t1")
+            self.assertEqual(ev.payload["message"], "recovered")
+            channel.close("done")
+
 
 if __name__ == "__main__":
     unittest.main()

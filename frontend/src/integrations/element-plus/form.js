@@ -163,36 +163,69 @@ export function readElFormModel(element, {findComponent, readSource}) {
 }
 
 export async function restoreElFormModel(element, request, {findComponent, readModel}) {
+  const allowInvalid = request?.allowInvalid === true
   const before = readModel(element)
-  if (!before || before.unreadable || before.withheld?.length || !request ||
+  if (!before || before.unreadable || (!allowInvalid && before.withheld?.length) || !request ||
       !sameElFormStructure(before.model, request.expected) ||
       !request.values || typeof request.values !== 'object' || Array.isArray(request.values)) return false
+  const rawUnset = request.unset === undefined ? [] : request.unset
+  if (!Array.isArray(rawUnset) || (!allowInvalid && rawUnset.length > 0)) return false
   const area = element.closest('[role="dialog"],dialog') || element.closest('form.el-form')
   const forms = area?.matches('form.el-form') ? [area] : [...(area?.querySelectorAll('form.el-form') || [])]
   const root = forms.find(form => !forms.some(other => other !== form && other.contains(form)))
   const bound = root && findComponent(root, 'ElForm', true)
   const model = bound?.instance.props?.model
   const values = cloneElFormModel(request.values)
+  const badKey = key => key === 'id' || key === '__proto__' || key === 'constructor' || key === 'prototype' || FORM_SECRET.test(key)
   if (!model || values.unreadable || values.withheld.length || Object.keys(values.data).some(key =>
-      key === 'id' || key === '__proto__' || key === 'constructor' || key === 'prototype' ||
-      !Object.hasOwn(model, key))) return false
+      badKey(key) || !Object.hasOwn(model, key))) return false
+  const unset = []
+  for (const key of rawUnset) {
+    if (typeof key !== 'string' || !key || badKey(key) || Object.hasOwn(values.data, key)) return false
+    unset.push(key)
+  }
   const validate = bound.instance.exposed?.validate || bound.instance.proxy?.validate
-  if (typeof validate !== 'function') return false
+  const clearValidate = bound.instance.exposed?.clearValidate || bound.instance.proxy?.clearValidate
+  if (!allowInvalid && typeof validate !== 'function') return false
   const keys = Object.keys(values.data)
-  const expected = cloneElFormModel({...before.model, ...values.data}).data
+  if (!keys.length && !unset.length) return false
+  const draftExpected = {...before.model, ...values.data}
+  for (const key of unset) delete draftExpected[key]
+  const expected = cloneElFormModel(draftExpected).data
+  const hadTouchedKey = Object.create(null)
+  const priorTouchedValue = Object.create(null)
+  for (const key of [...keys, ...unset]) {
+    hadTouchedKey[key] = Object.hasOwn(model, key)
+    if (hadTouchedKey[key]) priorTouchedValue[key] = model[key]
+  }
   try {
     for (const key of keys) model[key] = values.data[key]
+    for (const key of unset) model[key] = undefined
     await Promise.resolve()
-    if (await validate() === false) throw new Error('application validation refused')
+    if (allowInvalid) {
+      if (typeof clearValidate === 'function') {
+        try { clearValidate([...keys, ...unset]) } catch { clearValidate() }
+      }
+    } else if (await validate() === false) {
+      throw new Error('application validation refused')
+    }
     await Promise.resolve()
     const after = readModel(element)
-    if (!after || after.unreadable || after.withheld?.length || after.invalid?.length ||
+    if (!after || after.unreadable || (!allowInvalid && (after.withheld?.length || after.invalid?.length)) ||
         !sameElFormStructure(after.model, expected)) throw new Error('restored form changed')
     return true
   } catch {
     // Validation and reactive dependencies can modify other fields too. Restore the complete
     // before-image, never leave a partially restored business form for an accidental save.
-    for (const key of Object.keys(model)) if (!Object.hasOwn(before.model, key)) delete model[key]
+    for (const key of Object.keys(model)) {
+      if (FORM_SECRET.test(key) && before.withheld?.length) continue
+      if (Object.hasOwn(hadTouchedKey, key)) {
+        if (hadTouchedKey[key]) model[key] = priorTouchedValue[key]
+        else delete model[key]
+      } else if (!Object.hasOwn(before.model, key)) {
+        delete model[key]
+      }
+    }
     for (const [key, value] of Object.entries(before.model)) model[key] = value
     await Promise.resolve()
     return false

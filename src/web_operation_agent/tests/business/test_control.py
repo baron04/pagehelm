@@ -183,6 +183,49 @@ class AuthorizationPrimitiveTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cannot advance"):
             control.since(1)
 
+    def test_decide_plan_records_turn_proposal_only_for_journaled_writes(self):
+        from unittest.mock import Mock
+        import time
+        from web_operation_agent.business.tools.contracts import BusinessMutationProposal
+        from web_operation_agent.state.identity import OperationContext
+        from web_operation_agent.tests.support.identity import principal
+
+        now = int(time.time() * 1000)
+        p = principal(issued_at=now, expires_at=now + 60_000)
+        for tool_name, expected_calls in (("native_form_update", 0), ("crm_customer_update", 1)):
+            with self.subTest(tool_name=tool_name):
+                ctx = OperationContext(
+                    principal=p,
+                    session_id="s1",
+                    turn_id="turn-1",
+                    operation_id="op-1",
+                    issued_at=now,
+                    expires_at=now + 60_000,
+                )
+                channel = Mock()
+                channel.principal = p
+                channel.session_id = "s1"
+                channel.wait_for_approval.return_value = ApprovalDecision(1, "s1", "ap-1", "approved")
+                with tempfile.TemporaryDirectory() as tmp:
+                    gate = ApprovalGate(channel, SessionLedger(Path(tmp) / "approval.jsonl", "run"))
+                    proposal = BusinessMutationProposal(
+                        tool=tool_name,
+                        args={"id": 7},
+                        effect="Update record",
+                        targets=("Record 7",),
+                        nonce="1" * 32,
+                        operation_context_digest=ctx.binding_digest,
+                    )
+                    grant = gate.decide_plan(
+                        proposal,
+                        effect=proposal.effect,
+                        targets=proposal.targets,
+                        ttl_s=5,
+                        context=ctx,
+                    )
+                    self.assertEqual(grant.decision, "approved")
+                    self.assertEqual(channel.record_turn_proposal.call_count, expected_calls)
+
 
 if __name__ == "__main__":
     unittest.main()

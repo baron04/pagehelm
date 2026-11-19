@@ -55,6 +55,7 @@ services:
       - ${YUDAO_CACHE}/source:/opt/source:ro
     ports: ["127.0.0.1:48091:48091", "127.0.0.1:48092:48092", "127.0.0.1:48093:48093"]
     depends_on: [server]
+    stop_grace_period: 25s
     restart: unless-stopped
 
 volumes:

@@ -39,6 +39,7 @@ services:
     networks: [default, ingress]
     extra_hosts: ["host.docker.internal:host-gateway"]
     depends_on: [web]
+    stop_grace_period: 25s
     logging:
       driver: json-file
       options:

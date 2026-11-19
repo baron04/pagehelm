@@ -67,14 +67,14 @@ describe('useVisibilityGate tall approval card coverage', () => {
         intersectionRect: {width: 340, height: 40} as DOMRectReadOnly,
       } as IntersectionObserverEntry])
       now = 1_500
-      expect(gate!.refusalFor({isTrusted: true})).toBe('panel_not_visible')
+      expect(gate!.refusalFor({isTrusted: true})).toBe('insufficient_coverage')
 
       // User scrolls the tall card so it fills the entire 400px scrollport (coverage = 400/400 = 1.0 >= 0.75)
       cardTop = 50
       scrollport.dispatchEvent(new Event('scroll'))
       // Immediately before dwell elapses, click is still refused
       now = 1_600
-      expect(gate!.refusalFor({isTrusted: true})).toBe('panel_not_visible')
+      expect(gate!.refusalFor({isTrusted: true})).toBe('insufficient_dwell')
       // Once minVisibleMs (250ms) elapses, approval succeeds!
       now = 1_800
       expect(gate!.refusalFor({isTrusted: true})).toBe('')

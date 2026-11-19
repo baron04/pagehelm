@@ -14,8 +14,8 @@ from ..privacy import redact_sensitive_assignments, redact_session_handoffs
 from ..state.identity import PrincipalError
 from ..state.store import DurableStateError
 from ..schemas import (SCHEMA_VERSIONS, ActionResultEnvelope, ApprovalDecision,
-                       CancellationRequest, ClientHello, ObservationEnvelope,
-                       ReconciliationRequest)
+                       ApprovalRefusalReport, CancellationRequest, ClientHello,
+                       ObservationEnvelope, ReconciliationRequest)
 from .protocol import (RemoteProtocolError, RemoteSessionClosed,
                        _MAX_MESSAGE_ID_LENGTH, _MAX_PAGE_URL_LENGTH, _copy_json,
                        _copy_wire, _event_sequence, _origin, _remote_args_echo,
@@ -568,6 +568,63 @@ class ChannelIngress:
             self._condition.notify_all()
             return {"accepted": True, "duplicate": False}
 
+    def accept_approval_refusal(self, report: ApprovalRefusalReport, *, lease_id: str) -> dict:
+        """Record a browser visibility-gate click refusal for diagnostics without deciding."""
+        with self._condition:
+            self._ensure_open()
+            self._require_active_lease(lease_id)
+            report = _copy_wire(report)
+            if report.session_id != self.session_id:
+                raise RemoteProtocolError("approval refusal belongs to another session", status=400)
+            request = self._approvals.get(report.approval_id)
+            if request is None:
+                raise RemoteProtocolError(
+                    "approval refusal names an unknown request",
+                    code="unknown_approval",
+                    status=404,
+                )
+            if report.turn_id and report.turn_id != request.turn_id:
+                raise RemoteProtocolError(
+                    "approval refusal does not match its turn context",
+                    code="approval_context_mismatch",
+                    status=403,
+                )
+            prior = self._approval_refusals.get(report.approval_id)
+            next_count = min(10_000, int(prior["count"]) + 1 if prior else 1)
+            self._approval_refusals[report.approval_id] = {
+                "approval_id": report.approval_id,
+                "kind": request.kind,
+                "turn_id": request.turn_id,
+                "count": next_count,
+                "last_code": report.code,
+            }
+            return {"accepted": True, "count": next_count, "last_code": report.code}
+
+    def approval_refusal_summary(self, approval_id: str) -> dict | None:
+        """Return `{count, last_code}` for one approval card, or None if unrefused."""
+        with self._condition:
+            entry = self._approval_refusals.get(approval_id)
+            if not entry or int(entry.get("count", 0)) <= 0:
+                return None
+            return {"count": int(entry["count"]), "last_code": str(entry["last_code"])}
+
+    def turn_approval_refusals(self, turn_id: str) -> list[dict]:
+        """Return ordered per-card `{approval_id, kind, count, last_code}` for one turn."""
+        if not turn_id:
+            return []
+        with self._condition:
+            records: list[dict] = []
+            for approval_id in self._approvals:
+                entry = self._approval_refusals.get(approval_id)
+                if entry and entry.get("turn_id") == turn_id and int(entry.get("count", 0)) > 0:
+                    records.append({
+                        "approval_id": entry["approval_id"],
+                        "kind": entry["kind"],
+                        "count": int(entry["count"]),
+                        "last_code": str(entry["last_code"]),
+                    })
+            return records
+
     def _find_reconciliation_target(self, turn_id: str, proposal_digest: str) -> tuple[str, str]:
         resolved_turn = turn_id
         resolved_proposal = proposal_digest
@@ -636,6 +693,28 @@ class ChannelIngress:
             result["message"] = text
         return result
 
+    def _has_indeterminate_turn(self, turn_id: str) -> bool:
+        """Return whether ``turn_id`` has an indeterminate outcome recorded on this channel."""
+        if not turn_id:
+            return False
+        for event in reversed(self._events):
+            if (event.kind == "progress"
+                    and event.turn_id == turn_id
+                    and event.payload.get("state") == "indeterminate"):
+                return True
+        for entry in reversed(self._panel_entries):
+            if (entry.get("turn_id") == turn_id
+                    and entry.get("panel_state") == "indeterminate"):
+                return True
+        if self.recovered_history:
+            for record in reversed(self.recovered_history):
+                payload = record.get("payload") or {}
+                if (record.get("kind") == "progress"
+                        and record.get("turn_id") == turn_id
+                        and payload.get("state") == "indeterminate"):
+                    return True
+        return False
+
     def accept_reconciliation(self, request: ReconciliationRequest, *, lease_id: str) -> dict:
         """Run read-only reconciliation for an indeterminate write and update timeline state."""
         with self._condition:
@@ -653,9 +732,10 @@ class ChannelIngress:
             )
             if cached is not None and cached.get("settled") is True:
                 return _copy_json(cached)
+            has_indeterminate = bool(turn_id) and self._has_indeterminate_turn(turn_id)
             reconciler = self._reconciler
 
-        if reconciler is None:
+        if reconciler is None or (not proposal_digest and has_indeterminate):
             labels = panel_contract()["label_keys"]
             raw = {"outcome": "unknown", "settled": False, "message": labels["reconcileUnknown"]}
         else:

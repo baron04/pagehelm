@@ -478,6 +478,23 @@ class StrictWireParsing(unittest.TestCase):
                 session_id="session-1",
             )
 
+    def test_approval_refusal_report_validates_closed_reason_set(self):
+        rep = S.ApprovalRefusalReport(
+            schema_version=S.SCHEMA_VERSIONS["ApprovalRefusalReport"],
+            session_id="session-1",
+            approval_id="approval-1",
+            code="insufficient_coverage",
+            turn_id="turn-1",
+        )
+        self.assertEqual(S.ApprovalRefusalReport.from_json(rep.to_json()), rep)
+        with self.assertRaises(S.SchemaError):
+            S.ApprovalRefusalReport(
+                schema_version=S.SCHEMA_VERSIONS["ApprovalRefusalReport"],
+                session_id="session-1",
+                approval_id="approval-1",
+                code="unknown_gate_reason",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

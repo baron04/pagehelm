@@ -9,6 +9,6 @@ from .goal_compat.goal import YudaoGoalData
 from .reads.client import YudaoAccount, YudaoClient
 from .rules.ui_source import UiSource
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = ["UiSource", "YudaoAccount", "YudaoClient", "YudaoGoalData"]

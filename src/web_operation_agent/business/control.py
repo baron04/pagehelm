@@ -67,6 +67,13 @@ class ApprovalGrant:
     operation_context_digest: str = ""
 
 
+_UNJOURNALED_SUBMIT_TOOLS = frozenset({
+    "native_form_create",
+    "native_form_update",
+    "native_row_action",
+})
+
+
 class ApprovalGate:
     """Bind one user-visible decision to one exact hidden plan or mutation proposal.
 
@@ -141,15 +148,38 @@ class ApprovalGate:
             identity=(context.audit_projection() if context else {}),
         )
         self.channel.request_approval(request)
-        decision: ApprovalDecision = self.channel.wait_for_approval(
-            approval_id, timeout_s=ttl_s)
+        def _read_refusals() -> dict | None:
+            reader = getattr(self.channel, "approval_refusal_summary", None)
+            if not callable(reader):
+                return None
+            summary = reader(approval_id)
+            if isinstance(summary, dict) and int(summary.get("count", 0)) > 0:
+                return {"count": int(summary["count"]), "last_code": str(summary.get("last_code", ""))}
+            return None
+
+        try:
+            decision: ApprovalDecision = self.channel.wait_for_approval(
+                approval_id, timeout_s=ttl_s)
+        except Exception:
+            refusal = _read_refusals()
+            if refusal is not None:
+                self.ledger.append(
+                    "approval_click_refused",
+                    approval_id=approval_id,
+                    kind=kind,
+                    count=refusal["count"],
+                    last_code=refusal["last_code"],
+                )
+            raise
         decided_at = time.time()
+        refusal = _read_refusals()
         self.ledger.append(
             decided_event,
             approval_id=approval_id,
             decision=decision.decision,
             control_plan_digest=plan.content_digest,
             operation_context_digest=(context.binding_digest if context else ""),
+            **({"gate_refusals": refusal} if refusal is not None else {}),
         )
         grant = ApprovalGrant(
             approval_id=approval_id,
@@ -158,7 +188,8 @@ class ApprovalGate:
             decided_at=decided_at,
             operation_context_digest=(context.binding_digest if context else ""),
         )
-        if kind == "write" and grant.decision == "approved" and request.turn_id:
+        if (kind == "write" and grant.decision == "approved" and request.turn_id
+                and getattr(plan, "tool", "") not in _UNJOURNALED_SUBMIT_TOOLS):
             record = getattr(self.channel, "record_turn_proposal", None)
             if callable(record):
                 record(request.turn_id, plan.content_digest)

@@ -35,10 +35,13 @@ _KNOWN_TOKEN_RES = (
     ("AWS access key ID", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("Slack token prefix", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
     ("Google API key prefix", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+    ("GitHub fine-grained PAT prefix", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}\b")),
 )
 _SECRET_ASSIGN_RE = re.compile(
-    r"""(?i)\b(?:api_?key|secret_?key|access_?token|refresh_?token|private_?key|client_?secret|auth_?token|password)\b"""
-    r"""\s*(?:=|:)\s*(?:["']([A-Za-z0-9_+/=-]{20,})["']|([A-Za-z0-9_+/=-]{20,})(?=\s|$|#))"""
+    r"(?:^|[^A-Za-z0-9])(?:[A-Za-z0-9_]*_)?"
+    r"(?:api_?key|secret_?key|access_?token|refresh_?token|private_?key|client_?secret|auth_?token|password)"
+    r"[\"']?\s*(?:=|:)\s*(?:\"([^\"\s]{20,})\"|'([^'\s]{20,})'|([A-Za-z0-9_+/=.-]{20,})(?=\s|$|#|,|;))",
+    re.IGNORECASE,
 )
 _PLACEHOLDER_MARKERS = (
     "example", "placeholder", "changeme", "redacted", "synthetic", "dummy",
@@ -133,7 +136,7 @@ def scan_repository(root: Path = ROOT) -> list[str]:
                 if pattern.search(line):
                     violations.append(f"{rel}:{lineno}: {label}")
             for match in _SECRET_ASSIGN_RE.finditer(line):
-                candidate = match.group(1) or match.group(2)
+                candidate = match.group(1) or match.group(2) or match.group(3)
                 if candidate and _is_high_entropy_secret(candidate):
                     violations.append(f"{rel}:{lineno}: high-entropy secret assignment")
             for match in _USER_HOME_PATH_RE.finditer(line):

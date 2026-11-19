@@ -234,6 +234,12 @@ class ChannelState:
                 self._event_durable_sequences[sequence] = self._durable_store.append(
                     self._owner, persisted)
             except (DurableStateError, sqlite3.Error, OSError) as exc:
+                if _is_transient_sqlite_error(exc):
+                    raise RemoteProtocolError(
+                        "durable session store is temporarily unavailable",
+                        code="gateway_error",
+                        status=503,
+                    ) from exc
                 self._closed = True
                 self._heartbeat_stop.set()
                 self._condition.notify_all()

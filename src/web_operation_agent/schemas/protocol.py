@@ -498,6 +498,62 @@ class ApprovalDecision:
         return digest(self.to_json())
 
 
+#: Closed set of browser-reported visibility-gate refusal codes; diagnostics only.
+APPROVAL_REFUSAL_CODES = frozenset({
+    "untrusted_gesture",
+    "document_hidden",
+    "card_not_mounted",
+    "insufficient_coverage",
+    "insufficient_dwell",
+    "panel_not_visible",
+})
+
+
+@dataclass(frozen=True)
+class ApprovalRefusalReport:
+    """Diagnostic-only notice that a pending approval click was refused by the visibility gate."""
+
+    schema_version: int
+    session_id: str
+    approval_id: str
+    code: str
+    turn_id: str = ""
+
+    def __post_init__(self) -> None:
+        _schema_version(self.schema_version, "ApprovalRefusalReport")
+        _str(self.session_id, "session_id")
+        _str(self.approval_id, "approval_id")
+        _require(self.code in APPROVAL_REFUSAL_CODES,
+                 f"code must be one of {sorted(APPROVAL_REFUSAL_CODES)}")
+        _str(self.turn_id, "turn_id", allow_empty=True)
+
+    def to_json(self) -> dict:
+        return {
+            "schema_version": self.schema_version,
+            "session_id": self.session_id,
+            "approval_id": self.approval_id,
+            "code": self.code,
+            "turn_id": self.turn_id,
+        }
+
+    @staticmethod
+    def from_json(d: dict) -> "ApprovalRefusalReport":
+        allowed = {"schema_version", "session_id", "approval_id", "code", "turn_id"}
+        required = allowed - {"turn_id"}
+        d = _strict_object(d, "ApprovalRefusalReport", allowed=allowed, required=required)
+        return ApprovalRefusalReport(
+            schema_version=d["schema_version"],
+            session_id=d["session_id"],
+            approval_id=d["approval_id"],
+            code=d["code"],
+            turn_id=d.get("turn_id", ""),
+        )
+
+    @property
+    def content_digest(self) -> str:
+        return digest(self.to_json())
+
+
 @dataclass(frozen=True)
 class CancellationRequest:
     """Authenticated request to stop one exact user message in the current session."""

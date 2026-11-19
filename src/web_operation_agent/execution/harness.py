@@ -1031,7 +1031,20 @@ class TurnHarness:
             wall_seconds=wall,
             model_calls=s.model_calls,
         )
+        turn_refusals: list[dict] = []
+        read_refusals = getattr(self.channel, "turn_approval_refusals", None)
+        if callable(read_refusals):
+            turn_refusals = list(read_refusals(s.message.message_id) or ())
+        if turn_refusals:
+            s.ledger.append("approval_gate_refusals", cards=turn_refusals)
         if trace is not None:
+            for item in turn_refusals:
+                trace.record_approval_refusal(
+                    approval_id=item["approval_id"],
+                    kind=item["kind"],
+                    count=item["count"],
+                    last_code=item["last_code"],
+                )
             if s.first_route_kind:
                 trace.note_first_route(s.first_route_kind)
             trace.set_stop_reason(stop_reason)

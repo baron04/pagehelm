@@ -216,7 +216,7 @@ class NativeWriteHandler:
         key = hashlib.sha256(json.dumps([entity, body], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         reconcile_meta = {"entity": entity, "id": body.get("id", body.get("bizId")),
                           "operation": self.operation, "body_digest": key}
-        if self.operation in RECORD_OPERATIONS and self.operation.endswith("update"):
+        if self.operation in RECORD_OPERATIONS:
             reconcile_meta["expected"] = {k: v for k, v in body.items() if k != "id"}
             if before:
                 reconcile_meta["before"] = {k: before[k] for k in reconcile_meta["expected"] if k in before}
@@ -305,7 +305,8 @@ class NativeWriteHandler:
                 effects.append({"effect": "owner_permission", "verified": owner_verified, "id": record_id})
                 if not owner_verified:
                     raise BusinessMutationIndeterminate("customer exists; OWNER permission is not verified",
-                        phase="postcondition", reconciliation={"effects": effects})
+                        phase="postcondition", reconciliation={"id": record_id, "entity": entity,
+                            "effects": effects, "unverified_effect": "owner_permission"})
             if self.operation == "crm_follow_up_create":
                 follow_up = follow_up_target(entity)
                 main = self.client.get(entity + "/get", id=body["bizId"])
@@ -313,7 +314,8 @@ class NativeWriteHandler:
                 effects.append({"effect": "main_follow_up", "verified": verified, "id": body["bizId"]})
                 if not verified:
                     raise BusinessMutationIndeterminate("follow-up record exists; main object is not verified",
-                        phase="postcondition", reconciliation={"effects": effects})
+                        phase="postcondition", reconciliation={"id": record_id, "entity": "crm/follow-up-record",
+                            "effects": effects, "unverified_effect": "main_follow_up"})
                 linked = [r for r in args["relations"] if r.get("field") in {"contactIds", "businessIds"}]
                 if linked:
                     related_verified = True
@@ -325,7 +327,8 @@ class NativeWriteHandler:
                     effects.append({"effect": "related_follow_up", "verified": related_verified})
                     if not related_verified:
                         raise BusinessMutationIndeterminate("follow-up exists; related next-contact times are not verified",
-                            phase="postcondition", reconciliation={"effects": effects})
+                            phase="postcondition", reconciliation={"id": record_id, "entity": "crm/follow-up-record",
+                                "effects": effects, "unverified_effect": "related_follow_up"})
             name = actual.get(contract.name_field if contract else "name")
             reference = f"{name}（ID={record_id}）" if name else ""
             return BusinessToolResult({"verified": True, "record_id": str(record_id), "entity": entity,

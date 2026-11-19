@@ -68,6 +68,8 @@ export interface PanelHost {
   retrySubmit(): void
   cancel(): void
   decide(approvalId: string, decision: 'approved' | 'denied' | 'prefill'): void
+  /** Report a client visibility-gate click refusal for diagnostics; never decides or consumes the card. */
+  reportApprovalRefused?(approvalId: string, code: string): void
   newConversation(): void
   loadOlder(): void
   dismissNotice(): void

@@ -520,7 +520,12 @@ export function autoBoot(win: Window = window): Supervisor | null {
     panelVisibility(open) {
       if (open && engagement.read() !== 'none') supervisor.connect()
     },
-    cancel() {}, decide() {},
+    cancel() {
+      waiting = ''
+      shell.host.setOptimistic(null)
+      shell.host.setConnection({state: 'ready', busy: false, stopping: false})
+    },
+    decide() {},
     // With no Runtime bound, a new conversation is just this tab forgetting the one it had.
     newConversation() { supervisor.newConversation() },
     loadOlder() {},
@@ -530,13 +535,21 @@ export function autoBoot(win: Window = window): Supervisor | null {
   // is not parsed yet; watch for it instead of guessing when it is likely there.
   watchForExamples(win.document, DEFAULT_CONFIGURATION.limits.goal_max_chars,
     examples => shell.host.offerExamples(examples))
+  const baseStatus = panelStartStatus(shell.host)
+  const startStatus: StartStatus = {
+    ...baseStatus,
+    unavailable(failure, retry) {
+      waiting = ''
+      baseStatus.unavailable(failure, retry)
+    },
+  }
   const supervisor: Supervisor = new Supervisor({
     source,
     start: async config => await startEmbeddedRuntime(config, shell, {
         windowToken: pageInstanceId,
         onNewConversation: () => supervisor.newConversation(),
       }),
-    status: panelStartStatus(shell.host),
+    status: startStatus,
     eager,
     onRunning: (runtime, config) => {
       // Only a start the Supervisor accepted reaches here: remembering the session in

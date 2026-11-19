@@ -1,8 +1,9 @@
 import {describe, expect, it, vi} from 'vitest'
 import {DEFAULT_CONFIGURATION} from '../src/contract/panel'
+import {postApprovalRefusal, type ApprovalContext} from '../src/runtime/approvalController'
 import {backoffAfter, classifyTransportError, PanelHost} from '../src/runtime/panelHost'
 import type {PanelActions} from '../src/runtime/panelHost'
-import type {TimelineEntry} from '../src/contract/panel'
+import type {ApprovalRequest, TimelineEntry} from '../src/contract/panel'
 
 function actions(): PanelActions {
   return {
@@ -404,5 +405,90 @@ describe('PanelHost.reconcile updates indeterminate outcome entries in place', (
     expect(host.snapshot().entries[0]?.reconciliation).toEqual({
       outcome: 'failed', settled: true, message: '未生效',
     })
+  })
+})
+
+describe('approval click refusal reporting leaves pending card untouched', () => {
+  it('PanelHost.reportApprovalRefused forwards only to bound runtime actions', () => {
+    const bound = actions()
+    const reportApprovalRefused = vi.fn()
+    const host = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: actions()})
+    host.reportApprovalRefused('ap-1', 'insufficient_coverage')
+    host.bind({...bound, reportApprovalRefused})
+    host.reportApprovalRefused('ap-1', 'insufficient_coverage')
+    expect(reportApprovalRefused).toHaveBeenCalledExactlyOnceWith('ap-1', 'insufficient_coverage')
+  })
+
+  it('postApprovalRefusal posts /approval_refusals without consuming approval or changing panel state', async () => {
+    const request: ApprovalRequest = {
+      schema_version: 1,
+      approval_id: 'ap-1',
+      effect: '更新联系人',
+      targets: ['张三'],
+      expires_at: Date.now() + 60_000,
+      principal_digest: '',
+      turn_id: 't-1',
+      operation_id: 'op-1',
+      kind: 'write',
+    }
+    const panelHost = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: actions()})
+    panelHost.setPendingApproval(request)
+    const post = vi.fn().mockResolvedValue({accepted: true, count: 1, last_code: 'insufficient_coverage'})
+    const save = vi.fn()
+    const panelState = vi.fn()
+    const ctx: ApprovalContext = {
+      sessionId: 'sess-1',
+      stored: {approvals: {}} as ApprovalContext['stored'],
+      panelHost,
+      panelConfiguration: DEFAULT_CONFIGURATION,
+      save,
+      panelState,
+      post,
+      postApproval: vi.fn(),
+    }
+    await postApprovalRefusal(ctx, request, 'insufficient_coverage')
+    expect(post).toHaveBeenCalledWith('/approval_refusals', {
+      schema_version: 1,
+      session_id: 'sess-1',
+      approval_id: 'ap-1',
+      code: 'insufficient_coverage',
+      turn_id: 't-1',
+    })
+    expect(ctx.stored.approvals).toEqual({})
+    expect(panelHost.snapshot().pendingApproval).toEqual(request)
+    expect(save).not.toHaveBeenCalled()
+    expect(panelState).not.toHaveBeenCalled()
+  })
+})
+
+describe('PanelHost.reload retries connected sessions without full page reload', () => {
+  it('routes failed optimistic message notices to retrySubmit and clears notice', () => {
+    const page = actions()
+    const bound = {...actions(), retryNotice: vi.fn()}
+    const host = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: page})
+    host.bind(bound)
+    host.setOptimistic({turnId: 't1', text: '查询客户', failed: true})
+    host.raise('submit_failed', {retryable: true, turnId: 't1'})
+
+    host.reload()
+
+    expect(host.snapshot().notice).toBeNull()
+    expect(host.snapshot().optimistic).toEqual({turnId: 't1', text: '查询客户', failed: false})
+    expect(bound.submit).toHaveBeenCalledExactlyOnceWith('查询客户')
+    expect(bound.retryNotice).not.toHaveBeenCalled()
+  })
+
+  it('routes connected session notices without failed optimistic message to bound.retryNotice', () => {
+    const page = actions()
+    const bound = {...actions(), retryNotice: vi.fn()}
+    const host = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: page})
+    host.bind(bound)
+    host.raise('timeline_failed', {retryable: true})
+
+    host.reload()
+
+    expect(host.snapshot().notice).toBeNull()
+    expect(bound.retryNotice).toHaveBeenCalledOnce()
+    expect(bound.submit).not.toHaveBeenCalled()
   })
 })
