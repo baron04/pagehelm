@@ -214,19 +214,29 @@ def source_digest(*, frontend_only: bool = False) -> str:
 
 def load_model_environment() -> dict:
     sys.path[:0] = [str(ROOT / "src"), str(ROOT / "examples/yudao/src")]
-    from web_operation_agent.modeling.client import load_env
+    from web_operation_agent.modeling.client import resolve_pagehelm_environment
     from web_operation_agent.modeling.spend import UnpricedModel, price_for
-    values = load_env(ROOT / ".env")
-    required = ("AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY", "AGENT_OPENAI_MODEL")
-    missing = [key for key in required if not values.get(key)]
-    if missing:
-        raise LocalError(".env 缺少：" + ", ".join(missing) + "。只需填写本机 .env，无需上传凭据。")
     try:
-        price_for(values["AGENT_OPENAI_MODEL"])
+        resolved = resolve_pagehelm_environment(ROOT, default_mode="verified-operate")
+    except Exception as exc:
+        raise LocalError(f"模型或配置文件无效：{exc}") from exc
+    try:
+        price_for(resolved["AGENT_OPENAI_MODEL"])
     except UnpricedModel as exc:
         raise LocalError("本机模型没有登记价格，无法启动费用核算；请使用已配置计价的模型。") from exc
-    from web_operation_agent_yudao.host.native_server import native_write_options
-    if not str(values.get("WOA_NATIVE_WRITES") or "").strip():
-        values = {**values, "WOA_NATIVE_WRITES": "true"}
-    native_write_options(values)
-    return {key: values[key] for key in (*required, "AGENT_PROVIDER", "WOA_NATIVE_WRITES") if values.get(key)}
+    keys = (
+        "AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY", "AGENT_OPENAI_MODEL",
+        "AGENT_PROVIDER", "WOA_MODE", "WOA_NATIVE_WRITES",
+    )
+    out = {key: str(resolved[key]) for key in keys if resolved.get(key)}
+    numeric = {
+        "daily_allowance_cny": "WOA_DAILY_ALLOWANCE_CNY",
+        "daily_total_cap_cny": "WOA_DAILY_TOTAL_CAP_CNY",
+        "monthly_total_cap_cny": "WOA_MONTHLY_TOTAL_CAP_CNY",
+        "max_sessions": "WOA_MAX_SESSIONS",
+        "turn_timeout_s": "WOA_TURN_TIMEOUT_S",
+    }
+    for src_key, env_key in numeric.items():
+        if src_key in resolved:
+            out[env_key] = str(resolved[src_key])
+    return out

@@ -6,11 +6,14 @@ import http.client
 import ipaddress
 import json
 import math
+import os
 import re
 import select
 import ssl
 import threading
 import time
+import tomllib
+from typing import Mapping
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -42,6 +45,220 @@ def load_env(path: str | Path | None = None) -> dict:
         k, v = line.split("=", 1)
         out[k.strip()] = v.strip().strip('"').strip("'")
     return out
+
+
+PROVIDER_DEFAULTS: dict[str, dict[str, object]] = {
+    "deepseek": {
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-flash",
+        "key_envs": ("DEEPSEEK_API_KEY", "AGENT_OPENAI_API_KEY"),
+    },
+    "qwen": {
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "model": "qwen3.8-flash",
+        "key_envs": ("DASHSCOPE_API_KEY", "QWEN_API_KEY", "AGENT_OPENAI_API_KEY"),
+    },
+    "openai": {
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-6.1-sol",
+        "key_envs": ("OPENAI_API_KEY", "AGENT_OPENAI_API_KEY"),
+    },
+}
+
+OPERATION_MODES = ("read-only", "assisted-draft", "verified-operate")
+_ALLOWED_TOML_KEYS = frozenset({
+    "provider",
+    "model",
+    "base_url",
+    "mode",
+    "daily_allowance_cny",
+    "daily_total_cap_cny",
+    "monthly_total_cap_cny",
+    "max_sessions",
+    "turn_timeout_s",
+})
+_CREDENTIAL_KEY_RE = re.compile(r"(?i)(?:api_?key|secret|token|password)")
+
+
+def expand_operation_mode(mode: str) -> dict[str, object]:
+    """Expand a named PageHelm safety mode into explicit host integration switches."""
+    if not isinstance(mode, str) or mode not in OPERATION_MODES:
+        raise ValueError(f"mode must be one of {', '.join(OPERATION_MODES)}")
+    if mode == "read-only":
+        return {
+            "native_page_admission": "read-only-window",
+            "native_writes": False,
+            "native_submit": False,
+            "native_write_preparation": False,
+            "native_edit_prefill": False,
+        }
+    if mode == "assisted-draft":
+        return {
+            "native_page_admission": "read-only-window",
+            "native_writes": False,
+            "native_submit": False,
+            "native_write_preparation": True,
+            "native_edit_prefill": True,
+        }
+    return {
+        "native_page_admission": "read-only-window",
+        "native_writes": True,
+        "native_submit": True,
+        "native_write_preparation": False,
+        "native_edit_prefill": True,
+    }
+
+
+def _reject_credential_keys(mapping: object) -> None:
+    if not isinstance(mapping, dict):
+        return
+    for key, value in mapping.items():
+        if isinstance(key, str) and _CREDENTIAL_KEY_RE.search(key):
+            raise ValueError("credentials belong in .env, never pagehelm.toml")
+        if isinstance(value, dict):
+            _reject_credential_keys(value)
+
+
+def parse_pagehelm_toml(data: dict) -> dict[str, object]:
+    """Validate and normalize parsed `pagehelm.toml` configuration strictly."""
+    if not isinstance(data, dict):
+        raise ValueError("pagehelm.toml root must be a table")
+    _reject_credential_keys(data)
+    unknown = sorted(set(data) - _ALLOWED_TOML_KEYS)
+    if unknown:
+        raise ValueError(f"unknown pagehelm.toml setting: {', '.join(unknown)}")
+    parsed: dict[str, object] = {}
+    if "provider" in data:
+        provider = data["provider"]
+        if type(provider) is not str or provider not in PROVIDER_DEFAULTS:
+            raise ValueError(f"provider must be one of {', '.join(PROVIDER_DEFAULTS)}")
+        parsed["provider"] = provider
+    if "mode" in data:
+        mode = data["mode"]
+        if type(mode) is not str:
+            raise ValueError("mode must be a string")
+        expand_operation_mode(mode)
+        parsed["mode"] = mode
+    if "model" in data:
+        raw_model = data["model"]
+        model = reported_model_string(raw_model) if type(raw_model) is str else None
+        if not model:
+            raise ValueError("model must be a non-empty valid model identifier")
+        parsed["model"] = model
+    if "base_url" in data:
+        base_url = data["base_url"]
+        if type(base_url) is not str or not base_url.strip():
+            raise ValueError("base_url must be a non-empty string")
+        try:
+            parsed["base_url"] = _provider_base_url(base_url.strip())
+        except ProviderError as exc:
+            raise ValueError(str(exc)) from exc
+    for key in ("daily_allowance_cny", "daily_total_cap_cny", "monthly_total_cap_cny"):
+        if key in data:
+            value = data[key]
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or not 0 < float(value) <= 1_000_000.0):
+                raise ValueError(f"{key} must be a positive finite number")
+            parsed[key] = float(value)
+    bounds = {"max_sessions": (1, 100_000), "turn_timeout_s": (1, 3_600)}
+    for key, (low, high) in bounds.items():
+        if key in data:
+            value = data[key]
+            if type(value) is not int or not low <= value <= high:
+                raise ValueError(f"{key} must be an integer between {low} and {high}")
+            parsed[key] = value
+    return parsed
+
+
+def load_pagehelm_toml(path: str | Path) -> dict[str, object]:
+    """Load and strictly validate a `pagehelm.toml` configuration file."""
+    with Path(path).open("rb") as handle:
+        raw = tomllib.load(handle)
+    return parse_pagehelm_toml(raw)
+
+
+def _infer_provider_from_env(env: Mapping[str, str]) -> str:
+    hits = [
+        name for name, spec in PROVIDER_DEFAULTS.items()
+        if any(key != "AGENT_OPENAI_API_KEY" and str(env.get(key) or "").strip()
+               for key in spec["key_envs"])  # type: ignore[index]
+    ]
+    if len(hits) > 1:
+        raise ProviderError("multiple provider API keys are set; specify provider in pagehelm.toml or AGENT_PROVIDER")
+    return hits[0] if hits else ""
+
+
+def resolve_pagehelm_environment(
+    root: str | Path | None = None,
+    *,
+    env_values: Mapping[str, str] | None = None,
+    toml_path: str | Path | None = None,
+    default_mode: str = "read-only",
+) -> dict[str, object]:
+    """Resolve `pagehelm.toml` + `.env` (or legacy `.env`) into normalized host settings."""
+    expand_operation_mode(default_mode)
+    base_root = Path(root) if root is not None else REPO_ROOT
+    env = dict(env_values) if env_values is not None else load_env(base_root / ".env")
+    config_file = Path(toml_path) if toml_path is not None else (base_root / "pagehelm.toml")
+    toml = load_pagehelm_toml(config_file) if config_file.is_file() else {}
+
+    provider = str(toml.get("provider") or env.get("AGENT_PROVIDER") or "").strip()
+    if not provider and not str(env.get("AGENT_OPENAI_BASE_URL") or "").strip():
+        provider = _infer_provider_from_env(env)
+
+    spec = PROVIDER_DEFAULTS.get(provider)
+    env_url = env.get("AGENT_OPENAI_BASE_URL") if "provider" not in toml else ""
+    env_model = env.get("AGENT_OPENAI_MODEL") if "provider" not in toml else ""
+    raw_base_url = str(toml.get("base_url") or (spec["base_url"] if (spec and "provider" in toml) else env_url) or (spec["base_url"] if spec else "")).strip()
+    raw_model = str(toml.get("model") or (spec["model"] if (spec and "provider" in toml) else env_model) or (spec["model"] if spec else "")).strip()
+    key_candidates = spec["key_envs"] if spec else ("AGENT_OPENAI_API_KEY",)
+    api_key = next((str(env.get(k) or "").strip() for k in key_candidates if str(env.get(k) or "").strip()), "")
+
+    missing = []
+    if not raw_base_url:
+        missing.append("provider/base_url (pagehelm.toml) or AGENT_OPENAI_BASE_URL")
+    if not api_key:
+        missing.append(f"{key_candidates[0]} or AGENT_OPENAI_API_KEY")
+    if not raw_model:
+        missing.append("model (pagehelm.toml) or AGENT_OPENAI_MODEL")
+    if missing:
+        raise ProviderError("missing model configuration: " + ", ".join(missing))
+
+    base_url = _provider_base_url(raw_base_url)
+    model = reported_model_string(raw_model)
+    if not model:
+        raise ProviderError("invalid AGENT_OPENAI_MODEL")
+
+    raw_native = str(env.get("WOA_NATIVE_WRITES") or "").strip().lower()
+    if raw_native and raw_native not in {"true", "false"}:
+        raise ValueError("WOA_NATIVE_WRITES must be true or false")
+    explicit_mode = str(toml.get("mode") or env.get("WOA_MODE") or "").strip()
+    if explicit_mode:
+        options = expand_operation_mode(explicit_mode)
+        if raw_native and (raw_native == "true") != bool(options["native_writes"]):
+            raise ValueError(f"mode {explicit_mode!r} conflicts with WOA_NATIVE_WRITES={raw_native!r}")
+        mode = explicit_mode
+    elif raw_native:
+        mode = "verified-operate" if raw_native == "true" else "read-only"
+        options = expand_operation_mode(mode)
+    else:
+        mode = default_mode
+        options = expand_operation_mode(mode)
+
+    resolved: dict[str, object] = {
+        "AGENT_OPENAI_BASE_URL": base_url,
+        "AGENT_OPENAI_API_KEY": api_key,
+        "AGENT_OPENAI_MODEL": model,
+        "WOA_MODE": mode,
+        "WOA_NATIVE_WRITES": "true" if options["native_writes"] else "false",
+        "mode_options": options,
+    }
+    if provider:
+        resolved["AGENT_PROVIDER"] = provider
+    for key in ("daily_allowance_cny", "daily_total_cap_cny", "monthly_total_cap_cny", "max_sessions", "turn_timeout_s"):
+        if key in toml:
+            resolved[key] = toml[key]
+    return resolved
 
 
 class _ProviderHTTPStatus(Exception):

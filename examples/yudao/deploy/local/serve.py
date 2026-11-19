@@ -192,11 +192,22 @@ def warm_documents(host, front):
 
 
 def host_config(settings: Settings, env: dict) -> native.YudaoHostConfig:
-    """Build the normal local integration; env carries model settings and write opt-in.
+    """Build the normal local integration; env carries model settings and write/mode opt-in.
 
     Addresses, ports and state come from Settings; page admission and approved native
     submission are product defaults, shared with deployment, not caller overrides.
     """
+    extra: dict[str, object] = {}
+    if env.get("WOA_DAILY_ALLOWANCE_CNY"):
+        extra["daily_allowance_cny"] = float(env["WOA_DAILY_ALLOWANCE_CNY"])
+    if env.get("WOA_DAILY_TOTAL_CAP_CNY"):
+        extra["daily_total_cap_cny"] = float(env["WOA_DAILY_TOTAL_CAP_CNY"])
+    if env.get("WOA_MONTHLY_TOTAL_CAP_CNY"):
+        extra["monthly_total_cap_cny"] = float(env["WOA_MONTHLY_TOTAL_CAP_CNY"])
+    if env.get("WOA_MAX_SESSIONS"):
+        extra["max_sessions"] = int(env["WOA_MAX_SESSIONS"])
+    if env.get("WOA_TURN_TIMEOUT_S"):
+        extra["turn_timeout_s"] = int(env["WOA_TURN_TIMEOUT_S"])
     return native.YudaoHostConfig(
         api_base=settings.upstream, public_origin=settings.origin,
         public_agent_url=settings.origin + "/woa-agent", state_dir=settings.state,
@@ -208,16 +219,22 @@ def host_config(settings: Settings, env: dict) -> native.YudaoHostConfig:
         source_release=cfg.RELEASE, native_read_policy=cfg.POLICIES / "fence.json",
         native_page_policy=cfg.POLICIES / "pages.json",
         native_money_policy=cfg.POLICIES / "verified-money.json",
-        native_filter_semantics=cfg.POLICIES / "filters.json", **native.native_write_options(env),
-        native_edit_prefill=False,
+        native_filter_semantics=cfg.POLICIES / "filters.json", **native.mode_write_options(env),
         local_dev_mode=True,
-        model=env["AGENT_OPENAI_MODEL"], model_env=env, daily_allowance_cny=20.0)
+        model=env["AGENT_OPENAI_MODEL"], model_env=env,
+        daily_allowance_cny=float(extra.pop("daily_allowance_cny", 20.0)),
+        **extra)
 
 
 def main():
     environment = int(os.environ["WOA_LOCAL_ENVIRONMENT"])
-    env = {key: os.environ[key] for key in ("AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY", "AGENT_OPENAI_MODEL", "AGENT_PROVIDER", "WOA_NATIVE_WRITES")
-           if os.environ.get(key)}
+    keys = (
+        "AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY", "AGENT_OPENAI_MODEL",
+        "AGENT_PROVIDER", "WOA_MODE", "WOA_NATIVE_WRITES",
+        "WOA_DAILY_ALLOWANCE_CNY", "WOA_DAILY_TOTAL_CAP_CNY",
+        "WOA_MONTHLY_TOTAL_CAP_CNY", "WOA_MAX_SESSIONS", "WOA_TURN_TIMEOUT_S",
+    )
+    env = {key: os.environ[key] for key in keys if os.environ.get(key)}
     settings = Settings(environment, os.environ["WOA_LOCAL_CHECKOUT_ID"], os.environ["WOA_LOCAL_PUBLIC_ORIGIN"],
                         state=Path("/var/lib/woa-yudao"), listen_host="0.0.0.0")
     settings.state.mkdir(parents=True, exist_ok=True, mode=0o700)

@@ -260,9 +260,15 @@ def log_text(text: str, config: cfg.Configuration) -> str:
     return redact_session_handoffs(redact_sensitive_assignments(text))
 
 
+SYNTHETIC_CLOCK_TARGET = "2026-10-25T09:00:00+08:00"
+SYNTHETIC_CLOCK_LIBRARY = cfg.CACHE / "test-clock/libfaketimeMT.so.1"
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="./local", description="本地双实例合成数据验收；默认环境1。")
     parser.add_argument("--env", type=int, choices=(1, 2), default=1, dest="environment")
+    parser.add_argument("--synthetic-clock", action="store_true",
+                        help="将应用与数据库时钟对齐合成数据基准日（2026-10-25T09:00:00+08:00）")
     parser.add_argument("--test-clock", help="仅测试：从带+08:00时区的ISO时间开始走时")
     parser.add_argument("--test-clock-library", help="与容器匹配的libfaketimeMT.so.1绝对路径")
     parser.add_argument("action", nargs="?", default="start", choices=("start", "restart", "stop", "status", "check", "logs"))
@@ -270,11 +276,18 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.component and args.action != "logs":
         parser.error("app仅用于logs")
-    if bool(args.test_clock) != bool(args.test_clock_library):
+    if args.synthetic_clock and args.test_clock:
+        parser.error("--synthetic-clock与--test-clock不能同时指定")
+    if not args.synthetic_clock and bool(args.test_clock) != bool(args.test_clock_library):
         parser.error("--test-clock与--test-clock-library必须同时指定")
-    if args.test_clock and args.action not in {"start", "restart", "check"}:
+    clock_target = SYNTHETIC_CLOCK_TARGET if args.synthetic_clock else args.test_clock
+    clock_library = (args.test_clock_library or str(SYNTHETIC_CLOCK_LIBRARY)) if args.synthetic_clock else args.test_clock_library
+    if clock_target and args.action not in {"start", "restart", "check"}:
         parser.error("测试时钟只用于start/restart/check")
-    config = cfg.Configuration(args.environment, args.test_clock, args.test_clock_library)
+    if args.synthetic_clock and not Path(clock_library).is_file():
+        print(f"环境{args.environment}：缺少测试时钟共享库 {clock_library}；请按操作指南准备 .q0-cache/yudao/test-clock/。\n操作指南：docs/integration/quickstart.md", file=sys.stderr)
+        return 1
+    config = cfg.Configuration(args.environment, clock_target, clock_library)
     try:
         if args.action == "check":
             check(config)

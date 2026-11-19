@@ -54,7 +54,12 @@ coverage/
 
 .env*
 !.env.example
+pagehelm.toml
+pagehelm.local.toml
 .private/
 .sbom-index/
 .playwright-mcp
 .claude/
+frontend/docs/.astro/
+frontend/docs/public/llms.txt
+frontend/docs/public/llms-full.txt

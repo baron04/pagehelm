@@ -104,6 +104,25 @@ def native_write_options(environment) -> dict:
     return {"native_writes": value == "true"}
 
 
+def mode_write_options(environment, *, default_mode: str = "read-only") -> dict:
+    """Expand `WOA_MODE` or legacy `WOA_NATIVE_WRITES` into explicit host write switches."""
+    from web_operation_agent.modeling.client import expand_operation_mode
+
+    mode = str(environment.get("WOA_MODE") or "").strip()
+    has_native = "WOA_NATIVE_WRITES" in environment and str(environment.get("WOA_NATIVE_WRITES") or "").strip() != ""
+    if not mode:
+        if has_native:
+            enabled = native_write_options(environment)["native_writes"]
+            return expand_operation_mode("verified-operate" if enabled else "read-only")
+        return expand_operation_mode(default_mode)
+    options = expand_operation_mode(mode)
+    if has_native:
+        enabled = native_write_options(environment)["native_writes"]
+        if enabled != bool(options["native_writes"]):
+            raise ValueError(f"WOA_MODE={mode!r} conflicts with WOA_NATIVE_WRITES")
+    return options
+
+
 @dataclass(frozen=True)
 class YudaoHostConfig:
     api_base: str
@@ -1069,6 +1088,10 @@ def main(argv=None) -> int:
     ap.add_argument("--native-writes", action="store_true", default=native_write_options(os.environ)["native_writes"],
                     help="enable reviewed typed Skill writes and approved native submission with actor-bound readback; "
                          "ordinary browser submission remains disabled")
+    ap.add_argument("--config", type=Path, default=None,
+                    help="optional path to pagehelm.toml")
+    ap.add_argument("--mode", choices=("read-only", "assisted-draft", "verified-operate"), default=None,
+                    help="operation safety tier expanding into native write/prefill switches")
     ap.add_argument("--model", default=None)
     ap.add_argument("--max-sessions", type=int, default=YudaoHostConfig.max_sessions)
     ap.add_argument("--daily-allowance-cny", type=float,
@@ -1084,6 +1107,49 @@ def main(argv=None) -> int:
     if any(len(item) != 2 for item in commits):
         ap.error("--source-commit requires REPOSITORY=FULL_COMMIT")
     env = {k: os.environ[k] for k in _MODEL_ENV_KEYS if os.environ.get(k)}
+    toml_overrides: dict[str, object] = {}
+    native_writes = a.native_writes
+    native_write_preparation = a.native_write_preparation
+    native_submit = a.native_submit
+    native_edit_prefill = a.native_edit_prefill
+    if a.config is not None:
+        from web_operation_agent.modeling.client import expand_operation_mode, load_pagehelm_toml
+        if not a.config.is_file():
+            ap.error(f"config file not found: {a.config}")
+        try:
+            toml_overrides = load_pagehelm_toml(a.config)
+        except Exception as exc:
+            ap.error(str(exc))
+    has_provider_keys = any(
+        os.environ.get(k) for k in ("DEEPSEEK_API_KEY", "DASHSCOPE_API_KEY", "QWEN_API_KEY", "OPENAI_API_KEY")
+    )
+    if a.config is not None or has_provider_keys:
+        from web_operation_agent.modeling.client import ProviderError, resolve_pagehelm_environment
+        try:
+            env_map = dict(os.environ)
+            if a.mode is not None:
+                env_map["WOA_MODE"] = a.mode
+            resolved = resolve_pagehelm_environment(
+                root=a.config.parent if a.config else None,
+                env_values=env_map,
+                toml_path=a.config,
+                default_mode=a.mode or str(toml_overrides.get("mode") or "read-only"),
+            )
+            env = {k: str(resolved[k]) for k in _MODEL_ENV_KEYS if resolved.get(k)}
+            toml_overrides = resolved
+        except (ProviderError, ValueError):
+            if a.config is not None and not env.get("AGENT_OPENAI_API_KEY"):
+                pass
+            elif a.config is not None:
+                raise
+    effective_mode = a.mode or str(toml_overrides.get("mode") or toml_overrides.get("WOA_MODE") or os.environ.get("WOA_MODE") or "").strip()
+    if effective_mode:
+        from web_operation_agent.modeling.client import expand_operation_mode
+        expanded = expand_operation_mode(effective_mode)
+        native_writes = bool(expanded["native_writes"])
+        native_write_preparation = bool(expanded["native_write_preparation"])
+        native_submit = bool(expanded["native_submit"])
+        native_edit_prefill = bool(expanded["native_edit_prefill"])
     try:
         config = YudaoHostConfig(
             api_base=a.api_base, public_origin=a.public_origin,
@@ -1094,19 +1160,26 @@ def main(argv=None) -> int:
             native_read_policy=a.native_read_policy, native_page_policy=a.native_page_policy,
             native_page_admission=a.native_page_admission,
             native_page_disabled_handlers=frozenset(a.native_page_disable),
-            native_edit_prefill=a.native_edit_prefill,
+            native_edit_prefill=native_edit_prefill,
             native_money_policy=a.native_money_policy,
             native_filter_semantics=a.native_filter_semantics,
             native_guard_port=a.native_guard_port,
-            native_writes=a.native_writes,
-            native_write_preparation=a.native_write_preparation,
-            native_submit=a.native_submit,
+            native_writes=native_writes,
+            native_write_preparation=native_write_preparation,
+            native_submit=native_submit,
             location_bindings=a.location_bindings,
-            max_sessions=a.max_sessions,
-            daily_allowance_cny=a.daily_allowance_cny,
-            daily_total_cap_cny=a.daily_total_cap_cny,
-            monthly_total_cap_cny=a.monthly_total_cap_cny,
+            max_sessions=int(toml_overrides.get("max_sessions", a.max_sessions)),
+            daily_allowance_cny=float(toml_overrides.get("daily_allowance_cny", a.daily_allowance_cny)),
+            daily_total_cap_cny=(
+                a.daily_total_cap_cny if a.daily_total_cap_cny is not None
+                else toml_overrides.get("daily_total_cap_cny")  # type: ignore[arg-type]
+            ),
+            monthly_total_cap_cny=(
+                a.monthly_total_cap_cny if a.monthly_total_cap_cny is not None
+                else toml_overrides.get("monthly_total_cap_cny")  # type: ignore[arg-type]
+            ),
             shutdown_drain_timeout_s=a.shutdown_drain_timeout_s,
+            turn_timeout_s=int(toml_overrides.get("turn_timeout_s", YudaoHostConfig.turn_timeout_s)),
             turn_trace_days=a.turn_trace_days,
             runtime_source=a.runtime_source)
         from .deployment_validation import validate_native_deployment

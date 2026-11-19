@@ -49,17 +49,30 @@ class TheLocalEnvironmentTemplateIsSafeAndUseful(unittest.TestCase):
         self.assertEqual(len(self.values), len(pairs), "duplicate environment setting")
 
     def test_it_documents_the_minimum_model_configuration(self):
-        expected = {"AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY", "AGENT_OPENAI_MODEL"}
-        self.assertFalse(expected - self.values.keys())
-        self.assertFalse(any(self.values[name] for name in expected),
+        self.assertTrue(1 <= len(self.values) <= 3, "only 1-3 API key lines belong in .env.example")
+        self.assertTrue(all(key.endswith("_API_KEY") for key in self.values), self.values)
+        self.assertFalse(any(self.values[name] for name in self.values),
                          "copying the template must not enable a live service")
         self.assertFalse(any(key.startswith("WOA_ODOO_") for key in self.values))
 
     def test_it_contains_neither_a_credential_nor_a_local_path(self):
-        self.assertEqual(self.values["AGENT_OPENAI_API_KEY"], "")
-        text = (ROOT / ".env.example").read_text(encoding="utf-8")
-        self.assertNotRegex(text, r"/(Users|home)/[^/]+/")
-        self.assertNotIn("odoo", text.casefold())
+        for name in (".env.example", "pagehelm.example.toml"):
+            text = (ROOT / name).read_text(encoding="utf-8")
+            self.assertNotRegex(text, r"/(Users|home)/[^/]+/", name)
+            self.assertNotIn("odoo", text.casefold(), name)
+
+    def test_pagehelm_toml_template_parses_cleanly_and_expands_safely(self):
+        import tomllib
+        from web_operation_agent.modeling.client import expand_operation_mode, load_pagehelm_toml
+
+        toml_path = ROOT / "pagehelm.example.toml"
+        self.assertTrue(toml_path.is_file(), "pagehelm.example.toml is missing")
+        parsed = load_pagehelm_toml(toml_path)
+        self.assertIn(parsed.get("provider"), {"deepseek", "qwen", "openai"})
+        self.assertEqual(parsed.get("mode"), "verified-operate")
+        self.assertTrue(expand_operation_mode(str(parsed["mode"]))["native_writes"])
+        raw = tomllib.loads(toml_path.read_text(encoding="utf-8"))
+        self.assertEqual(raw, parsed)
 
 
 class _Copy:

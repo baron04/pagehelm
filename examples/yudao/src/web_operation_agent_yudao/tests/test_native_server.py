@@ -973,6 +973,45 @@ class NativeCliTests(unittest.TestCase):
                 self.assertEqual(0, native.main(args))
             self.assertTrue(host.config.runtime_source)
 
+    def test_config_and_mode_cli_flags_populate_host_config(self):
+        from types import SimpleNamespace as NS
+        from unittest.mock import Mock
+        from web_operation_agent_yudao.host import native_server as native
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fence = root / "fence.json"
+            fence.write_text(json.dumps({"schema_version": 2, "release": "synthetic", "mode": "method-fence",
+                                         "writing_gets": [], "scan": {}}))
+            pages = root / "pages.json"
+            pages.write_text(json.dumps({"schema_version": 1, "release": "synthetic", "review": "synthetic",
+                "handlers": [{"kind": "navigation", "route": "/contacts", "controls": [],
+                              "evidence": "synthetic", "sha256": "a"*64}]}))
+            toml_path = root / "pagehelm.toml"
+            toml_path.write_text('provider = "deepseek"\nmode = "assisted-draft"\nturn_timeout_s = 75\n', encoding="utf-8")
+            host = Mock()
+            host.server.base_url = "http://synthetic.invalid"
+            def compose(config):
+                host.config = config
+                return host
+            def thread(**kwargs):
+                return NS(start=lambda: kwargs["target"]())
+            args = ["--api-base", "http://synthetic.invalid", "--public-origin", "http://synthetic.invalid",
+                    "--state-dir", directory, "--source-release", "synthetic", "--native-read-policy", str(fence),
+                    "--native-page-policy", str(pages), "--config", str(toml_path)]
+            with patch.dict(native.os.environ, {"DEEPSEEK_API_KEY": "synthetic-key"}, clear=True), \
+                    patch.object(native, "YudaoHost", side_effect=compose), \
+                    patch.object(native, "ThreadingHTTPServer"), \
+                    patch.object(native.threading, "Thread", side_effect=thread), \
+                    patch.object(native.threading, "Event") as event, patch.object(native.signal, "signal"):
+                event.return_value.wait.side_effect = KeyboardInterrupt
+                self.assertEqual(0, native.main(args))
+            self.assertEqual(host.config.model_env["AGENT_OPENAI_MODEL"], "deepseek-flash")
+            self.assertEqual(host.config.model_env["AGENT_OPENAI_BASE_URL"], "https://api.deepseek.com")
+            self.assertFalse(host.config.native_writes)
+            self.assertTrue(host.config.native_write_preparation)
+            self.assertTrue(host.config.native_edit_prefill)
+            self.assertEqual(host.config.turn_timeout_s, 75)
+
 
 if __name__ == "__main__":
     unittest.main()

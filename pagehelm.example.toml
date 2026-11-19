@@ -1,0 +1,23 @@
+# Copy to pagehelm.toml when customizing provider, model, or safety mode.
+# Keep API keys in .env, never in this file.
+
+# Built-in providers derive official OpenAI-compatible endpoints and default models:
+# - "deepseek" -> https://api.deepseek.com / deepseek-flash (reads DEEPSEEK_API_KEY)
+# - "qwen"     -> https://dashscope.aliyuncs.com/compatible-mode/v1 / qwen3.8-flash (reads DASHSCOPE_API_KEY)
+# - "openai"   -> https://api.openai.com/v1 / gpt-6.1-sol (reads OPENAI_API_KEY)
+provider = "deepseek"
+
+# Safety tier expanded into explicit host switches:
+# - "read-only"        (default for production hosts: reads & navigation only)
+# - "assisted-draft"   (preparation & form prefill handover; mutation dispatch disabled)
+# - "verified-operate" (local acceptance default: approved writes + same-actor readback)
+mode = "verified-operate"
+
+# Optional overrides and host limits:
+# model = "deepseek-flash"
+# base_url = "https://api.deepseek.com"
+# daily_allowance_cny = 5.0
+# daily_total_cap_cny = 20.0
+# monthly_total_cap_cny = 300.0
+# max_sessions = 300
+# turn_timeout_s = 120

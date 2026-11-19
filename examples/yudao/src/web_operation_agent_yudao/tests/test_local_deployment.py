@@ -51,6 +51,26 @@ class HostConfigurationTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 serve.host_config(settings, {**base, "WOA_NATIVE_WRITES": value})
 
+    def test_host_config_supports_all_three_named_modes(self):
+        settings = serve.Settings(1, "synthetic", "http://localhost:49111", state=Path("/tmp/synthetic-state"))
+        base = {"AGENT_OPENAI_MODEL": "scripted/no-model"}
+        draft = serve.host_config(settings, {**base, "WOA_MODE": "assisted-draft"})
+        self.assertFalse(draft.native_writes)
+        self.assertFalse(draft.native_submit)
+        self.assertTrue(draft.native_write_preparation)
+        self.assertTrue(draft.native_edit_prefill)
+        readonly = serve.host_config(settings, {**base, "WOA_MODE": "read-only"})
+        self.assertFalse(readonly.native_writes)
+        self.assertFalse(readonly.native_write_preparation)
+        self.assertFalse(readonly.native_edit_prefill)
+        verified = serve.host_config(settings, {**base, "WOA_MODE": "verified-operate"})
+        self.assertTrue(verified.native_writes)
+        self.assertTrue(verified.native_submit)
+        self.assertFalse(verified.native_write_preparation)
+        self.assertTrue(verified.native_edit_prefill)
+        with self.assertRaises(ValueError):
+            serve.host_config(settings, {**base, "WOA_MODE": "read-only", "WOA_NATIVE_WRITES": "true"})
+
     def test_local_launcher_defaults_native_writes_on_while_respecting_explicit_false(self):
         base_env = {
             "AGENT_OPENAI_BASE_URL": "https://api.deepseek.com/v1",
@@ -64,6 +84,24 @@ class HostConfigurationTests(unittest.TestCase):
                    return_value={**base_env, "WOA_NATIVE_WRITES": "false"}):
             disabled = cfg.load_model_environment()
         self.assertEqual(disabled["WOA_NATIVE_WRITES"], "false")
+
+    def test_local_launcher_reads_pagehelm_toml_with_minimal_api_key_env(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".env").write_text("DEEPSEEK_API_KEY=synthetic-local-key\n", encoding="utf-8")
+            (root / "pagehelm.toml").write_text(
+                'provider = "deepseek"\nmode = "assisted-draft"\nturn_timeout_s = 95\n',
+                encoding="utf-8",
+            )
+            with patch.object(cfg, "ROOT", root), \
+                    patch("web_operation_agent.modeling.client.REPO_ROOT", root):
+                loaded = cfg.load_model_environment()
+            self.assertEqual(loaded["AGENT_PROVIDER"], "deepseek")
+            self.assertEqual(loaded["AGENT_OPENAI_BASE_URL"], "https://api.deepseek.com")
+            self.assertEqual(loaded["AGENT_OPENAI_MODEL"], "deepseek-flash")
+            self.assertEqual(loaded["WOA_MODE"], "assisted-draft")
+            self.assertEqual(loaded["WOA_NATIVE_WRITES"], "false")
+            self.assertEqual(loaded["WOA_TURN_TIMEOUT_S"], "95")
 
 
 
@@ -126,6 +164,28 @@ class LauncherTests(unittest.TestCase):
                 self.assertEqual(0, command.main(argv))
                 check.assert_called_once_with(cfg.Configuration(number))
                 start.assert_called_once_with(cfg.Configuration(number), restart="restart" in argv)
+
+    def test_synthetic_clock_resolves_baseline_library_and_rejects_conflicts(self):
+        library = self.root / "libfaketimeMT.so.1"
+        library.write_bytes(b"\x7fELFsynthetic")
+        with patch.object(command, "SYNTHETIC_CLOCK_LIBRARY", library), \
+                patch.object(command, "check") as check, \
+                patch.object(command, "start") as start:
+            self.assertEqual(0, command.main(["--synthetic-clock", "check"]))
+            expected = cfg.Configuration(1, command.SYNTHETIC_CLOCK_TARGET, str(library))
+            check.assert_called_once_with(expected)
+            start.assert_not_called()
+
+        missing_lib = self.root / "missing.so"
+        with patch.object(command, "SYNTHETIC_CLOCK_LIBRARY", missing_lib), \
+                redirect_stdout(io.StringIO()):
+            err = io.StringIO()
+            with patch("sys.stderr", err):
+                self.assertEqual(1, command.main(["--synthetic-clock", "check"]))
+            self.assertIn("缺少测试时钟共享库", err.getvalue())
+
+        with self.assertRaises(SystemExit), patch("sys.stderr", io.StringIO()):
+            command.main(["--synthetic-clock", "--test-clock", "2026-10-25T09:00:00+08:00", "check"])
 
     def test_environment_isolation_and_fixed_internal_ports(self):
         a, b = cfg.Configuration(), cfg.Configuration(2)
