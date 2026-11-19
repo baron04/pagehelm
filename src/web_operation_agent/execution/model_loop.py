@@ -594,7 +594,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                 write_lead = (
                     "\n有已安装的写入操作覆盖时，优先直接用 propose_operation(operation, inputs) 提出提案"
                     f"（程序会自动加载对应 Skill；需要查看某个 Skill 的完整规则或参考资料时仍可调用 load_skill{conv_hint}）；"
-                    "以上操作均不适用（如新建无专用操作、含嵌套明细行修改等）时，在用户页用原生表单或行内按钮配合 request_submit 提出批准（仅要求预填时停在提交前）。"
+                    "以上操作均不适用（如新建无专用操作、含嵌套明细行修改等）时，页面表单可只用填表并标出提交按钮完成预填交接（由用户自己点击提交）；表格行内按钮动作可用 request_submit 提出批准。"
                     if getattr(self, "native_submit", None) is not None else
                     "\n只有已安装的写入操作可提出写入；可直接用 propose_operation(operation, inputs) 提出提案（程序自动加载对应 Skill；需查完整规则时仍可调用 load_skill）。"
                 )
@@ -606,7 +606,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             else:
                 write_lead = (
                     "\n有已安装的 Skill 覆盖时，优先加载对应 Skill 再提出它的 typed 操作；"
-                    "Skill 未覆盖的页面表单或行内状态修改，用 request_submit 提出批准（仅要求预填时停在提交前）。"
+                    "Skill 未覆盖的页面表单只做填表预填并标出提交按钮交接（停在提交前），表格行内状态动作可用 request_submit 提出批准。"
                     if getattr(self, "native_submit", None) is not None else
                     "\n只有已安装的 Skill 可提出写入；先加载对应 Skill 再提出它的 typed 操作。"
                 )
@@ -2210,7 +2210,23 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                                            "确实做不到的，用 cannot 或 need_input 如实说明。\n"
                                            + self._page(s, turn)})
                     return self._loop(s, prompt, turn, verified=True)
-            if status == "need_input":
+            handoff = turn.get("handoff")
+            form_handed_over = bool(handoff and handoff[0] == self._page_fingerprint(s.obs))
+            handed_off_cleanly = (
+                form_handed_over
+                and not turn.get("submit_handoff_blocked")
+                and not turn.get("not_executed")
+                and not turn.get("delivery_terminal_refused")
+                and not s.mutation_outcomes
+                and not any(
+                    isinstance(item, dict)
+                    and item.get("status") == "undelivered"
+                    and item.get("kind") == "data"
+                    for item in (finish.get("items") or ())
+                )
+            )
+            effective_status = "done" if status == "cannot" and handed_off_cleanly else status
+            if effective_status == "need_input":
                 s.terminal_reason = "needs_clarification"
                 harness.set_stop_reason(s, "needs_clarification", trace=trace)
                 cleaned_question = self._clean_answer(answer or "请补充信息。")
@@ -2223,7 +2239,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                         s.input_options = [dict(opt) for opt in normalize_input_options(raw_opts)]
                     except ValueError:
                         pass
-            elif status == "cannot":
+            elif effective_status == "cannot":
                 s.terminal_reason = "agent_refused"
                 harness.set_stop_reason(s, "agent_refused", trace=trace)
             elif s.mutation_outcomes:
@@ -2235,13 +2251,11 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             else:
                 harness.set_stop_reason(s, "agent_finished", trace=trace)
             answer = answer or "已完成。"
-            handoff = turn.get("handoff")
-            form_handed_over = bool(handoff and handoff[0] == self._page_fingerprint(s.obs))
             s.answer_targets = answer_targets_for(tuple(turn.get("issued_targets", ())),
                 answer[:getattr(getattr(self, "config", None), "max_user_answer_chars", 4000)],
-                finished=status == "done" and not form_handed_over
+                finished=effective_status == "done" and not form_handed_over
                 and not s.mutation_outcomes and not s.terminal_reason)
-            if status == "done" and form_handed_over:
+            if effective_status == "done" and form_handed_over:
                 # The explicit handoff belongs to the server's verified outcome,
                 # not to whether the model remembered to mention manual submission.
                 answer += f"\n\n**请核对后，手动点击「{handoff[1]}」提交。**"

@@ -527,11 +527,7 @@ describe('Local-dev debug trace inspector (UX-07)', () => {
     expect(host.querySelector('.woa-trace')).toBeNull()
   })
 
-  it('toggles trace details and copies JSON when local_dev_mode is true', async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined)
-    Object.defineProperty(window, 'isSecureContext', {value: true, configurable: true})
-    Object.defineProperty(navigator, 'clipboard', {value: {writeText}, configurable: true})
-
+  it('does not render debug trace controls inside the reply thread even when local_dev_mode is true', () => {
     const snap = makeSnapshot({
       entries: [
         makeEntry('e1', 'goal', '列出订单'),
@@ -547,54 +543,7 @@ describe('Local-dev debug trace inspector (UX-07)', () => {
     const launcher = host.querySelector<HTMLButtonElement>('.woa-launcher')
     if (launcher) act(() => { launcher.click() })
 
-    const traceBox = host.querySelector('[data-testid="woa-debug-trace"]')
-    expect(traceBox).not.toBeNull()
-    expect(host.querySelector('.woa-trace')).not.toBeNull()
-
-    // Closed by default.
-    const toggle = host.querySelector<HTMLButtonElement>('.woa-trace__toggle')!
-    expect(toggle.getAttribute('aria-expanded')).toBe('false')
-    expect(toggle.textContent).toContain(labels.debugTrace)
-    expect(host.querySelector('.woa-trace__detail')).toBeNull()
-
-    // Expand details.
-    act(() => { toggle.click() })
-    expect(toggle.getAttribute('aria-expanded')).toBe('true')
-    expect(toggle.textContent).toContain(labels.debugTraceHide)
-    const detail = host.querySelector('.woa-trace__detail')!
-    expect(detail).not.toBeNull()
-    expect(detail.textContent).toContain(labels.debugTraceRoute)
-    expect(detail.textContent).toContain('table_read')
-    expect(detail.textContent).toContain(labels.debugTraceStopReason)
-    expect(detail.textContent).toContain('finish')
-    expect(detail.textContent).toContain(labels.debugTraceTimings)
-    expect(detail.textContent).toContain('wall 420ms')
-    expect(detail.textContent).toContain('model 300ms')
-    expect(detail.textContent).toContain('tools 120ms')
-    expect(detail.textContent).toContain(labels.debugTraceTokens)
-    expect(detail.textContent).toContain('in 120')
-    expect(detail.textContent).toContain('out 45')
-    expect(detail.textContent).toContain('total 165')
-    expect(detail.textContent).toContain(labels.debugTraceToolChain)
-    expect(detail.textContent).toContain('query_orders')
-    expect(detail.textContent).toContain('95ms')
-    expect(detail.textContent).toContain('ok')
-    expect(detail.textContent).toContain('read_record')
-    expect(detail.textContent).toContain('err')
-    expect(detail.textContent).toContain('not_found')
-    expect(detail.textContent).toContain(labels.debugTraceChecks)
-    expect(detail.textContent).toContain('post_read')
-    expect(detail.textContent).toContain('pass')
-
-    // Copy JSON.
-    const copy = host.querySelector<HTMLButtonElement>('.woa-trace__copy')!
-    expect(copy.textContent).toContain(labels.debugTraceCopy)
-    await act(async () => {
-      copy.click()
-      await Promise.resolve()
-    })
-    expect(writeText).toHaveBeenCalledTimes(1)
-    expect(JSON.parse(writeText.mock.calls[0]![0] as string)).toEqual(sampleTrace)
-    expect(copy.textContent).toContain(labels.copied)
+    expect(host.querySelector('[data-testid="woa-debug-trace"]')).toBeNull()
+    expect(host.querySelector('.woa-trace')).toBeNull()
   })
 })

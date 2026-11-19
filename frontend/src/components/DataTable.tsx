@@ -1,9 +1,8 @@
 import {useMemo, useState} from 'react'
-import {ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Download, Search} from 'lucide-react'
+import {ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Search} from 'lucide-react'
 import type {Labels, StructuredTable} from '../contract/panel'
 import {parseInline, type Block, type Inline} from '../markdown/parse'
 import {inlineText} from '../markdown/plain'
-import {CopyButton} from './CopyButton'
 import {iconProps} from './icon'
 import {renderStaticInline} from './inline'
 
@@ -32,43 +31,6 @@ export function parseNumericCell(raw: string): number | null {
   }
   const value = Number(normalized.replace(/,/g, ''))
   return Number.isFinite(value) ? value : null
-}
-
-/** Escape a single cell per RFC 4180 CSV rules. */
-export function escapeCsvCell(value: string): string {
-  if (/[",\r\n]/.test(value)) {
-    return `"${value.replace(/"/g, '""')}"`
-  }
-  return value
-}
-
-/** Format header + rows as UTF-8 BOM + RFC 4180 CSV (CRLF line endings). */
-export function formatCsv(head: string[], rows: string[][]): string {
-  const lines = [head, ...rows].map(row => row.map(escapeCsvCell).join(','))
-  return `\uFEFF${lines.join('\r\n')}`
-}
-
-/** Format header + rows as tab-separated values suitable for spreadsheet paste. */
-export function formatTsv(head: string[], rows: string[][]): string {
-  const clean = (cell: string) => cell.replace(/[\t\r\n]+/g, ' ')
-  return [head, ...rows].map(row => row.map(clean).join('\t')).join('\n')
-}
-
-function downloadCsv(csv: string, filename = 'table.csv'): void {
-  const blob = new Blob([csv], {type: 'text/csv;charset=utf-8'})
-  if (typeof URL.createObjectURL !== 'function') return
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  link.style.display = 'none'
-  document.body.appendChild(link)
-  try {
-    link.click()
-  } finally {
-    link.remove()
-    window.setTimeout(() => URL.revokeObjectURL?.(url), 1000)
-  }
 }
 
 /** Convert a server-projected StructuredTable into a DataTable block using inline text parsing. */
@@ -105,11 +67,6 @@ export function DataTable({block, labels, allow}: DataTableProps): React.JSX.Ele
     [block.head, columnCount],
   )
 
-  const headText = useMemo(
-    () => headCells.map(cell => inlineText(cell)),
-    [headCells],
-  )
-
   const indexedRows = useMemo<IndexedRow[]>(() => block.rows.map((row, index) => {
     const cells = Array.from({length: columnCount}, (_, col) => row[col] ?? [])
     const text = cells.map(cell => inlineText(cell))
@@ -129,11 +86,14 @@ export function DataTable({block, labels, allow}: DataTableProps): React.JSX.Ele
     return sawNumeric
   }), [block.align, columnCount, indexedRows])
 
+  const paginated = block.rows.length > PAGINATION_THRESHOLD
+
   const filtered = useMemo(() => {
+    if (!paginated) return indexedRows
     const needle = query.trim().toLowerCase()
     if (!needle) return indexedRows
     return indexedRows.filter(row => row.text.some(cell => cell.toLowerCase().includes(needle)))
-  }, [indexedRows, query])
+  }, [indexedRows, paginated, query])
 
   const sorted = useMemo(() => {
     if (!sort) return filtered
@@ -159,7 +119,6 @@ export function DataTable({block, labels, allow}: DataTableProps): React.JSX.Ele
     return copy
   }, [filtered, labels.locale, sort])
 
-  const paginated = block.rows.length > PAGINATION_THRESHOLD
   const totalPages = paginated && pageSize !== 'all'
     ? Math.max(1, Math.ceil(sorted.length / pageSize))
     : 1
@@ -182,38 +141,23 @@ export function DataTable({block, labels, allow}: DataTableProps): React.JSX.Ele
 
   return (
     <div className="woa-datatable">
-      <div className="woa-datatable__toolbar">
-        <label className="woa-datatable__filter">
-          <Search {...iconProps(12)} aria-hidden="true" />
-          <input
-            type="search"
-            value={query}
-            placeholder={labels.tableFilterPlaceholder}
-            aria-label={labels.tableFilterPlaceholder}
-            onChange={event => {
-              setQuery(event.target.value)
-              setPage(1)
-            }}
-          />
-        </label>
-        <div className="woa-datatable__actions">
-          <CopyButton
-            text={() => formatTsv(headText, sorted.map(row => row.text))}
-            label={labels.tableCopyTsv}
-            copiedLabel={labels.copied}
-            className="woa-datatable__action"
-            showLabel
-          />
-          <button
-            type="button"
-            className="woa-datatable__action"
-            onClick={() => downloadCsv(formatCsv(headText, sorted.map(row => row.text)))}
-          >
-            <Download {...iconProps(12)} />
-            <span>{labels.tableDownloadCsv}</span>
-          </button>
+      {paginated && (
+        <div className="woa-datatable__toolbar">
+          <label className="woa-datatable__filter">
+            <Search {...iconProps(12)} aria-hidden="true" />
+            <input
+              type="search"
+              value={query}
+              placeholder={labels.tableFilterPlaceholder}
+              aria-label={labels.tableFilterPlaceholder}
+              onChange={event => {
+                setQuery(event.target.value)
+                setPage(1)
+              }}
+            />
+          </label>
         </div>
-      </div>
+      )}
 
       <div className="woa-md__tablewrap">
         <table className="woa-datatable__table">

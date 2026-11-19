@@ -38,32 +38,23 @@ async function setup(panel: Harness) {
   })
 }
 
-test('submit guide follows nested scrolling in all four directions without scrolling or submitting', async ({open}, info) => {
+test('submit guide keeps pointing cleanly as the target moves without scrolling or submitting', async ({open}, info) => {
   const panel = await open(snapshot(), {width:1440,height:1000,reducedMotion:'reduce'})
   await setup(panel)
   const guide = panel.page.locator('.woa-submit-guide'), line = guide.locator('svg')
   await expect(line).toBeVisible()
   await panel.page.screenshot({path:info.outputPath('guide.png')})
-  for (const [axis, value, text] of [['height','650px','下方'], ['height','120px','上方'],
-    ['width','900px','右侧']] as const) {
-    await panel.page.evaluate(([property, size]) => {
-      const form = document.querySelector('#synthetic-room')!
-      if (property === 'height') (document.querySelector('#spacer') as HTMLElement).style.height = size!
-      else {(document.querySelector('#submit-room') as HTMLElement).style.marginLeft = size!; form.scrollTop=0}
-      if (size === '120px') form.scrollTop = 520
-    }, [axis,value])
-    await expect(guide.locator('[role=status]')).toContainText(text)
-    await expect(line).toBeHidden()
-  }
+  // Even when a parent overflow box is smaller than the target's position (such as a fixed
+  // modal extending below an underlying scroll container), no directional "outside" hint hides the arrow.
   await panel.page.evaluate(() => {
-    const button = document.querySelector('#submit-room') as HTMLElement
-    button.style.marginLeft = '300px'
-    ;(document.querySelector('#tail') as HTMLElement).style.width='1000px'
-    const form = document.querySelector('#synthetic-room')!; form.scrollLeft = 350
+    const form = document.querySelector('#synthetic-room') as HTMLElement
+    form.style.height = '180px'
+    form.style.overflow = 'visible'
+    ;(document.querySelector('#spacer') as HTMLElement).style.height = '320px'
   })
-  await expect(guide.locator('[role=status]')).toContainText('左侧')
-  await panel.page.evaluate(() => {const form = document.querySelector('#synthetic-room')!; form.scrollLeft=0;form.scrollTop=0})
   await expect(line).toBeVisible()
+  await expect(guide).not.toHaveAttribute('data-state', 'outside')
+  await expect(guide.locator('[role=status]')).toBeHidden()
   expect(await panel.page.evaluate(() => (window as unknown as {__submitCount:number}).__submitCount)).toBe(0)
   expect(panel.errors).toEqual([])
 })

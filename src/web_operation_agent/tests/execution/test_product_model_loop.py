@@ -1291,3 +1291,22 @@ class OperationCatalogTests(unittest.TestCase):
         self.assertEqual(len(lines), 1)
         self.assertIn("doc_type*∈[采购订单|库存调拨单]", lines[0])
         self.assertIn("no*", lines[0])
+
+
+class FormHandoffSettlementTests(unittest.TestCase):
+    def test_clean_form_handoff_does_not_end_as_agent_refused_on_cannot(self):
+        fx = LoopFixture([reply(call("finish", status="cannot", answer="表单已填好，请核对后点击确定。"))], lambda *_: None)
+        fx.turn["handoff"] = (fx._page_fingerprint(fx.state.obs), "确定")
+        answer = fx.run()
+        self.assertEqual(fx.state.terminal_reason, "")
+        self.assertIn("请核对后，手动点击「确定」提交。", answer)
+
+    def test_blocked_or_terminal_delivery_refused_handoff_stays_agent_refused(self):
+        for flag in ("submit_handoff_blocked", "delivery_terminal_refused"):
+            with self.subTest(flag=flag):
+                fx = LoopFixture([reply(call("finish", status="cannot", answer="无法完成。"))], lambda *_: None)
+                fx.turn["handoff"] = (fx._page_fingerprint(fx.state.obs), "确定")
+                fx.turn[flag] = True
+                answer = fx.run()
+                self.assertEqual(fx.state.terminal_reason, "agent_refused")
+                self.assertNotIn("手动点击「确定」提交", answer)

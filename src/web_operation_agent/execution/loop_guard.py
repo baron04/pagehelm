@@ -250,6 +250,8 @@ def build_handoff_payload(
             pending.append(entry)
 
     restricted_controls: list[dict[str, str]] = []
+    seen_restricted_refs: set[str] = set()
+    seen_restricted_labels: set[tuple[str, str]] = set()
     elements = getattr(observation, "elements", ()) if observation is not None else ()
     for raw_item in (data.get("restricted_fields") or ())[:12]:
         text = str(raw_item or "").strip()
@@ -274,12 +276,27 @@ def build_handoff_payload(
             ),
             None,
         )
+        resolved_kind = (kind or _infer_restricted_kind(label, matched))[:32]
+        matched_ref = str(matched.ref)[:32] if (matched is not None and getattr(matched, "ref", "")) else ""
+        if matched_ref and matched_ref in seen_restricted_refs:
+            continue
+        display_label = (
+            str(matched.attrs.get("field_label") or "").strip()
+            if matched is not None and str(matched.attrs.get("field_label") or "").strip()
+            else label
+        )[:200]
+        key = (display_label.casefold(), resolved_kind)
+        if key in seen_restricted_labels:
+            continue
+        if matched_ref:
+            seen_restricted_refs.add(matched_ref)
+        seen_restricted_labels.add(key)
         ctrl: dict[str, str] = {
-            "label": label[:200],
-            "kind": (kind or _infer_restricted_kind(label, matched))[:32],
+            "label": display_label,
+            "kind": resolved_kind,
         }
-        if matched is not None and getattr(matched, "ref", ""):
-            ctrl["ref"] = str(matched.ref)[:32]
+        if matched_ref:
+            ctrl["ref"] = matched_ref
         restricted_controls.append(ctrl)
 
     can_undo = bool(isinstance(data.get("previous_fields"), dict) and data.get("previous_fields"))

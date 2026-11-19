@@ -114,6 +114,7 @@ def delivery_correction(executor, s, turn, args, feedback, *, terminal: bool = F
     limit = getattr(getattr(executor, "config", None), "max_user_answer_chars", 4000)
     answer = (original[:max(0, limit - len(note) - 2)] + "\n\n" + note) if original else note[:limit]
     turn.pop("pending_delivery", None)
+    turn["delivery_terminal_refused"] = True
     s.ledger.append(
         "model_delivery_rejected",
         reason=issue.code,

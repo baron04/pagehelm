@@ -1,7 +1,6 @@
 /** Browser-only geometry. These states describe a pointer target, never permission to submit. */
 export interface Box {left: number; top: number; right: number; bottom: number}
-export type Direction = 'above' | 'below' | 'left' | 'right'
-export type TargetView = {kind: 'visible'; box: Box} | {kind: 'outside'; direction: Direction; clip: Box}
+export type TargetView = {kind: 'visible'; box: Box}
   | {kind: 'hidden' | 'disabled' | 'assistant' | 'covered'}
 
 export function clippedBox(element: Element): Box {
@@ -38,11 +37,6 @@ export function targetView(element: HTMLElement, panel: HTMLElement): TargetView
   }
   if (element.matches(':disabled') || element.closest('[aria-disabled="true"],[inert]') ||
       view.getComputedStyle(element).pointerEvents === 'none') return {kind: 'disabled'}
-  const clip = clippedBox(element)
-  const overflow: [Direction, number][] = [['above', clip.top-r.top], ['below', r.bottom-clip.bottom],
-    ['left', clip.left-r.left], ['right', r.right-clip.right]]
-  const outside = overflow.filter(([, distance]) => distance > 1).sort((a, b) => b[1]-a[1])[0]
-  if (outside) return {kind: 'outside', direction: outside[0], clip}
   const samples = [[.5,.5], [.18,.2], [.82,.2], [.18,.8], [.82,.8]]
   let assistant = false, covered = false
   for (const [x=0, y=0] of samples) {

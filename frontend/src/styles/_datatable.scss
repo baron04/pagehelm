@@ -90,6 +90,14 @@
   font-weight: inherit;
   color: inherit;
   text-align: inherit;
+  white-space: nowrap;
+}
+.woa-datatable__table th {
+  white-space: nowrap;
+}
+.woa-datatable__table td[data-align="right"] {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .woa-datatable__sort:hover {
   color: var(--woa-ink);

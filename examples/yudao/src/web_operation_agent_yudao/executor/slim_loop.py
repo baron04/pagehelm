@@ -861,6 +861,25 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
         finally:
             channel.publish = orig_publish
 
+    def _request_submit(self, s, args, turn):
+        element = self._element(s, args.get("index")) if isinstance(args, dict) else None
+        if (element is not None and _business_scope(element.attrs.get("form_scope"))
+                and element.attrs.get("page_control") != "query"
+                and not element.attrs.get("row_id")
+                and plain(element.name) in SUBMIT_WORDS
+                and not turn.get("submit_handoff_blocked")
+                and getattr(getattr(self, "procedures", None), "form_fill", None) is not None):
+            label = self._default_handoff(s, turn)
+            if label:
+                return LoopToolResult(
+                    f"本部署对页面表单只做预填交接，已核验并标出「{label}」，停在提交前交给用户自己点击；"
+                    "请如实说明已填内容和尚未提交，直接调用 finish(status='done') 结束。",
+                    kind="page",
+                    state="completed",
+                    marked=label,
+                )
+        return super()._request_submit(s, args, turn)
+
     def _closing(self, s, turn, args):
         args = super()._closing(s, turn, args)
         table_ref = str(args.get("table_ref") or "").strip()
@@ -904,8 +923,8 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
                 and not turn.get("written") and not turn.get("submit_handoff_blocked")):
             label = self._default_handoff(s, turn)
             said = str(args.get("answer") or "")
-            if not ("尚未提交" in said or "还没有提交" in said or "没有提交" in said):
-                note = (f"表单已按你的要求填好并核验，「{label}」已标出；尚未提交，请核对后自己点击。" if label else
+            if not ("尚未提交" in said or "还没有提交" in said or "没有提交" in said or "停在提交前" in said):
+                note = (f"「{label}」已标出（尚未提交）。" if label else
                         "表单已按你的要求填写，但程序没能核验并标出提交按钮；尚未提交，请核对表单后自己提交。")
                 args = {**args, "answer": (said.rstrip() + "\n\n" + note).strip()}
         return self._close_with_notes(s, turn, args)
@@ -921,8 +940,10 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
                     + "\n\n未标出提交按钮：表单打开时页面自动修改了字段且无法还原，"
                     + (f"直接保存会把 {effects}；" if effects else "直接保存会带入未核对的变化；")
                     + "请核对后自己提交。").strip()}
+        target = (turn.get("submit_targets") or {}).get(turn.get("handoff_target_key")) or {}
         pressed = (self._await_handoff_press(s, turn)
-                   if args.get("status") in ("done", "cannot") and self._submit_allowed(turn) else "")
+                   if target.get("kind") == "row"
+                   and args.get("status") in ("done", "cannot") and self._submit_allowed(turn) else "")
         if pressed:
             args = {**args, "answer": (str(args.get("answer") or "").rstrip() + "\n\n" + pressed).strip()}
         return args
@@ -1243,14 +1264,14 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
                 .replace(
                     "只有下面“已安装的 Skill”覆盖的操作能办：你提出写入提案，用户在批准卡片上确认后，程序执行一次并回读核对。\n"
                     "   - 本轮提供了 Skill 写入工具且用户要求办理其覆盖的事时，先 load_skill，再用已安装操作提出提案；没有对应 Skill 时把表单填好交接。",
-                    "优先用下面“已安装的 Skill”覆盖的操作提出提案；Skill 未覆盖的新增、修改或行内状态动作，"
-                    "在用户页用原生表单或行内按钮配合 request_submit 经批准卡提交（不得因无对应 Skill 而拒绝，唯独涉及密码或本地文件上传时填好其余字段交接）。\n"
-                    "   - 本轮提供了 Skill 写入工具且用户要求办理其覆盖的事时，先 load_skill，再用已安装操作提出提案；没有对应 Skill 且非纯预填时，打开对应页面表单填好后用 request_submit 请求批准提交。",
+                    "优先用下面“已安装的 Skill”覆盖的操作提出提案；Skill 未覆盖（或改走页面表单）的新增、修改，"
+                    "直接在用户页用原生表单填好并通过 then_highlight 标出提交按钮交由用户自己提交（完成预填交接即 finish(status=\"done\")，不对表单调用 request_submit，也不得因无对应 Skill 而拒绝）；行内启停、审核、关闭等无表单动作可配合 request_submit 经批准卡提交。\n"
+                    "   - 本轮提供了 Skill 写入工具且用户要求办理其覆盖的事时，先 load_skill，再用已安装操作提出提案（Skill 自身失败不会阻碍你改用页面表单完成预填交接）；走页面表单时填好字段并标出提交按钮即完成交接。",
                     1,
                 )
                 .replace(
                     "用户要的事里有 Skill 办不到的部分（参数里没有的字段、另一种业务动作）：先如实说明办不到的是哪部分（cannot），不要只办能办的那部分就说完成。",
-                    "用户要的事里若既有 Skill 参数没覆盖某个字段或动作，改走用户页原生表单配合 request_submit 办理；若应用页面本身也不支持，再如实说明办不到的是哪部分（cannot），不要只办能办的那部分就说完成。",
+                    "用户要的事里若既有 Skill 参数没覆盖某个字段或动作，表单字段改走用户页表单预填交接（行内动作可配合 request_submit）；若应用页面本身也不支持，再如实说明办不到的是哪部分（cannot），不要只办能办的那部分就说完成。",
                     1,
                 )
                 + NATIVE_SUBMIT_RULES

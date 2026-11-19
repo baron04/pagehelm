@@ -283,17 +283,14 @@ test.describe('copying an answer', () => {
     expect(panel.errors).toEqual([])
   })
 
-  test('a table offers its own TSV copy and CSV download controls', async ({open}) => {
+  test('a small table omits the search toolbar and redundant TSV/CSV buttons', async ({open}) => {
     const panel = await open(snapshot({entries: [
       entry('e1', 'goal', '列出待开票订单'),
       entry('e2', 'result', ANSWER, {authored: 'server', panel_state: 'success'}),
-    ]}), {clipboard: true})
+    ]}))
     await panel.page.locator('.woa-launcher').click()
-    const toolbar = panel.page.locator('.woa-datatable__toolbar')
-    await expect(toolbar.getByRole('button', {name: labels.tableDownloadCsv})).toBeVisible()
-    await toolbar.getByRole('button', {name: labels.tableCopyTsv}).click()
-    expect(await clipboard(panel.page)).toBe(TABLE)
-    await expect(toolbar.getByRole('button', {name: labels.copied})).toBeVisible()
+    await expect(panel.page.locator('.woa-datatable__table')).toBeVisible()
+    await expect(panel.page.locator('.woa-datatable__toolbar')).toHaveCount(0)
     expect(panel.errors).toEqual([])
   })
 

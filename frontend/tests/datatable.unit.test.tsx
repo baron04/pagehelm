@@ -3,7 +3,7 @@ import {createRoot, type Root} from 'react-dom/client'
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {DEFAULT_CONFIGURATION} from '../src/contract/panel'
 import {Answer} from '../src/components/Answer'
-import {DataTable, escapeCsvCell, formatCsv, formatTsv, parseNumericCell} from '../src/components/DataTable'
+import {DataTable, parseNumericCell} from '../src/components/DataTable'
 import {parseMarkdown} from '../src/markdown/parse'
 import {plainText} from '../src/markdown/plain'
 
@@ -42,15 +42,6 @@ describe('DataTable helpers', () => {
     expect(parseNumericCell('S00007')).toBeNull()
     expect(parseNumericCell('2026-01-15')).toBeNull()
     expect(parseNumericCell('—')).toBeNull()
-  })
-
-  it('formats UTF-8 BOM RFC 4180 CSV and TSV cleanly', () => {
-    expect(escapeCsvCell('plain')).toBe('plain')
-    expect(escapeCsvCell('a, "b"\nc')).toBe('"a, ""b""\nc"')
-    const csv = formatCsv(['名称', '备注'], [['A, B', 'line1\n"q"']])
-    expect(csv.startsWith('\uFEFF')).toBe(true)
-    expect(csv).toBe('\uFEFF名称,备注\r\n"A, B","line1\n""q"""')
-    expect(formatTsv(['名称', '备注'], [['A\tB', 'line1\nline2']])).toBe('名称\t备注\nA B\tline1 line2')
   })
 })
 
@@ -131,7 +122,7 @@ describe('DataTable & Answer (UX-01)', () => {
     expect(host.textContent).toContain('S0003')
   })
 
-  it('filters rows, shows tableNoMatch on empty match, and sorts numeric-aware asc/desc/none', () => {
+  it('hides the filter toolbar for small tables (<= 10 rows) and sorts numeric-aware asc/desc/none', () => {
     const md = [
       '| 名称 | 数量 |',
       '| --- | --- |',
@@ -146,6 +137,9 @@ describe('DataTable & Answer (UX-01)', () => {
     act(() => {
       root.render(createElement(DataTable, {block, labels, allow: () => false}))
     })
+
+    // Small tables do not render the search toolbar.
+    expect(host.querySelector('.woa-datatable__toolbar')).toBeNull()
 
     // Numeric cells auto-align right even without ---: delimiter.
     const bodyCells = host.querySelectorAll('tbody td')
@@ -169,64 +163,31 @@ describe('DataTable & Answer (UX-01)', () => {
     expect(headers[1]?.getAttribute('aria-sort')).toBe('none')
     expect(Array.from(host.querySelectorAll('tbody tr td:first-child')).map(n => n.textContent))
       .toEqual(['B-item', 'A-item', 'C-item'])
-
-    // Text filter.
-    const filter = host.querySelector<HTMLInputElement>(`input[placeholder="${labels.tableFilterPlaceholder}"]`)!
-    act(() => { setInputValue(filter, 'A-item') })
-    expect(host.querySelectorAll('tbody tr')).toHaveLength(1)
-    expect(host.querySelector('tbody td')?.textContent).toBe('A-item')
-
-    act(() => { setInputValue(filter, 'not-found-xyz') })
-    expect(host.querySelector('.woa-datatable__empty')?.textContent).toBe(labels.tableNoMatch)
   })
 
-  it('copies TSV and downloads UTF-8 BOM CSV while keeping plainText intact', async () => {
-    const md = '| 客户 | 金额 |\n| --- | ---: |\n| "Acme, Co" | 1,231.00 |'
-    Object.defineProperty(window, 'isSecureContext', {value: true, configurable: true})
-    const writeText = vi.fn().mockResolvedValue(undefined)
-    Object.defineProperty(navigator, 'clipboard', {value: {writeText}, configurable: true})
-
-    const capturedBlobs: Blob[] = []
-    const createObjectURL = vi.fn((blob: Blob) => {
-      capturedBlobs.push(blob)
-      return 'blob:test-csv'
-    })
-    const revokeObjectURL = vi.fn()
-    Object.defineProperty(URL, 'createObjectURL', {value: createObjectURL, configurable: true})
-    Object.defineProperty(URL, 'revokeObjectURL', {value: revokeObjectURL, configurable: true})
-    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
-
+  it('shows the filter toolbar only for paginated tables (> 10 rows) without copy/csv buttons and keeps plainText intact', () => {
+    const md = makeTableMarkdown(12)
     act(() => {
       root.render(createElement(Answer, {
         text: md, authored: 'server', live: false, labels, allowedOrigins: [],
       }))
     })
 
-    const copyBtn = Array.from(host.querySelectorAll('button')).find(
-      btn => btn.textContent?.includes(labels.tableCopyTsv))!
-    await act(async () => {
-      copyBtn.click()
-      await Promise.resolve()
-    })
-    expect(writeText).toHaveBeenCalledWith('客户\t金额\n"Acme, Co"\t1,231.00')
+    const toolbar = host.querySelector('.woa-datatable__toolbar')!
+    expect(toolbar).not.toBeNull()
+    const filter = toolbar.querySelector<HTMLInputElement>(`input[placeholder="${labels.tableFilterPlaceholder}"]`)!
+    expect(filter).not.toBeNull()
+    expect(toolbar.querySelector('.woa-datatable__actions')).toBeNull()
 
-    const csvBtn = Array.from(host.querySelectorAll('button')).find(
-      btn => btn.textContent?.includes(labels.tableDownloadCsv))!
-    act(() => { csvBtn.click() })
-    expect(createObjectURL).toHaveBeenCalledOnce()
-    expect(clickSpy).toHaveBeenCalledOnce()
-    const csvBytes = await new Promise<Uint8Array>((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer))
-      reader.onerror = () => reject(reader.error)
-      reader.readAsArrayBuffer(capturedBlobs[0]!)
-    })
-    expect(Array.from(csvBytes.slice(0, 3))).toEqual([0xef, 0xbb, 0xbf])
-    const csvText = new TextDecoder('utf-8', {ignoreBOM: true}).decode(csvBytes)
-    expect(csvText).toBe('\uFEFF客户,金额\r\n"""Acme, Co""","1,231.00"')
+    act(() => { setInputValue(filter, 'S0012') })
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(1)
+    expect(host.querySelector('tbody td')?.textContent).toBe('S0012')
 
-    // copyAnswer path (`plainText`) remains untouched.
-    expect(plainText(md)).toBe('客户\t金额\n"Acme, Co"\t1,231.00')
+    act(() => { setInputValue(filter, 'not-found-xyz') })
+    expect(host.querySelector('.woa-datatable__empty')?.textContent).toBe(labels.tableNoMatch)
+
+    const smallMd = '| 客户 | 金额 |\n| --- | ---: |\n| "Acme, Co" | 1,231.00 |'
+    expect(plainText(smallMd)).toBe('客户\t金额\n"Acme, Co"\t1,231.00')
   })
 
   it('keeps foreign links inert inside DataTable cells and allows same-origin links', () => {

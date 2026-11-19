@@ -1,7 +1,7 @@
 /** One browser-local guide to an exact handoff target; it never operates it. */
 import {contained, listen} from '../runtime/contain'
 import {AVOID_TARGET_EVENT} from '../state/geometry'
-import {clippedBox, targetView, type Box, type Direction} from './visibility'
+import {clippedBox, targetView, type Box} from './visibility'
 
 export interface ControlGuide {
   clear(): void
@@ -24,8 +24,6 @@ export function createControlGuide(options: {target: HTMLElement; container: HTM
   turnId: string; current: () => boolean; purpose: 'submit' | 'action'}): ControlGuide | null {
   const {target, container, turnId, current} = options
   const name = options.purpose === 'submit' ? '提交按钮' : '操作位置'
-  const directions: Record<Direction, string> = {above: `↑ ${name}在上方`, below: `↓ ${name}在下方`,
-    left: `← ${name}在左侧`, right: `→ ${name}在右侧`}
   const messages = {hidden: `${name}暂未显示，请检查所在区域。`,
     disabled: options.purpose === 'submit' ? '提交按钮暂不可用，请检查表单必填项和校验提示。'
       : '操作位置暂不可用，请检查页面状态。',
@@ -88,19 +86,8 @@ export function createControlGuide(options: {target: HTMLElement; container: HTM
     const sourceRect = source?.tagName === 'P' ? source.getBoundingClientRect() : null
     const p = panel.getBoundingClientRect(), viewport = win.visualViewport
     const maxX = (viewport?.offsetLeft ?? 0) + (viewport?.width ?? win.innerWidth)
-    const maxY = (viewport?.offsetTop ?? 0) + (viewport?.height ?? win.innerHeight)
     const view = targetView(target, container)
     attr(overlay, 'data-state', view.kind)
-    if (view.kind === 'outside') {
-      const c = view.clip, point = middle(target.getBoundingClientRect())
-      const width = Math.min(240, Math.max(120, c.right-c.left-16))
-      const x = view.direction === 'left' ? c.left+8 : view.direction === 'right' ? c.right-width-8
-        : clamp(point.x-width/2, c.left+8, c.right-width-8)
-      const y = view.direction === 'above' ? c.top+8 : view.direction === 'below' ? c.bottom-44
-        : clamp(point.y-18, c.top+8, c.bottom-44)
-      showHint(directions[view.direction], clamp(x, 8, maxX-width-8), clamp(y, 8, maxY-44), width, 'outside')
-      return
-    }
     if (view.kind !== 'visible') {
       if (view.kind === 'assistant' && panel.dataset.mode !== 'full') {
         const tr = target.getBoundingClientRect()

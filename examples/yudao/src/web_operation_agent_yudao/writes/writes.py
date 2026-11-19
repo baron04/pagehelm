@@ -137,9 +137,11 @@ class NativeWriteHandler:
             for key, value in body.items():
                 # Keep application codes in private args; show selected labels and
                 # original local dates in the approval alongside current values.
+                raw_old = record.get(key)
+                old_text = "（空）" if raw_old in (None, "") else str(raw_old)
                 details.append(change_detail(
                     key,
-                    str(record.get(key, "")),
+                    old_text,
                     str(converted.get(key, supplied.get(aliases.get(key, key)))),
                 ))
             for key in contract.required:

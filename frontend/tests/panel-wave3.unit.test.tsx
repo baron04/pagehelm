@@ -226,16 +226,7 @@ describe('ARC-06 structured tables inside Outcome', () => {
     vi.restoreAllMocks()
   })
 
-  it('renders StructuredTable via DataTable inside .woa-result with title, pagination, filter, sort, TSV/CSV', async () => {
-    Object.defineProperty(window, 'isSecureContext', {value: true, configurable: true})
-    const writeText = vi.fn().mockResolvedValue(undefined)
-    Object.defineProperty(navigator, 'clipboard', {value: {writeText}, configurable: true})
-    const createObjectURL = vi.fn(() => 'blob:wave3-csv')
-    const revokeObjectURL = vi.fn()
-    Object.defineProperty(URL, 'createObjectURL', {value: createObjectURL, configurable: true})
-    Object.defineProperty(URL, 'revokeObjectURL', {value: revokeObjectURL, configurable: true})
-    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
-
+  it('renders StructuredTable via DataTable inside .woa-result with title, pagination, filter, and sort', () => {
     const rows = Array.from({length: 15}, (_, index) => [
       `[C-${String(index + 1).padStart(3, '0')}](http://localhost/customers/${index + 1})`,
       index === 0 ? '[外链](https://evil.example/x)' : `客户 ${index + 1}`,
@@ -285,25 +276,11 @@ describe('ARC-06 structured tables inside Outcome', () => {
     act(() => { sortButtons[2]!.click() })
     expect(result.querySelector('tbody tr td:last-child')?.textContent).toBe('100')
 
-    // Filtering narrows rows.
+    // Filtering narrows rows without redundant export buttons.
     const filter = result.querySelector<HTMLInputElement>('.woa-datatable__filter input')!
     act(() => { setInputValue(filter, 'C-002') })
     expect(result.querySelectorAll('tbody tr')).toHaveLength(1)
-
-    // Copy TSV & download CSV work on filtered/sorted view.
-    const copyBtn = Array.from(result.querySelectorAll<HTMLButtonElement>('.woa-datatable__action')).find(
-      b => b.textContent?.includes(labels.tableCopyTsv))!
-    await act(async () => {
-      copyBtn.click()
-      await Promise.resolve()
-    })
-    expect(writeText).toHaveBeenCalledWith('编号\t名称\t金额\nC-002\t客户 2\t1400')
-
-    const csvBtn = Array.from(result.querySelectorAll<HTMLButtonElement>('.woa-datatable__action')).find(
-      b => b.textContent?.includes(labels.tableDownloadCsv))!
-    act(() => { csvBtn.click() })
-    expect(createObjectURL).toHaveBeenCalledOnce()
-    expect(clickSpy).toHaveBeenCalledOnce()
+    expect(result.querySelector('.woa-datatable__actions')).toBeNull()
   })
 
   it('renders StructuredTable cleanly without title and even when result text is empty', () => {

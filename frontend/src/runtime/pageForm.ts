@@ -345,6 +345,56 @@ async function selectComboboxChoice(
     const opened = await bridge.clickIndex(index)
     if (!opened || (opened as {success?: unknown}).success !== true) return opened
   }
+  // Fast path for very large listboxes (>200 options, e.g. thousands of customers):
+  // avoid running PageController's full-DOM readState() scan over thousands of <li>
+  // option nodes, which can exceed the 30s action timeout. Keeps identical binding,
+  // visibility, uniqueness, scroll-into-view, and post-click verification checks.
+  if (list) {
+    for (let wait = 0; wait < 6 && !visibleElement(popup); wait++) {
+      if (!current() || ownedListbox(element) !== list) {
+        throw new Error('execution_failed: combobox changed before selection')
+      }
+      await sleep(40)
+    }
+    if (visibleElement(popup)) {
+      const allOptions = [...list.querySelectorAll('[role="option"]')].filter(
+        opt => opt.closest('[role="listbox"]') === list,
+      )
+      if (allOptions.length > 200) {
+        const fastMatches = allOptions.filter(opt => optionText(opt) === label)
+        if (fastMatches.length === 0) {
+          const candidate_labels = visibleComboboxOptions(
+            element,
+            browserContract.choice_failure.max_candidates,
+            browserContract.choice_failure.max_label_chars,
+          )
+          const afterDraft = draft()
+          const bound = current() && ownedListbox(element) === list
+          const unchanged = beforeDraft.length === afterDraft.length &&
+            beforeDraft.every((item, i) => item.node === afterDraft[i]!.node && item.state === afterDraft[i]!.state)
+          throw new ChoiceUnavailable(candidate_labels, bound && unchanged,
+            !bound ? 'the form binding changed' : 'local field values changed')
+        }
+        const opt = fastMatches[0]!
+        const disabled = opt.getAttribute('aria-disabled') === 'true' || opt.hasAttribute('disabled')
+        if (fastMatches.length !== 1 || !(opt instanceof HTMLElement) || !visibleElement(opt) || disabled) {
+          throw new Error('execution_failed: combobox option is absent, ambiguous, or disabled')
+        }
+        opt.scrollIntoView({block: 'nearest'})
+        await sleep(30)
+        if (!current() || ownedListbox(element) !== list || !visibleElement(opt)) {
+          throw new Error('execution_failed: combobox changed before selection')
+        }
+        opt.click()
+        await sleep(50)
+        if (!current() || ownedListbox(element) !== list || !matchesCurrent()) {
+          throw new Error('execution_failed: combobox selection was not verified')
+        }
+        entered.remember(element, redactor)
+        return {success: true, message: 'combobox option selected'}
+      }
+    }
+  }
   // What the last scroll was asked for over what it moved: PageController scales the
   // distance it is given, by a factor that is its own.
   let gain = 1

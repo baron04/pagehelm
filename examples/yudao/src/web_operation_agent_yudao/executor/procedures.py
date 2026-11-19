@@ -177,6 +177,7 @@ def _is_restricted_control(element) -> str:
 def _collect_restricted_controls(observation, scope: str = "") -> list[dict[str, str]]:
     found: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
+    seen_refs: set[str] = set()
     for e in getattr(observation, "elements", ()) or ():
         attrs = getattr(e, "attrs", {}) or {}
         if scope and attrs.get("form_scope") != scope:
@@ -184,15 +185,42 @@ def _collect_restricted_controls(observation, scope: str = "") -> list[dict[str,
         kind = _is_restricted_control(e)
         if not kind:
             continue
+        ref = str(getattr(e, "ref", "") or "")
+        if ref and ref in seen_refs:
+            continue
         label = _control_name(e)
         if not label or (label, kind) in seen:
             continue
         seen.add((label, kind))
+        if ref:
+            seen_refs.add(ref)
         item: dict[str, str] = {"label": label, "kind": kind}
-        if getattr(e, "ref", ""):
-            item["ref"] = str(e.ref)
+        if ref:
+            item["ref"] = ref
         found.append(item)
     return found
+
+
+def _restricted_control_aliases(observation, scope: str = "") -> set[str]:
+    """Field keys / names of restricted controls already represented by human labels."""
+    aliases: set[str] = set()
+    for e in getattr(observation, "elements", ()) or ():
+        attrs = getattr(e, "attrs", {}) or {}
+        if scope and attrs.get("form_scope") != scope:
+            continue
+        if not _is_restricted_control(e):
+            continue
+        for candidate in (
+            _control_name(e),
+            attrs.get("field_label"),
+            attrs.get("field"),
+            attrs.get("name"),
+            getattr(e, "name", ""),
+        ):
+            text = str(candidate or "").strip().casefold()
+            if text:
+                aliases.add(text)
+    return aliases
 
 
 def _field_outcome_bucket(turn) -> dict:
@@ -258,12 +286,32 @@ def build_handoff_facts(turn, observation=None, *, scope: str = "") -> dict | No
             pending.append({"name": name})
     restricted_controls = _collect_restricted_controls(observation, scope=scope) if observation is not None else []
     restricted_map = {c["label"]: c for c in restricted_controls}
+    restricted_aliases = _restricted_control_aliases(observation, scope=scope) if observation is not None else set()
     for label in restricted_labels:
-        if label not in restricted_map:
-            restricted_controls.append({"label": label, "kind": "password" if "密码" in label else "restricted"})
-        if label not in seen_pending:
-            seen_pending.add(label)
-            pending.append({"name": label})
+        clean_label = str(label or "").strip()
+        if not clean_label:
+            continue
+        if clean_label in restricted_map or clean_label.casefold() in restricted_aliases:
+            continue
+        label_kind = (
+            "password"
+            if ("密码" in clean_label or "pass" in clean_label.casefold() or "pwd" in clean_label.casefold())
+            else "restricted"
+        )
+        same_kind = [c for c in restricted_controls if c.get("kind") == label_kind]
+        if len(same_kind) == 1 and same_kind[0]["label"].isascii() and not clean_label.isascii():
+            old_lbl = same_kind[0]["label"]
+            restricted_map.pop(old_lbl, None)
+            same_kind[0]["label"] = clean_label
+            restricted_map[clean_label] = same_kind[0]
+            restricted_aliases.add(clean_label.casefold())
+            continue
+        ctrl = {"label": clean_label, "kind": label_kind}
+        restricted_controls.append(ctrl)
+        restricted_map[clean_label] = ctrl
+        if clean_label not in seen_pending:
+            seen_pending.add(clean_label)
+            pending.append({"name": clean_label})
     for ctrl in restricted_controls:
         if ctrl["label"] not in seen_pending:
             seen_pending.add(ctrl["label"])

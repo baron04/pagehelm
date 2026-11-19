@@ -791,11 +791,11 @@ class YudaoGoalData:
             if wanted in d.casefold()
             or (narrow_key and wanted in str(r.get(narrow_key) or "").casefold())
         ]
-        if entity == "crm/contact":
-            # The customer detail's contact list can expose an actor-readable
-            # contact absent from mine/participant/subordinate scenes. Search the
-            # same actor's ordinary contact list even when a scene has matches:
-            # otherwise a same-named contact outside those scenes disappears from
+        if entity in ("crm/contact", "crm/customer"):
+            # The customer list and customer detail's contact list can expose an
+            # actor-readable record absent from mine/participant/subordinate scenes.
+            # Search the same actor's ordinary list even when a scene has matches:
+            # otherwise a same-named record outside those scenes disappears from
             # the candidates and an ambiguous name looks unique. Require exact
             # detail GET for each new candidate before offering its address.
             spec = self._entities[entity]

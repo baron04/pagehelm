@@ -12,7 +12,6 @@ import {formatFullTime, formatTime} from '../state/clock'
 import {Answer} from './Answer'
 import {CopyButton} from './CopyButton'
 import {DataTable, structuredTableToBlock} from './DataTable'
-import {DebugTracePanel} from './DebugTracePanel'
 import {guarded} from './ErrorBoundary'
 import {HandoffCard} from './HandoffCard'
 import {Skeleton} from './Skeleton'
@@ -800,9 +799,6 @@ export function Thread(props: ThreadProps): React.JSX.Element {
                       <span>{labels.retryTurn}</span>
                     </button>
                   </div>
-                )}
-                {props.localDevMode === true && !turn.running && turn.outcome?.debug_trace && (
-                  <DebugTracePanel trace={turn.outcome.debug_trace} labels={labels} />
                 )}
               </div>
             </li>
