@@ -1137,15 +1137,21 @@ def main(argv=None) -> int:
             )
             env = {k: str(resolved[k]) for k in _MODEL_ENV_KEYS if resolved.get(k)}
             toml_overrides = resolved
-        except (ProviderError, ValueError):
-            if a.config is not None and not env.get("AGENT_OPENAI_API_KEY"):
-                pass
-            elif a.config is not None:
-                raise
+        except ValueError as exc:
+            ap.error(str(exc))
+        except ProviderError as exc:
+            if not (a.config is not None and not has_provider_keys and not env.get("AGENT_OPENAI_API_KEY")):
+                ap.error(str(exc))
     effective_mode = a.mode or str(toml_overrides.get("mode") or toml_overrides.get("WOA_MODE") or os.environ.get("WOA_MODE") or "").strip()
     if effective_mode:
         from web_operation_agent.modeling.client import expand_operation_mode
-        expanded = expand_operation_mode(effective_mode)
+        try:
+            expanded = expand_operation_mode(effective_mode)
+        except ValueError as exc:
+            ap.error(str(exc))
+        raw_native_env = str(os.environ.get("WOA_NATIVE_WRITES") or "").strip().lower()
+        if raw_native_env in {"true", "false"} and (raw_native_env == "true") != bool(expanded["native_writes"]):
+            ap.error(f"mode {effective_mode!r} conflicts with WOA_NATIVE_WRITES={raw_native_env!r}")
         native_writes = bool(expanded["native_writes"])
         native_write_preparation = bool(expanded["native_write_preparation"])
         native_submit = bool(expanded["native_submit"])

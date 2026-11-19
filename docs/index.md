@@ -24,7 +24,7 @@ Most enterprise back-office assistants break down in one of two ways: API-only c
 
 | Path | Role |
 | --- | --- |
-| `src/web_operation_agent/` | Application-neutral core: turn execution, `WriteSafetyPipeline`, gateways, schemas, SQLite stores |
+| `src/web_operation_agent/` | Application-neutral core: turn execution, `WritePipeline`, gateways, schemas, SQLite stores |
 | `frontend/` | Browser Runtime (`assistant.js`), Shadow DOM React panel, and shared `element-plus/` helpers |
 | `examples/yudao/` | Full-stack reference adapter (`yudao`) with local dual environments (`./local`) and cloud deployment (`./deploy`) |
 | `testapps/contacts/` | Structurally distinct synthetic Contacts application verifying core contracts and Chromium integration |

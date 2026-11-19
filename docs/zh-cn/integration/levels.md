@@ -14,7 +14,7 @@ description: 从 L0 浏览器面板与仓内 Element Plus 集成层起步，渐�
 | **L0** | 仅需 `/bootstrap` 会话鉴权交换 | Shadow DOM 面板、页面观察、导航与控件定位辅助 | `frontend/src/integrations/element-plus/` |
 | **L1** | 身份、路由与只读数据端口 | 同账号分页读取、内存 `TurnTables` SQL 汇总与 `<DataTable>` | `testapps/contacts/adapter.py` |
 | **L2** | 业务黑话手册与实体规则 | 模块级消歧、编译期删除/状态拒绝条件、可点击追问胶囊 | `examples/yudao/src/.../domain_playbooks/` |
-| **L3** | 写入账本、后置核验与 Skill | Skill 写入、`update_record`/`toggle_record_status`、原生提交与可撤销预填 | `WriteSafetyPipeline`、`SubmitPort`、`YudaoHost` |
+| **L3** | 写入账本、后置核验与 Skill | Skill 写入、`update_record`/`toggle_record_status`、原生提交与可撤销预填 | `WritePipeline`、`SubmitPort`、`YudaoHost` |
 
 ## L0：浏览器 Runtime 与 UI 组件集成层
 
@@ -56,12 +56,12 @@ description: 从 L0 浏览器面板与仓内 Element Plus 集成层起步，渐�
 
 - **业务域手册（`domain_playbooks/*.md`）：** 按业务域编写简明 Markdown 说明（如在商城与 CRM 模块下“客户”的对应实体差异、时间口径定义），由 `load_domain_guide` 按需懒加载。
 - **编译期规则说明（`entity_rules`）：** 在构建或发布阶段从服务端源码白名单提取删除/状态前置条件，供模型准确解释操作被拒原因。
-- **可点击追问胶囊（`UX-02`）：** 当 `find_record` 或只读检索返回 2–4 条同名同账号真实记录时，`finish(status="needs_input", input_options=[...])` 在面板显示可点选胶囊，点击即带明确对象进入下一轮，避免猜测误操作。
+- **可点击追问胶囊：** 当 `find_record` 或只读检索返回 2–4 条同名同账号真实记录时，`finish(status="need_input", options=[...])` 在面板显示可点选胶囊（`input_options`），点击即带明确对象进入下一轮，避免猜测误操作。
 
 ## L3：核验写入、对称约定更新与表单交接
 
-写入功能默认关闭（`read-only`）。启用后，所有三条写入路径统一经由核心 `WriteSafetyPipeline`（`BusinessWriteService`）保护：
+写入功能默认关闭（`read-only`）。启用后，所有三条写入路径统一经由核心 `WritePipeline`（`BusinessWriteService`）保护：
 
 1. **经过评审的类型化写入 Skill（`SKILL.md` + `agents/woa.toml`）：** 声明明确作用实体、相邻易混目标、参数约束与 `ToolDefinition.effect_contract`，并实现同账号后置核验器 `ResultPostconditionVerifier` 与对账器 `MutationReconciliation`。
 2. **扁平对称约定更新（`ConventionWritePort`）：** 声明 `"updates"` 能力，自动为满足“同前缀 update/get 扁平可写字段 1:1 对称、排除密码/明细数组”的实体提供 `update_record`，为严格两态可逆字典提供 `toggle_record_status`，已在 `testapps/contacts` 与 `yudao` 双适配器跑通共享契约测试。
-3. **原生表单提交与可撤销交接（`SubmitPort`、`UX-03`、`UX-05`）：** 实现 `SubmitConventions` 对常规表单/行内操作提供“批准后由程序点击一次并同账号回读”；对于未闭环表单、多行复杂单据或包含密码框/上传控件的场景，回退预填交接，自动滚动聚焦待人工填写的受限控件，并在卡片上提供“撤销本次自动填写”（`undoFormFill`）按修改前原值一键恢复。
+3. **原生表单提交与可撤销交接（`SubmitPort`）：** 实现 `SubmitConventions` 对常规表单/行内操作提供“批准后由程序点击一次并同账号回读”；对于未闭环表单、多行复杂单据或包含密码框/上传控件的场景，回退预填交接，自动滚动聚焦待人工填写的受限控件，并在卡片上提供“撤销本次自动填写”（`undoFormFill`）按修改前原值一键恢复。

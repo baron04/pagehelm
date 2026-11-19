@@ -21,7 +21,7 @@ description: PageHelm 如何划分服务端规划、浏览器 Runtime 与应用�
 +-------------------------------------------------------------------+
 | 应用无关服务端核心（web_operation_agent）                            |
 |  - TurnExecutor & TurnHarness | 出站凭据脱敏与隐私门禁               |
-|  - WriteSafetyPipeline        | 预算限额、配额与 SQLite 持久化       |
+|  - WritePipeline              | 预算限额、配额与 SQLite 持久化       |
 |  - ProgramCheckSpec 检查接口  | TurnTrace 轨迹与时间线投影           |
 +-------------------------------------------------------------------+
           ^ 类型化应用端口（ApplicationPorts & GoalData）
@@ -51,7 +51,7 @@ PageHelm 使用统一的模型驱动执行器（`ModelDrivenTurnExecutor` 配合
 
 - **按标签页实例隔离：** 每个浏览器标签页通过 `sessionStorage` 与 Web Lock 维护独立的 `(application_id, principal_digest, runtime_instance_id)` 会话。新开或复制标签页不会抢占或取消另一标签页的在途任务。
 - **有界历史而不复用陈旧数值：** `ConversationState` 默认仅保留最近 4 轮（总计 `32 KiB`）脱敏对话脉络作为指代参考；历史轮次的业务数值和路由不会当作当前事实直接复用。
-- **结构化进度与轨迹回放：** `TurnTrace` 记录每步模型调用、工具分段耗时与等待细分（`ARC-08`）、首跳路由类别 `first_route_kind` 与 `ProgramCheckSpec` 拦截结果，可导出为脱敏静态回放页 `trace_replay.html`。
+- **结构化进度与轨迹回放：** `TurnTrace` 记录每步模型调用、工具分段耗时与等待细分、首跳路由类别 `first_route_kind` 与 `ProgramCheckSpec` 拦截结果，可导出为脱敏静态回放页 `trace_replay.html`。
 
 ## 当前实现边界
 

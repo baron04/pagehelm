@@ -1,9 +1,9 @@
 ---
 title: 安全边界与核验写入
-description: 写入默认关闭、三档模式权限矩阵、八阶段 WriteSafetyPipeline、出站脱敏、Shadow DOM 与宿主 CSP 信任模型。
+description: 写入默认关闭、三档模式权限矩阵、八阶段 WritePipeline、出站脱敏、Shadow DOM 与宿主 CSP 信任模型。
 ---
 
-> **概要：** 业务写入默认完全关闭（`read-only`）。开启 `verified-operate` 后，所有持久变更仍须经过**八阶段 `WriteSafetyPipeline`**：严格核对值来源与效果投影、弹出鲜活可见审批卡（要求 `event.isTrusted` 与连续可见驻留）、SQLite 事务单次消费派发、提交前重读、同账号回读核验，且对 `INDETERMINATE` 未决状态**永不自动重试**。
+> **概要：** 业务写入默认完全关闭（`read-only`）。开启 `verified-operate` 后，所有持久变更仍须经过**八阶段 `WritePipeline`**：严格核对值来源与效果投影、弹出鲜活可见审批卡（要求 `event.isTrusted` 与连续可见驻留）、SQLite 事务单次消费派发、提交前重读、同账号回读核验，且对 `INDETERMINATE` 未决状态**永不自动重试**。
 
 [English](../../security/verified-writes.md)
 
@@ -17,7 +17,7 @@ description: 写入默认关闭、三档模式权限矩阵、八阶段 WriteSafe
 
 > **提示词、文档与历史会话均无写权限：** 系统规则、Skill 正文、接口返回值、页面文本和过往对话记录都不能授予任何写入许可。删除、作废或角色权限变更等危险动作即使在 `verified-operate` 下也必须先向用户说明影响并取得明确确认，才生成审批卡。
 
-## 八阶段 `WriteSafetyPipeline`
+## 八阶段 `WritePipeline`
 
 无论采用 Skill 写入、约定更新（`update_record` / `toggle_record_status`）还是原生表单提交（`SubmitPort`），统一通过 `BusinessWriteService`：
 

@@ -15,7 +15,7 @@
 First-party Page (assistant.js + Shadow DOM Panel + PageController)
                         ^ authenticated observations / actions / approvals
                         v
-Application-Neutral Server (Executor · TurnHarness · WriteSafetyPipeline · SQLite Store)
+Application-Neutral Server (Executor · TurnHarness · WritePipeline · SQLite Store)
                         ^ typed ports (ApplicationPorts & GoalData)
                         v
 Application Adapter (Identity · Routes · Same-Actor Reads · Verified Writes)

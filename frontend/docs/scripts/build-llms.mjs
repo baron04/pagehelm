@@ -51,7 +51,7 @@ const indexLines = [
   '',
   '## Key Invariants',
   '',
-  '- **Default read-only:** Mutations default off (`read-only`); `assisted-draft` prepares handoff without dispatching; `verified-operate` enforces the 8-stage `WriteSafetyPipeline`.',
+  '- **Default read-only:** Mutations default off (`read-only`); `assisted-draft` prepares handoff without dispatching; `verified-operate` enforces the 8-stage `WritePipeline`.',
   '- **Fresh single-use approvals:** Visible diff cards require `event.isTrusted`, visibility dwell, pre-dispatch re-read, same-actor readback, and never auto-retry `INDETERMINATE` writes.',
   '- **Neutral core:** Model keys, Skill manuals, and policies remain on the server; the Runtime never holds credentials or business plans.',
   '',

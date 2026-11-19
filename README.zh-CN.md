@@ -15,7 +15,7 @@
 第一方页面（assistant.js + Shadow DOM 面板 + PageController）
                         ^ 已认证的页面观察 / 动作回执 / 审批决定
                         v
-应用无关服务端（Executor · TurnHarness · WriteSafetyPipeline · SQLite 存储）
+应用无关服务端（Executor · TurnHarness · WritePipeline · SQLite 存储）
                         ^ 类型化端口（ApplicationPorts & GoalData）
                         v
 应用适配器（身份反查 · 路由校验 · 同账号读取 · 核验写入）

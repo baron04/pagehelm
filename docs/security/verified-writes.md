@@ -1,9 +1,9 @@
 ---
 title: Security & Verified Writes
-description: Default-off writes, the 8-stage WriteSafetyPipeline, mode tiers, outbound credential redaction, Shadow DOM trust limits, and indirect prompt-injection defense.
+description: Default-off writes, the 8-stage WritePipeline, mode tiers, outbound credential redaction, Shadow DOM trust limits, and indirect prompt-injection defense.
 ---
 
-> **TL;DR:** Mutations default **off** (`read-only`). Enabling `verified-operate` still enforces an **8-stage `WriteSafetyPipeline`**: every persistent write requires an exact effect projection, a fresh human approval card (`event.isTrusted` + visibility dwell), single-consume SQLite CAS dispatch, pre-dispatch re-read, same-actor readback, and strict **never-retry** semantics on `INDETERMINATE` outcomes.
+> **TL;DR:** Mutations default **off** (`read-only`). Enabling `verified-operate` still enforces an **8-stage `WritePipeline`**: every persistent write requires an exact effect projection, a fresh human approval card (`event.isTrusted` + visibility dwell), single-consume SQLite CAS dispatch, pre-dispatch re-read, same-actor readback, and strict **never-retry** semantics on `INDETERMINATE` outcomes.
 
 [简体中文](../zh-cn/security/verified-writes.md)
 
@@ -17,7 +17,7 @@ description: Default-off writes, the 8-stage WriteSafetyPipeline, mode tiers, ou
 
 > **Never trust prompt text for authorization:** System prompts, Skill Markdown files, previous turns, API responses, and DOM contents grant **zero** permission to mutate data. Even in `verified-operate`, destructive actions (delete, void, role/permission changes) require explaining impact and obtaining explicit confirmation before creating a card.
 
-## The 8-stage `WriteSafetyPipeline`
+## The 8-stage `WritePipeline`
 
 Every write route (Skill operations, symmetric `ConventionWritePort` updates, and native `SubmitPort` submissions) passes through `BusinessWriteService`:
 

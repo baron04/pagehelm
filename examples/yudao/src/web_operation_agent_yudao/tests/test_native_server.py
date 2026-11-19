@@ -1012,6 +1012,40 @@ class NativeCliTests(unittest.TestCase):
             self.assertTrue(host.config.native_edit_prefill)
             self.assertEqual(host.config.turn_timeout_s, 75)
 
+    def test_config_and_provider_conflicts_fail_loudly_without_swallowing(self):
+        import contextlib
+        import io
+        from web_operation_agent_yudao.host import native_server as native
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fence = root / "fence.json"
+            fence.write_text(json.dumps({"schema_version": 2, "release": "synthetic", "mode": "method-fence",
+                                         "writing_gets": [], "scan": {}}))
+            pages = root / "pages.json"
+            pages.write_text(json.dumps({"schema_version": 1, "release": "synthetic", "review": "synthetic",
+                "handlers": [{"kind": "navigation", "route": "/contacts", "controls": [],
+                              "evidence": "synthetic", "sha256": "a"*64}]}))
+            toml_path = root / "pagehelm.toml"
+            toml_path.write_text('provider = "deepseek"\nmode = "read-only"\n', encoding="utf-8")
+            base_args = ["--api-base", "http://synthetic.invalid", "--public-origin", "http://synthetic.invalid",
+                         "--state-dir", directory, "--source-release", "synthetic",
+                         "--native-read-policy", str(fence), "--native-page-policy", str(pages)]
+            err1 = io.StringIO()
+            with patch.dict(native.os.environ, {"DEEPSEEK_API_KEY": "synthetic-key", "WOA_NATIVE_WRITES": "true"}, clear=True), \
+                    patch.object(native, "YudaoHost", side_effect=AssertionError("should not construct host")), \
+                    contextlib.redirect_stderr(err1), self.assertRaises(SystemExit) as ex1:
+                native.main([*base_args, "--config", str(toml_path)])
+            self.assertEqual(ex1.exception.code, 2)
+            self.assertIn("conflicts with WOA_NATIVE_WRITES", err1.getvalue())
+
+            err2 = io.StringIO()
+            with patch.dict(native.os.environ, {"DEEPSEEK_API_KEY": "k1", "OPENAI_API_KEY": "k2"}, clear=True), \
+                    patch.object(native, "YudaoHost", side_effect=AssertionError("should not construct host")), \
+                    contextlib.redirect_stderr(err2), self.assertRaises(SystemExit) as ex2:
+                native.main(base_args)
+            self.assertEqual(ex2.exception.code, 2)
+            self.assertIn("multiple provider API keys", err2.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

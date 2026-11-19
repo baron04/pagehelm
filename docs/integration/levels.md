@@ -14,7 +14,7 @@ description: Adopt PageHelm incrementally from Level 0 browser panel + Element P
 | **L0** | `/bootstrap` auth exchange only | Shadow DOM panel, semantic page observation, safe navigation & UI helpers | `frontend/src/integrations/element-plus/` |
 | **L1** | Identity, routes & read ports | Same-actor API queries, in-memory `TurnTables` SQL, `<DataTable>` rendering | `testapps/contacts/adapter.py` |
 | **L2** | Domain conventions & rules | Module disambiguation playbooks, compiled `entity_rules`, clickable `need_input` pills | `examples/yudao/src/.../domain_playbooks/` |
-| **L3** | Write journal, verifier & Skills | Typed Skill writes, flat `update_record` / `toggle_record_status`, native submit & undoable form prefill | `WriteSafetyPipeline`, `SubmitPort`, `YudaoHost` |
+| **L3** | Write journal, verifier & Skills | Typed Skill writes, flat `update_record` / `toggle_record_status`, native submit & undoable form prefill | `WritePipeline`, `SubmitPort`, `YudaoHost` |
 
 ## L0: Browser Runtime & UI Component Layer
 
@@ -56,12 +56,12 @@ To prevent terminology mix-ups without writing fragile per-page scripts:
 
 - **Domain playbooks (`domain_playbooks/*.md`):** Supply organization-reviewed Markdown definitions for module-scoped terms (for example, "customer" meaning CRM Customer vs ERP Counterparty depending on active module) and organizational calendar semantics (`date_range`), accessed lazily via `load_domain_guide`.
 - **Compiled business rules (`entity_rules`):** Expose verified backend delete/status transition guards extracted at build/deploy time from source allowlists, cited cleanly when explaining why a record cannot be deleted.
-- **Interactive disambiguation pills (`UX-02`):** When `find_record` or read lookups return 2–4 real same-actor candidates sharing a name, `finish(status="needs_input", input_options=[...])` renders clickable choice pills inside the panel while keeping strict sanitization on payloads.
+- **Interactive disambiguation pills:** When `find_record` or read lookups return 2–4 real same-actor candidates sharing a name, `finish(status="need_input", options=[...])` renders clickable choice pills (`input_options`) inside the panel while keeping strict sanitization on payloads.
 
 ## L3: Verified Writes, Convention Updates & Handover
 
-Writes remain disabled (`read-only`) until explicitly opted in. Once enabled, every mutation routes through the shared `WriteSafetyPipeline` (`BusinessWriteService`):
+Writes remain disabled (`read-only`) until explicitly opted in. Once enabled, every mutation routes through the shared `WritePipeline` (`BusinessWriteService`):
 
 1. **Reviewed typed Skill writes (`SKILL.md` + `agents/woa.toml`):** Author declarative packages scoped to exact entities/pages and verified `ToolDefinition.effect_contract` projections; register `ResultPostconditionVerifier` and `MutationReconciliation`.
 2. **Symmetric flat convention updates (`ConventionWritePort`):** Opt into `"updates"` capability to expose generic `update_record` (only where create/update and detail GET expose 1:1 symmetric flat writable fields without nested line arrays or password/status fields) and `toggle_record_status` (strictly reversible two-state transitions), verified via shared contract tests across both `testapps/contacts` and `yudao`.
-3. **Native form submit & undoable prefill (`SubmitPort`, `UX-03`, `UX-05`):** Declare `SubmitConventions` (`volatile_keys`, `record_key`, `line_key`, `name_key`, `epoch_zone`, `decode_write`) for approved native form submissions, or offer `"Prefill form only"` / partial restricted-control handover (`password` / file inputs are never autofilled, auto-scrolled/focused for human input, and prior autofilled scalar values can be reverted with one click via `undoFormFill`).
+3. **Native form submit & undoable prefill (`SubmitPort`):** Declare `SubmitConventions` (`volatile_keys`, `record_key`, `line_key`, `name_key`, `epoch_zone`, `decode_write`) for approved native form submissions, or offer `"Prefill form only"` / partial restricted-control handover (`password` / file inputs are never autofilled, auto-scrolled/focused for human input, and prior autofilled scalar values can be reverted with one click via `undoFormFill`).

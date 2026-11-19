@@ -21,7 +21,7 @@ description: How PageHelm separates server planning, the browser Runtime, and ap
 +-------------------------------------------------------------------+
 | Application-Neutral Server (web_operation_agent)                  |
 |  -TurnExecutor & TurnHarness  | Outbound secret redaction         |
-|  -WriteSafetyPipeline         | Budget, quota & SQLite stores     |
+|  -WritePipeline               | Budget, quota & SQLite stores     |
 |  -ProgramCheckSpec checks     | TurnTrace & timeline projection   |
 +-------------------------------------------------------------------+
           ^ typed ports (ApplicationPorts & GoalData)
@@ -51,7 +51,7 @@ PageHelm uses a single ReAct turn executor (`ModelDrivenTurnExecutor` paired wit
 
 - **Per-tab isolation:** Each browser tab holds a capability-bound session tied to `(application_id, principal_digest, runtime_instance_id)` stored in `sessionStorage` with Web Lock deduplication across duplicate tabs. Opening a second tab never steals or cancels another tab's active turn.
 - **Bounded history without stale facts:** `ConversationState` keeps at most the last 4 turns (`32 KiB` total, redacted before persistence) as conversational pointers only; numeric facts and UI routes from prior turns are never treated as live truth without re-reading.
-- **Structured timeline & tracing:** `TurnTrace` records per-step model calls, tool durations, wait/UI timings (`ARC-08`), `first_route_kind`, `ProgramCheckSpec` checks, and redacted payloads for HTML replay via `trace_replay.html`.
+- **Structured timeline & tracing:** `TurnTrace` records per-step model calls, tool durations, wait/UI timings, `first_route_kind`, `ProgramCheckSpec` checks, and redacted payloads for HTML replay via `trace_replay.html`.
 
 ## Current operational boundaries
 
