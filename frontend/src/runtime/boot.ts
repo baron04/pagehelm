@@ -540,7 +540,13 @@ export function autoBoot(win: Window = window): Supervisor | null {
     ...baseStatus,
     unavailable(failure, retry) {
       waiting = ''
-      baseStatus.unavailable(failure, retry)
+      baseStatus.unavailable(failure, () => {
+        if (shell.host.snapshot().optimistic?.failed) {
+          shell.host.retrySubmit()
+          return
+        }
+        retry()
+      })
     },
   }
   const supervisor: Supervisor = new Supervisor({

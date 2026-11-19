@@ -136,4 +136,51 @@ describe('the first panel state depends on a locally saved session', () => {
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(submittedAfterBoot).toEqual([])
   })
+
+  it('resends failed cold-start message when the person clicks inline retry', async () => {
+    const startGate: {resolve?: (rt: EmbeddedWebRuntime) => void} = {}
+    const submittedAfterBoot: string[] = []
+    vi.mocked(startEmbeddedRuntime).mockImplementation(async (_cfg, shell) => {
+      return await new Promise<EmbeddedWebRuntime | null>(resolve => {
+        startGate.resolve = rt => {
+          shell?.host.bind({
+            submit: text => { submittedAfterBoot.push(text) },
+            cancel: vi.fn(),
+            decide: vi.fn(),
+            newConversation: vi.fn(),
+            loadOlder: vi.fn(),
+          })
+          resolve(rt)
+        }
+      })
+    })
+    const fakeRuntime = (): EmbeddedWebRuntime => ({
+      stopped: false, endState: '', canRenewSession: () => true,
+      renewSession: vi.fn(), stop: vi.fn(), onStopped: () => () => undefined,
+    } as unknown as EmbeddedWebRuntime)
+    let failBootstrap = true
+    vi.stubGlobal('fetch', vi.fn(async () => failBootstrap
+      ? new Response('unavailable', {status: 503})
+      : new Response(JSON.stringify({
+        config: {
+          endpoint: 'https://agent.test', sessionId: 's-boot-3', clientToken: 'tok',
+          sessionGeneration: 'g3', pageControllerModule: 'http://localhost/pc.js',
+        },
+      }), {status: 200, headers: {'Content-Type': 'application/json'}})))
+
+    const supervisor = autoBoot()!
+    const host = vi.mocked(createShell).mock.results[0]!.value.host
+    await new Promise(resolve => setTimeout(resolve, 0))
+    host.submit('列出订单')
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(supervisor.state.kind).toBe('unavailable')
+    expect(host.snapshot().optimistic).toEqual({turnId: '', text: '列出订单', failed: true})
+
+    failBootstrap = false
+    host.reload()
+    await new Promise(resolve => setTimeout(resolve, 10))
+    startGate.resolve?.(fakeRuntime())
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(submittedAfterBoot).toEqual(['列出订单'])
+  })
 })
