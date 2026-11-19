@@ -103,9 +103,9 @@ fi
 run_gate "product suite" 1 "${PYTHON}" src/web_operation_agent/tests/run_all.py --without-browser
 run_gate "Contacts contracts (no Chromium)" 1 "${PYTHON}" src/web_operation_agent/tests/run_all.py \
   --start-dir testapps/contacts/tests --top-level . --without-browser
-run_gate "yudao example and host suite (offline)" 1 "${PYTHON}" -m unittest discover \
-  -s examples/yudao/src/web_operation_agent_yudao/tests \
-  -t examples/yudao/src
+run_gate "yudao example and host suite (no Chromium)" 1 "${PYTHON}" src/web_operation_agent/tests/run_all.py \
+  --start-dir examples/yudao/src/web_operation_agent_yudao/tests \
+  --top-level examples/yudao/src --without-browser
 run_gate "Yudao evaluation apparatus (offline)" 1 "${PYTHON}" -m unittest discover \
   -s evals/yudao/tests -t .
 # Runtime needs the pinned @page-agent/page-controller asset from frontend/node_modules.
@@ -168,7 +168,7 @@ fi
 
 runtime_blocked() {
   local gate
-  for gate in "embedded Runtime Chromium qualification" "assistant lifecycle faults (I1, I2)"; do
+  for gate in "embedded Runtime Chromium qualification" "assistant lifecycle faults (I1, I2)" "Yudao Chromium qualification"; do
     record "${gate}" BLOCKED "$1"
     [[ "${require_browser}" == "1" ]] && failed+=("${gate}")
   done
@@ -186,6 +186,11 @@ else
     env WOA_PAGE_CONTROLLER_MODULE="${page_controller_module}" "${PYTHON}" \
     src/web_operation_agent/tests/run_all.py --module web_operation_agent.tests.transport.test_assistant_lifecycle \
     --only-browser --strict-skips
+  run_gate "Yudao Chromium qualification" 1 \
+    env WOA_PAGE_CONTROLLER_MODULE="${page_controller_module}" "${PYTHON}" \
+    src/web_operation_agent/tests/run_all.py \
+    --start-dir examples/yudao/src/web_operation_agent_yudao/tests \
+    --top-level examples/yudao/src --only-browser --strict-skips
 fi
 
 # ---------------------------------------------------------------- summary

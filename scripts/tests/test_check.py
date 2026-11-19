@@ -175,9 +175,13 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(git.call_count, 4)
 
     def test_runtime_skill_documents_are_not_plain_docs(self):
-        names, _ = self.names(['examples/yudao/src/web_operation_agent_yudao/skills/query/SKILL.md'])
+        names, plan = self.names(['examples/yudao/src/web_operation_agent_yudao/skills/query/SKILL.md'])
         self.assertIn('Yudao contracts', names)
+        self.assertIn('Yudao Chromium', names)
+        self.assertTrue(plan['needs_python_browser'])
+        self.assertTrue(plan['needs_page_controller'])
         self.assertNotIn('documentation links', names)
+        self.assertNotIn('Yudao Chromium', self.names(['examples/yudao/src/web_operation_agent_yudao/skills/query/SKILL.md'], 'dev')[0])
 
     def test_local_yudao_source_change_runs_only_tests_that_import_it(self):
         _, plan = self.names([check.YUDAO_SRC + 'web_operation_agent_yudao/writes/write_special.py'], 'dev')
@@ -233,17 +237,28 @@ class BrowserCollectionTests(unittest.TestCase):
         import ast
         files = sorted((ROOT / 'src/web_operation_agent/tests').rglob('test_*.py'))
         files += sorted((ROOT / 'testapps/contacts/tests').glob('test_*.py'))
+        files += sorted((ROOT / 'examples/yudao/src/web_operation_agent_yudao/tests').glob('test_*.py'))
         for path in files:
             name = str(path.relative_to(ROOT))
             tree = ast.parse((ROOT / name).read_text())
             for cls in [node for node in tree.body if isinstance(node, ast.ClassDef)]:
                 class_marked = any(isinstance(d, ast.Name) and d.id == 'browser_only' for d in cls.decorator_list)
-                for method in [n for n in cls.body if isinstance(n, ast.FunctionDef)]:
-                    uses_browser = (method.name.startswith('test_') or method.name in {'setUp', 'setUpClass'}) and any(isinstance(n, ast.Name) and n.id in {'sync_playwright', '_chromium_launches'}
+                methods = [n for n in cls.body if isinstance(n, ast.FunctionDef)]
+                any_method_marked = False
+                any_helper_uses_browser = False
+                for method in methods:
+                    uses_browser = any(isinstance(n, ast.Name) and n.id in {'sync_playwright', '_chromium_launches'}
                                        for n in ast.walk(method))
                     method_marked = any(isinstance(d, ast.Name) and d.id == 'browser_only' for d in method.decorator_list)
-                    self.assertTrue(not uses_browser or class_marked or method_marked,
-                                    f'{name}:{cls.name}.{method.name} needs browser_only')
+                    any_method_marked |= method_marked
+                    if method.name.startswith('test_') or method.name in {'setUp', 'setUpClass'}:
+                        self.assertTrue(not uses_browser or class_marked or method_marked,
+                                        f'{name}:{cls.name}.{method.name} needs browser_only')
+                    elif uses_browser:
+                        any_helper_uses_browser = True
+                if any_helper_uses_browser:
+                    self.assertTrue(class_marked or any_method_marked,
+                                    f'{name}:{cls.name} helper uses Playwright without browser_only')
 
 
 class LedgerGuardTests(unittest.TestCase):

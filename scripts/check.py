@@ -232,6 +232,11 @@ def make_plan(paths: list[str], profile: str = 'dev', reason: str = 'explicit pa
         add('Contacts Chromium', ['@python', RUNNER, '--start-dir', 'testapps/contacts/tests', '--top-level', '.',
                                  '--only-browser', '--strict-skips'], needs_python_packages=True,
             needs_page_controller=True, needs_python_browser=True)
+    if profile == 'ci' and yudao:
+        assets()
+        add('Yudao Chromium', ['@python', RUNNER, '--start-dir', YUDAO_TESTS.rstrip('/'),
+                               '--top-level', YUDAO_SRC.rstrip('/'), '--only-browser', '--strict-skips'],
+            needs_python_packages=True, needs_page_controller=True, needs_python_browser=True)
     # Evaluators are development tools with their own owners, not product dependencies.
     for prefix, directory, top in [('evals/yudao/', 'evals/yudao/tests', '.')]:
         if any(f.startswith(prefix) for f in p):

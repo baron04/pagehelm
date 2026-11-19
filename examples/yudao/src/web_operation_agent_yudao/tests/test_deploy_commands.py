@@ -279,10 +279,12 @@ class DeployUploadTests(unittest.TestCase):
         self.assertIsNotNone(shutil.which("rsync"), "rsync must be installed to run upload tests")
         self.temp = tempfile.TemporaryDirectory(prefix="deploy with spaces ")
         self.addCleanup(self.temp.cleanup)
+        self.host_temp = tempfile.TemporaryDirectory(prefix="deploy-host-")
+        self.addCleanup(self.host_temp.cleanup)
         base = Path(self.temp.name)
         self.repo = base / "repo"
         self.cache = base / "cache"
-        self.host = base / "host"
+        self.host = Path(self.host_temp.name) / "yudao"
         self.bin = base / "bin"
         self.bin.mkdir()
         (self.host / "releases").mkdir(parents=True)
@@ -398,17 +400,8 @@ class DeployUploadTests(unittest.TestCase):
             "    nxt.symlink_to(f'releases/{cmd[3]}')\n"
             "    os.replace(nxt, current)\n"
             "    sys.exit(0)\n"
-            "if len(cmd) == 1:\n"
-            "    os.execvp('sh', ['sh', '-c', cmd[0].replace('/opt/yudao', host)])\n"
-            "rewritten = []\n"
-            "for arg in cmd:\n"
-            "    val = arg.replace('/opt/yudao', host)\n"
-            "    if val.startswith('--link-dest='):\n"
-            "        p = val[len('--link-dest='):]\n"
-            "        if not os.path.exists(p) and os.path.exists(p.replace('\\\\ ', ' ')):\n"
-            "            val = '--link-dest=' + p.replace('\\\\ ', ' ')\n"
-            "    rewritten.append(val)\n"
-            "os.execvp(rewritten[0], rewritten)\n",
+            "remote_cmd = cmd[0] if len(cmd) == 1 else ' '.join(cmd)\n"
+            "os.execvp('sh', ['sh', '-c', remote_cmd.replace('/opt/yudao', host)])\n",
             0o755,
         )
 

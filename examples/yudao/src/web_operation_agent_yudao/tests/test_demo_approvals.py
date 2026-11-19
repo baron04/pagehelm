@@ -18,6 +18,7 @@ from web_operation_agent.composition.live import LiveConversationRunner, LivePro
 from web_operation_agent.execution.product import AgentTurnConfig
 from web_operation_agent.execution.events import TurnEvents
 from web_operation_agent.goal.executor import GoalTurnExecutor
+from web_operation_agent.tests import browser_only
 from web_operation_agent.tests.support.skill_chat import SkillDeclarationChat
 from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent_yudao.reads.client import YudaoAccount
@@ -53,6 +54,7 @@ class DemoSourceTests(unittest.TestCase):
             _session_sources(replace(session, source=compiled, executor_mode="hybrid"))
 
 
+@browser_only
 class DemoApprovalTests(unittest.TestCase):
     def test_two_consecutive_cards_then_read_settle_without_waiting_for_all_cards_to_detach(self):
         self._run("approved", 2)

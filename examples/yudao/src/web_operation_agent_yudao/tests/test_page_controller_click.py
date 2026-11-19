@@ -8,6 +8,8 @@ import os
 import unittest
 from pathlib import Path
 
+from web_operation_agent.tests import browser_only
+
 _GENERIC_PATH = os.environ.get("WOA_PAGE_CONTROLLER_MODULE", "")
 GENERIC = Path(_GENERIC_PATH).expanduser() if _GENERIC_PATH else None
 OWNED = Path(__file__).resolve().parents[5] / "frontend" / "dist" / "integrations" / "yudao"
@@ -46,6 +48,7 @@ async mode => {
 """
 
 
+@browser_only
 @unittest.skipUnless(GENERIC is not None and GENERIC.is_file(),
                      "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
 @unittest.skipUnless((OWNED / "yudao-page-controller.js").is_file(),
