@@ -109,7 +109,7 @@ class TheDependencyGateChecksDigestsAndNotOnlyNames(unittest.TestCase):
     """The gap that made this file worth writing."""
 
     FILES = ("requirements.lock", "sbom.json", "THIRD_PARTY.md", "scripts/lock_and_sbom.py",
-             "frontend/package-lock.json",
+             "frontend/package-lock.json", "frontend/docs/package-lock.json",
              # The checker also reconciles the pinned browser asset against the notice.
              "src/web_operation_agent/policies/page_controller.json",
              # The checker imports the release's supported-Python declaration. Keep the

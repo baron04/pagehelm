@@ -31,10 +31,28 @@ class SelectionTests(unittest.TestCase):
         return {row['name'] for row in plan['checks']}, plan
 
     def test_docs_do_not_install_runtime_or_browsers(self):
-        names, plan = self.names(['README.md', 'docs/guides/a.md'])
+        names, plan = self.names(['README.md'])
         self.assertEqual(names, {'documentation links'})
         self.assertFalse(any(plan[key] for key in check.FLAGS))
-        self.assertEqual(check.make_plan(['README.md'], 'compat')['checks'], [])
+        names, plan = self.names(['README.md', 'docs/guides/a.md'])
+        self.assertEqual(names, {'documentation links', 'documentation site'})
+        self.assertTrue(plan['needs_docs_site'] and plan['needs_node'])
+        self.assertFalse(any(plan[key] for key in check.FLAGS if key not in {'needs_docs_site', 'needs_node'}))
+        self.assertEqual(check.make_plan(['README.md', 'docs/guides/a.md'], 'compat')['checks'], [])
+
+    def test_docs_site_separation_and_known_toml_templates(self):
+        names, plan = self.names(['frontend/docs/astro.config.mjs'])
+        self.assertEqual(names, {'changed-file syntax/links', 'repository hygiene', 'documentation site'})
+        self.assertTrue(plan['needs_docs_site'] and plan['needs_node'])
+        self.assertFalse(plan['needs_frontend'])
+        lock_names, lock_plan = self.names(['frontend/docs/package-lock.json'])
+        self.assertIn('dependency lock/SBOM', lock_names)
+        self.assertIn('documentation site', lock_names)
+        self.assertNotIn('wheel contents and isolated imports', lock_names)
+        self.assertFalse(lock_plan['needs_frontend'])
+        toml_names, _ = self.names(['pagehelm.example.toml'])
+        self.assertEqual(toml_names, {'changed-file syntax/links'})
+        self.assertEqual(check.syntax(['pagehelm.example.toml', 'examples/yudao/deploy/deploy.example.toml']), 0)
 
     def test_unchanged_tree_has_no_checks(self):
         self.assertEqual(check.make_plan([])['checks'], [])

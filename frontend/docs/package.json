@@ -1,0 +1,20 @@
+{
+  "name": "@woa/docs",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Bilingual Astro Starlight documentation site and llms.txt generator for PageHelm.",
+  "engines": {
+    "node": ">=22.23.4"
+  },
+  "scripts": {
+    "prebuild": "node scripts/build-llms.mjs",
+    "build": "astro build",
+    "dev": "node scripts/build-llms.mjs && astro dev",
+    "check:site": "node scripts/build-llms.mjs && astro build && node scripts/verify-dist.mjs --base / && ASTRO_BASE=/pagehelm astro build && node scripts/verify-dist.mjs --base /pagehelm"
+  },
+  "devDependencies": {
+    "@astrojs/starlight": "0.43.1",
+    "astro": "7.4.12"
+  }
+}

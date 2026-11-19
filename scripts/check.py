@@ -12,14 +12,15 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE = 'src/web_operation_agent/'
 RUNNER = 'src/web_operation_agent/tests/run_all.py'
-FLAGS = ('needs_python_packages', 'needs_node', 'needs_frontend', 'needs_page_controller',
-         'needs_python_browser', 'needs_node_browser', 'needs_nginx')
+FLAGS = ('needs_python_packages', 'needs_node', 'needs_frontend', 'needs_docs_site',
+         'needs_page_controller', 'needs_python_browser', 'needs_node_browser', 'needs_nginx')
 GROUPS = {
     'answer': ('answer', 'execution', 'goal'),
     'business': ('business', 'execution', 'goal'),
@@ -114,7 +115,8 @@ def make_plan(paths: list[str], profile: str = 'dev', reason: str = 'explicit pa
             plan[key] |= value
 
     def assets():
-        if (profile == 'dev' and not builders and not broad and not any(f.startswith('frontend/') for f in p)
+        if (profile == 'dev' and not builders and not broad
+                and not any(f.startswith('frontend/') and not f.startswith('frontend/docs/') for f in p)
                 and all((ROOT / 'src/web_operation_agent/web_runtime' / name).is_file()
                         for name in ('assistant.js', 'trace_replay.html'))):
             return
@@ -135,22 +137,29 @@ def make_plan(paths: list[str], profile: str = 'dev', reason: str = 'explicit pa
     if docs and 'THIRD_PARTY.md' not in p:
         if profile != 'compat':
             add('documentation links', ['@python', 'scripts/check.py', '--syntax-only', *sorted(p)])
+            if any(f.startswith('docs/') for f in p):
+                add('documentation site', ['npm', 'run', 'check:site'], cwd='frontend/docs', needs_docs_site=True)
+                plan['needs_node'] = plan['needs_docs_site']
         return plan
     tooling = any(f.startswith(('scripts/', '.github/')) or f == 'AGENTS.md' for f in p)
     python_dependencies = any(f in {'pyproject.toml', 'requirements.lock'} or f.endswith('/pyproject.toml') for f in p)
     frontend_dependencies = any(f in {'frontend/package.json', 'frontend/package-lock.json'} for f in p)
-    dependencies = python_dependencies or frontend_dependencies
+    docs_dependencies = any(f in {'frontend/docs/package.json', 'frontend/docs/package-lock.json'} for f in p)
+    product_dependencies = python_dependencies or frontend_dependencies
+    dependencies = product_dependencies or docs_dependencies
     broad = '__all_product__' in p
-    packaging = dependencies or any(f in {'scripts/check_wheel_contents.py', 'scripts/check_wheels.sh',
-                                         'MANIFEST.in', CORE + '__init__.py'} for f in p)
+    packaging = product_dependencies or any(f in {'scripts/check_wheel_contents.py', 'scripts/check_wheels.sh',
+                                                 'MANIFEST.in', CORE + '__init__.py'} for f in p)
     builders = any(f in {'scripts/build_runtime.py', 'scripts/build_panel.py', 'frontend/scripts/build-trace.mjs'} for f in p)
     packaging = packaging or builders
     core_paths = [f for f in p if f.startswith(CORE)]
     production = [f for f in core_paths if not f.startswith(CORE + 'tests/')]
     core = bool(core_paths) or broad or python_dependencies
-    frontend_paths = [f for f in p if f.startswith('frontend/')]
+    docs_site_paths = [f for f in p if f.startswith('frontend/docs/')]
+    frontend_paths = [f for f in p if f.startswith('frontend/') and not f.startswith('frontend/docs/')]
     story_paths = [f for f in frontend_paths if f.startswith(('frontend/stories/', 'frontend/.storybook/')) or '.stories.' in Path(f).name]
     frontend = bool(set(frontend_paths) - set(story_paths)) or broad or builders
+    docs_site = bool(docs_site_paths) or any(f.startswith('docs/') for f in p) or broad
     runtime = ('frontend/vite.runtime.config.ts' in p) or builders or frontend_dependencies or any(f.startswith(('frontend/src/runtime/', 'frontend/src/contract/', 'frontend/src/trace/', 'frontend/trace/')) for f in p)
     transport = any(f.startswith((CORE + 'transport/', CORE + 'state/', CORE + 'composition/',
                                   CORE + 'tests/transport/', CORE + 'tests/state/test_traceview.py')) for f in p)
@@ -169,7 +178,7 @@ def make_plan(paths: list[str], profile: str = 'dev', reason: str = 'explicit pa
     if (production or broad or python_dependencies or 'scripts/check_core_boundary.py' in p
             or any(f.startswith('frontend/src/runtime/') for f in p)):
         add('core boundary', ['@python', 'scripts/check_core_boundary.py'])
-    if (core or yudao or contacts or frontend or tooling or broad
+    if (core or yudao or contacts or frontend or bool(docs_site_paths) or tooling or broad
             or any(f in {'.env.example', '.gitignore', 'SECURITY.md'} for f in p)
             or any(f.startswith('evals/') for f in p)):
         add('repository hygiene', ['@python', 'scripts/check_repo_hygiene.py'])
@@ -201,6 +210,8 @@ def make_plan(paths: list[str], profile: str = 'dev', reason: str = 'explicit pa
             add('panel Chromium', ['npx', 'playwright', 'test', *files], cwd='frontend', needs_node_browser=True)
     if story_paths:
         add('Storybook build', ['npm', 'run', 'build-storybook'], cwd='frontend', needs_frontend=True)
+    if docs_site:
+        add('documentation site', ['npm', 'run', 'check:site'], cwd='frontend/docs', needs_docs_site=True)
     if contacts:
         add('Contacts contracts', ['@python', RUNNER, '--start-dir', 'testapps/contacts/tests',
                                   '--top-level', '.', '--without-browser'], needs_python_packages=True)
@@ -227,7 +238,9 @@ def make_plan(paths: list[str], profile: str = 'dev', reason: str = 'explicit pa
             add(prefix.rstrip('/') + ' apparatus', ['@python', '-m', 'unittest', 'discover', '-s', directory,
                                                     '-t', top], needs_python_packages=True)
     known = lambda f: (f.startswith((CORE, 'frontend/', 'examples/yudao/', 'testapps/contacts/', 'evals/', 'docs/', 'scripts/', '.github/'))
-                       or f in {'AGENTS.md', '.gitignore', '.gitattributes', '.editorconfig', 'LICENSE', 'pyproject.toml', 'requirements.lock', 'sbom.json', 'THIRD_PARTY.md'}
+                       or f in {'AGENTS.md', '.gitignore', '.gitattributes', '.editorconfig', '.env.example',
+                                'LICENSE', 'SECURITY.md', 'pagehelm.example.toml', 'pyproject.toml',
+                                'requirements.lock', 'sbom.json', 'THIRD_PARTY.md'}
                        or Path(f).suffix.lower() in {'.md', '.txt', '.rst'})
     if any(not known(f) for f in p) and not core:
         assets()
@@ -235,7 +248,7 @@ def make_plan(paths: list[str], profile: str = 'dev', reason: str = 'explicit pa
     if packaging:
         assets()
         add('wheel contents and isolated imports', ['bash', 'scripts/check_wheels.sh'], needs_python_packages=True)
-    plan['needs_node'] = plan['needs_frontend'] or plan['needs_page_controller']
+    plan['needs_node'] = plan['needs_frontend'] or plan['needs_docs_site'] or plan['needs_page_controller']
     return plan
 
 
@@ -249,6 +262,8 @@ def syntax(paths: list[str]) -> int:
             ast.parse(path.read_text(), filename=name)
         elif suffix == '.json':
             json.loads(path.read_text())
+        elif suffix == '.toml':
+            tomllib.loads(path.read_text())
         elif suffix == '.sh' or name in {'local', 'deploy'}:
             subprocess.run(['bash', '-n', str(path)], check=True)
         elif suffix in {'.yaml', '.yml'}:

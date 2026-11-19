@@ -5,11 +5,16 @@ import hooks from 'eslint-plugin-react-hooks'
 
 export default [
   {ignores: ['dist', 'storybook-static', 'src/styles/_tokens.generated.scss', 'node_modules',
-    'test-results', 'playwright-report']},
+    'test-results', 'playwright-report', 'docs/.astro', 'docs/dist', 'docs/node_modules',
+    'docs/public/llms*.txt']},
   js.configs.recommended,
   {
     files: ['scripts/**/*.mjs'],
     languageOptions: {globals: {process: 'readonly'}},
+  },
+  {
+    files: ['docs/**/*.mjs'],
+    languageOptions: {globals: {console: 'readonly', process: 'readonly', URL: 'readonly'}},
   },
   {
     files: ['src/integrations/**/*.js', 'tests/**/*.js'],

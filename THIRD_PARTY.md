@@ -152,6 +152,8 @@ These tools are not included in the wheel:
 | [actions/setup-node](https://github.com/actions/setup-node) | `49933ea5288caeca8642d1e84afbd3f7d6820020` (v4) | MIT | CI Node setup and npm cache |
 | [actions/checkout](https://github.com/actions/checkout) | `11d5960a326750d5838078e36cf38b85af677262` (v4) | MIT | CI checkout action |
 | [actions/setup-python](https://github.com/actions/setup-python) | `a26af69be951a213d495a4c3e4e4022e16d87065` (v5) | MIT | CI Python setup action |
+| [Astro](https://github.com/withastro/astro) | `7.4.12` (locked in `frontend/docs/package-lock.json`, devDependency) | MIT | Static documentation site generator (`frontend/docs/`) |
+| [Starlight (`@astrojs/starlight`)](https://github.com/withastro/starlight) | `0.43.1` (locked in `frontend/docs/package-lock.json`, devDependency) | MIT | Documentation theme, i18n routing, and Pagefind search integration (`frontend/docs/`) |
 
 Pinned to commit SHAs rather than tags. A tag is a mutable pointer, and these actions
 install dependencies and run the qualification; `@v4` resolving to different code next
@@ -182,9 +184,10 @@ now mechanical, and `scripts/qualify.sh` runs them:
 1. **Done, and checked.** [`requirements.lock`](requirements.lock) records the resolved
    runtime closure of the core distribution (base and `[browser]`) and the Yudao example
    distribution with a sha256 per artifact, and [`sbom.json`](sbom.json) inventories those
-   plus every `frontend/` npm component with its declared licence and the field that declared
-   it. `scripts/lock_and_sbom.py --check` refuses a build where the lock, the SBOM,
-   `frontend/package-lock.json`, the pinned browser asset and this document disagree.
+   plus every `frontend/` and `frontend/docs/` npm component with its declared licence and the
+   field that declared it. `scripts/lock_and_sbom.py --check` refuses a build where the lock,
+   the SBOM, `frontend/package-lock.json`, `frontend/docs/package-lock.json`, the pinned
+   browser asset and this document disagree.
 2. Still a person's job before publishing: inspect the final wheel and source
    distribution for undeclared vendored code, test applications, credentials, generated
    screenshots, and cache content. `scripts/check_wheel_contents.py` covers the shapes it

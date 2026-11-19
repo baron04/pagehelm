@@ -55,8 +55,8 @@ jobs:
 
           plan = json.loads((Path(os.environ["RUNNER_TEMP"]) / "check-plan.json").read_text())
           prerequisites = (
-              "needs_python_packages", "needs_node", "needs_frontend", "needs_page_controller",
-              "needs_python_browser", "needs_node_browser", "needs_nginx",
+              "needs_python_packages", "needs_node", "needs_frontend", "needs_docs_site",
+              "needs_page_controller", "needs_python_browser", "needs_node_browser", "needs_nginx",
           )
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               for key in prerequisites:
@@ -78,10 +78,16 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: |
+            frontend/package-lock.json
+            frontend/docs/package-lock.json
       - name: Install frontend and PageController dependencies
-        if: steps.plan.outputs.needs_node == 'true'
+        if: steps.plan.outputs.needs_frontend == 'true' || steps.plan.outputs.needs_page_controller == 'true'
         working-directory: frontend
+        run: npm ci
+      - name: Install documentation site dependencies
+        if: steps.plan.outputs.needs_docs_site == 'true'
+        working-directory: frontend/docs
         run: npm ci
       - name: Install Python Chromium
         if: steps.plan.outputs.needs_python_browser == 'true'

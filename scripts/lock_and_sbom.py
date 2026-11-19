@@ -48,6 +48,7 @@ DISTRIBUTIONS = ("", ".[browser]", "examples/yudao")
 #: npm lockfiles whose components are part of the release inventory.
 NPM_LOCKS = {
     "frontend": "assistant panel bundle and pinned PageController dependency",
+    "frontend/docs": "bilingual documentation site built with Astro and Starlight",
 }
 SBOM_VERSION = 1
 
@@ -372,8 +373,9 @@ def render_sbom(inventory: dict) -> dict:
             "properties": [
                 {"name": "woa:note",
                  "value": ("Resolved runtime closure (including optional [browser]) plus the "
-                           "frontend npm components. Browsers installed by `playwright install`, "
-                           "container images and the local fixture applications are separate "
+                           "frontend and docs-site npm components. Browsers installed by "
+                           "`playwright install`, container images and the local fixture "
+                           "applications are separate "
                            "artifacts and are inventoried in THIRD_PARTY.md, not here.")},
             ],
         },
