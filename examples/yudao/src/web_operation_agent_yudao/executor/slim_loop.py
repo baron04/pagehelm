@@ -1147,7 +1147,28 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
         prefill_port = getattr(getattr(self, "profile", None), "mutation_prefill", None)
         if prefill_port is not None and hasattr(prefill_port, "last_handoff_facts"):
             prefill_port.last_handoff_facts = None
+        if prefill_port is not None and hasattr(prefill_port, "last_field_outcomes"):
+            prefill_port.last_field_outcomes = None
         result = super()._propose(s, writes, operation, inputs, turn)
+        field_outcomes = getattr(prefill_port, "last_field_outcomes", None)
+        if isinstance(field_outcomes, dict):
+            target_outcomes = turn.setdefault("form_field_outcomes", {})
+            for dict_key in ("applied_fields", "rejected_fields"):
+                val = field_outcomes.get(dict_key)
+                if isinstance(val, dict) and val:
+                    target_outcomes.setdefault(dict_key, {}).update(val)
+            prev_val = field_outcomes.get("previous_fields")
+            if isinstance(prev_val, dict) and prev_val:
+                prev_bucket = target_outcomes.setdefault("previous_fields", {})
+                for k, v in prev_val.items():
+                    prev_bucket.setdefault(k, v)
+            restr_val = field_outcomes.get("restricted_fields")
+            if restr_val:
+                existing = list(target_outcomes.get("restricted_fields") or ())
+                for item in restr_val:
+                    if item not in existing:
+                        existing.append(item)
+                target_outcomes["restricted_fields"] = tuple(existing)
         handoff_facts = getattr(prefill_port, "last_handoff_facts", None) or (
             getattr(ctx, "handoff_facts", None) if ctx is not None else None
         )

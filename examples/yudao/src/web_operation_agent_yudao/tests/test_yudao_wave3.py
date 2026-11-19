@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import contextlib
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import json
 import tempfile
 import time
@@ -447,6 +447,86 @@ class Wave3Arc04Arc06Ux02Tests(unittest.TestCase):
         self.assertEqual(res.state, "completed")
         self.assertEqual(executed[0][0], "select")
         self.assertEqual(executed[0][1]["ref"], "e1")
+
+    def test_prefill_handoff_supports_frozen_procedure_context(self):
+        from web_operation_agent_yudao.writes.mutation_prefill import YudaoMutationPrefill
+
+        ctx = _op_context()
+
+        class _Review:
+            def permits(self, kind, path, control=""):
+                return path == "/erp/supplier" and kind in {"form_entry", "fields"}
+
+            def labels_on(self, path):
+                return {"status": "开启状态"}
+
+        dialog_obs = PageObservation(
+            1, 2, "http://synthetic.invalid/erp/supplier", "Supplier", [],
+            [
+                ElementRef("e1", "radiogroup", "开启状态", "div", 2, {
+                    "form_scope": "dialog:1",
+                    "form_instance": "i1",
+                    "field_label": "开启状态",
+                    "selected_option": "",
+                    "radio_options": json.dumps([{"label": "开启", "value": "0"}, {"label": "关闭", "value": "1"}], ensure_ascii=False),
+                }),
+                ElementRef("e2", "button", "确定", "button", 2, {"form_scope": "dialog:1", "form_instance": "i1"}),
+            ],
+            "synthetic", render_state="ready", page_route="/erp/supplier",
+        )
+        proposal = BusinessMutationProposal(
+            "erp_supplier_create",
+            {"entity": "erp/supplier", "operation": "erp_supplier_create", "actor": "9",
+             "before": {}, "choices": [], "relations": [], "body": {"status": 0}},
+            "新建ERP 供应商资料", ("开启",), "4" * 32,
+            operation_context_digest=ctx.binding_digest,
+        )
+        prefill = YudaoMutationPrefill(NS(get=lambda *a, **kw: None), object(), _Review())
+        offer = prefill.offer(proposal, context=ctx, observation=dialog_obs)
+        self.assertIsNotNone(offer)
+
+        state = {"obs": dialog_obs}
+
+        class _Page:
+            def checkpoint(self):
+                return None
+
+            def execute(self, action, args, **_kw):
+                if action == "select":
+                    updated = [
+                        replace(el, attrs={**el.attrs, "selected_option": args["option_label"]})
+                        if el.ref == args["ref"] else el
+                        for el in state["obs"].elements
+                    ]
+                    state["obs"] = replace(state["obs"], elements=updated)
+                return NS(state="completed", dispatch="acknowledged", error_code="",
+                          receipt=ActionReceipt(1, f"c-{action}", action, args, True, observation=state["obs"]))
+
+            def handoff(self, fields, submit):
+                return NS(
+                    state="completed",
+                    dispatch="acknowledged",
+                    error_code="",
+                    receipt=ActionReceipt(1, "c-handoff", "handoff_form", {"fields": fields, "submit": submit}, True, observation=state["obs"]),
+                )
+
+        @dataclass(frozen=True)
+        class _FrozenContext:
+            operation: object
+            page: object
+            principal: object
+            audit: object
+
+            @property
+            def obs(self):
+                return state["obs"]
+
+        frozen_ctx = _FrozenContext(operation=ctx, page=_Page(), principal=ctx.principal, audit=lambda *a, **kw: None)
+        res = prefill.handoff(offer, proposal, context=frozen_ctx)
+        self.assertEqual(res.state, "completed")
+        self.assertIsNotNone(prefill.last_handoff_facts)
+        self.assertTrue(prefill.last_field_outcomes["applied_fields"])
+        self.assertEqual(prefill.last_field_outcomes["applied_fields"].get("开启状态"), "开启")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 """Exact CRM contact and general mappable Yudao form proposal to guarded native prefill."""
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from urllib.parse import urlsplit
 
 from web_operation_agent.business.forms import ApplicationFormValue
@@ -82,28 +83,35 @@ def _is_restricted_element(element) -> bool:
     )
 
 
+def _try_setattr(target_obj, attr: str, value) -> None:
+    try:
+        setattr(target_obj, attr, value)
+    except (FrozenInstanceError, AttributeError, TypeError):
+        pass
+
+
 def _record_field_outcomes(target_obj, *, applied=None, rejected=None, previous=None, restricted=()):
     if target_obj is None:
         return
     if applied:
         cur = dict(getattr(target_obj, "applied_fields", {}) or {})
         cur.update(applied)
-        setattr(target_obj, "applied_fields", cur)
+        _try_setattr(target_obj, "applied_fields", cur)
     if rejected:
         cur = dict(getattr(target_obj, "rejected_fields", {}) or {})
         cur.update(rejected)
-        setattr(target_obj, "rejected_fields", cur)
+        _try_setattr(target_obj, "rejected_fields", cur)
     if previous:
         cur = dict(getattr(target_obj, "previous_fields", {}) or {})
         for key, value in previous.items():
             cur.setdefault(key, value)
-        setattr(target_obj, "previous_fields", cur)
+        _try_setattr(target_obj, "previous_fields", cur)
     if restricted:
         existing = list(getattr(target_obj, "restricted_fields", ()) or ())
         for item in restricted:
             if item not in existing:
                 existing.append(item)
-        setattr(target_obj, "restricted_fields", tuple(existing))
+        _try_setattr(target_obj, "restricted_fields", tuple(existing))
 
 
 def _attach_handoff_facts(context, *, applied_fields, rejected_fields, restricted_controls,
@@ -137,16 +145,10 @@ def _attach_handoff_facts(context, *, applied_fields, rejected_fields, restricte
             }
             for lbl in restricted_controls
         ]
-    try:
-        setattr(context, "handoff_facts", handoff)
-    except Exception:
-        pass
+    _try_setattr(context, "handoff_facts", handoff)
     operation = getattr(context, "operation", None)
     if operation is not None:
-        try:
-            setattr(operation, "handoff_facts", handoff)
-        except Exception:
-            pass
+        _try_setattr(operation, "handoff_facts", handoff)
     return handoff
 
 
@@ -211,6 +213,17 @@ class YudaoMutationPrefill:
     def __init__(self, client, forms, review):
         self.client, self.forms, self.review = client, forms, review
         self.last_handoff_facts = None
+        self.last_field_outcomes = None
+
+    def _record_outcomes(self, context, *, applied, rejected, previous, restricted):
+        _record_field_outcomes(context, applied=applied, rejected=rejected,
+                               previous=previous, restricted=restricted)
+        self.last_field_outcomes = {
+            "applied_fields": dict(applied),
+            "rejected_fields": dict(rejected),
+            "previous_fields": dict(previous),
+            "restricted_fields": tuple(restricted),
+        }
 
     def _customer(self, identifier, name):
         rows = self.client.get("crm/customer/simple-list")
@@ -463,7 +476,8 @@ class YudaoMutationPrefill:
                 pending.append(label)
                 continue
             expected.append((field_identity(element), value))
-        _record_field_outcomes(context, applied=applied, rejected=rejected, previous=previous, restricted=restricted)
+        self._record_outcomes(context, applied=applied, rejected=rejected,
+                              previous=previous, restricted=restricted)
         self.last_handoff_facts = _attach_handoff_facts(
             context, applied_fields=applied, rejected_fields=rejected,
             restricted_controls=restricted, pending_fields=pending, restricted_refs=restricted_refs)
@@ -547,8 +561,8 @@ class YudaoMutationPrefill:
                 element = matches[0]
                 if _is_restricted_element(element):
                     restricted.append(item.label)
-                    _record_field_outcomes(context, applied=applied, rejected=rejected,
-                                           previous=previous, restricted=restricted)
+                    self._record_outcomes(context, applied=applied, rejected=rejected,
+                                          previous=previous, restricted=restricted)
                     return _refused()
                 prev_val = str(
                     element.attrs.get("selected_option")
@@ -570,8 +584,8 @@ class YudaoMutationPrefill:
             _collect_receipt_outcomes(outcome, item.label, item.option_label or item.value,
                                       prev_val, applied, rejected, previous, restricted)
             if outcome.state != "completed":
-                _record_field_outcomes(context, applied=applied, rejected=rejected,
-                                       previous=previous, restricted=restricted)
+                self._record_outcomes(context, applied=applied, rejected=rejected,
+                                      previous=previous, restricted=restricted)
                 return _refused()
             if index == 0:
                 # Choosing a customer reveals the dependent "直属上级" control.
@@ -589,8 +603,8 @@ class YudaoMutationPrefill:
         if (not self._customer(body["customerId"], customer)
                 or self.forms._evidence.since(fence_mark)):
             return _refused()
-        _record_field_outcomes(context, applied=applied, rejected=rejected,
-                               previous=previous, restricted=restricted)
+        self._record_outcomes(context, applied=applied, rejected=rejected,
+                              previous=previous, restricted=restricted)
         self.last_handoff_facts = _attach_handoff_facts(
             context, applied_fields=applied, rejected_fields=rejected,
             restricted_controls=restricted, pending_fields=())
