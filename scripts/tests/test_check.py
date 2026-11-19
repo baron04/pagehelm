@@ -132,6 +132,8 @@ class SelectionTests(unittest.TestCase):
         self.assertIn('repository hygiene', names)
         names, _ = self.names(['scripts/check_repo_hygiene.py'])
         self.assertIn('repository hygiene', names)
+        names, _ = self.names(['.agents/skills/integrate-pagehelm/agents/openai.yaml'])
+        self.assertEqual(names, {'changed-file syntax/links', 'repository hygiene'})
 
     def test_packaging_runs_wheel_installation_check(self):
         names, _ = self.names(['pyproject.toml'])

@@ -1,131 +1,106 @@
 ---
-title: Security & Verified Writes
-description: Safety modes, the 8-stage WritePipeline, visibility-gated approval cards, credential redaction, and prompt-injection defenses.
+title: Write Safety & Privacy
+description: Safety modes, the WritePipeline stages, client visibility gates, credential redaction, SourceTree allowlists, and CSP requirements.
 ---
 
-> **TL;DR:** Browser and backend mutations default **off**. Every state-changing write executes through a unified, single-flight **8-stage `WritePipeline`** requiring structured diff projection, fresh human confirmation on a visibility-gated panel card (`coverage >= 0.9`, `dwell >= 400ms`, `event.isTrusted === true`), pre-dispatch reread drift checks, zero automatic retry on uncertain outcomes, and same-actor readback verification.
+PageHelm disables all browser and backend mutations by default. When writes are enabled, every state change runs through `WritePipeline` (`src/web_operation_agent/business/write_pipeline.py`): build and validate a structured diff, obtain human confirmation on a visible approval card, verify no drift under a single-flight lock, dispatch at most once, and read back under the same actor.
 
-[简体中文](../zh-cn/security/verified-writes.md)
+## 1. Safety Modes
 
-## 1. Execution modes
+The server locks the active mode during composition and session binding; the browser cannot elevate permissions:
 
-The server enforces one of three write modes at session/composition binding time (`assistant.js` cannot self-escalate):
-
-| Mode | Same-actor API & SQL reads | Navigation & filters | Non-destructive form prefill (`undoFormFill`) | Confirmed backend / submit mutations | Postcondition readback |
+| Mode | Same-actor API / SQL reads | Navigation & filtering | Non-destructive form prefill (undoable) | Write proposal prep | Write dispatch & readback |
 | --- | --- | --- | --- | --- | --- |
-| `read-only` | Yes | Yes | Blocked | Blocked | N/A |
-| `assisted-draft` | Yes | Yes | Yes (skips secrets, reversible) | Blocked | N/A |
-| `verified-operate` | Yes | Yes | Yes | **Only via 8-stage `WritePipeline`** | Required (`ResultPostconditionVerifier`) |
+| `read-only` (prod default) | Allowed | Allowed | Off | Off | Off |
+| `assisted-draft` | Allowed | Allowed | Allowed (skips passwords & uploads) | Allowed | Off (never dispatches) |
+| `verified-operate` (local default) | Allowed | Allowed | Allowed | Allowed | Allowed (via `WritePipeline` with readback) |
 
-Prompts, Skill markdown files, repository source snippets, and retained `ConversationState` turns carry **zero write authority**. Enabling mutations requires explicit deployment and adapter opt-in.
+Prompts, Skill files, source excerpts, and prior session turns grant no write permission. Both deployment configuration and the application adapter must opt in explicitly.
 
----
+## 2. `WritePipeline` Stages
 
-## 2. The 8-stage `WritePipeline`
-
-`WritePipeline` (`src/web_operation_agent/business/write_pipeline.py`) governs both typed Skill/adapter service writes (`run_service_write`), convention flat updates & status transitions, and native UI form/row submits (`run_submit_pipeline`):
+`WritePipeline` unifies all four write routes (typed Skill writes, convention flat updates/toggles, typed status operations, and native form submission) across six stages `(a)–(f)`:
 
 ```text
-  [1] Proposal Preparation & Structured Diff Normalization
-        - FieldDiff / change_detail / create_detail / preserved_detail /
-          side_effect_detail / derived_detail / target_rule_detail / body_detail
-        - Bind exact proposal.content_digest & canonical target identity
+  (a) Proposal preparation & validation
+        - Adapter builds BusinessMutationProposal bound to target IDs and content_digest
+        - Normalizes diffs (normalize_approval_details) and checks effect projection (verify_effect_projection)
+        - Checks value provenance and append-preservation; filters DEFAULT_SECRET_FIELD_PATTERN controls
+        - Optionally prepares MutationPrefillOffer ("prefill only, I will submit")
          |
          v
-  [2] Secret & Target Policy Filtering
-        - Reject or exclude DEFAULT_SECRET_FIELD_PATTERN controls
-        - Validate value-source provenance & append-preservation rules
+  (b) Visible approval & single-use consumption
+        - Shadow DOM panel renders Before -> After diffs and side effects
+        - VisibilityGate enforces visible ratio >= 0.9, dwell >= 400ms, event.isTrusted === true
+        - Approval consumes once (replay returns 409); user may also choose prefill handover or deny
          |
          v
-  [3] Visible Approval Card Request (ApprovalCard.tsx)
-        - Render structured old -> new diffs + side effects inside Shadow DOM
-         |
-         v
-  [4] Single-Use Approval Grant & Single-Flight Gate
-        - VisibilityGate requires minVisibleRatio >= 0.9, dwell >= 400ms, event.isTrusted
+  (c) Single-flight lock & journal claim
         - InflightWriteTracker.single_flight(proposal.content_digest, consume_on_enter=True)
-        - ApprovalGate / approval_id consumed once (409 on replay)
+        - Records mutation_claimed in SQLiteMutationJournal before dispatch
          |
          v
-  [5] Pre-Dispatch Reread & Drift Detection
-        - Live read compares mutable fields against approved snapshot
-        - Any unexpected change raises drift refusal BEFORE dispatch
+  (d) Pre-dispatch reread & at-most-once dispatch
+        - pre_dispatch_reread checks target record/form for concurrent drift and refuses if changed
+        - Dispatches at most once; timeouts or disconnects are never retried automatically
          |
          v
-  [6] Single-Flight Armed Dispatch (Zero Automatic Retry)
-        - Write `mutation_claimed` into SQLiteMutationJournal FIRST
-        - Timeout/disconnect NEVER triggers an automatic retry
+  (e) Same-actor readback verification
+        - ResultPostconditionVerifier / verify_readback confirms the expected post-state as the same actor
          |
          v
-  [7] Same-Actor Readback Postcondition Verification
-        - ResultPostconditionVerifier / BusinessPostconditionVerifier
-        - Confirm actual backend state reflects expected values under the same actor
-         |
-         v
-  [8] Audited Terminal Accounting
-        +--> verified      (postcondition confirmed; receipt recorded)
-        +--> indeterminate (outcome uncertain; preserved for operator reconciliation)
-        +--> refused / cancelled (no dispatch or drifted prior to dispatch)
+  (f) Audit terminal state
+        +--> verified      (confirmed via same-actor readback)
+        +--> not_approved / refused / cancelled (stopped before dispatch)
+        +--> indeterminate (outcome unknown after dispatch; persisted for human reconciliation)
 ```
 
----
+## 3. Client Visibility and Trusted-Click Gate
 
-## 3. Approval card visibility gate & UI hardening
+Plain confirmation dialogs can be obscured by overlays, scrolled out of view, or triggered via scripted `.click()`. `frontend/src/state/visibility.ts` enforces the parameters defined in `frontend/src/presentation.json`:
 
-Simply requiring a confirmation click is vulnerable if a hostile script scrolls the card offscreen, overlays another element, or synthesizes a synthetic `.click()`. `frontend/src/state/visibility.ts` enforces client-side visual integrity using parameters exported from `frontend/src/presentation.json`:
+- `min_visible_ratio: 0.9`: Walks clipping ancestors (`overflow: auto|scroll|hidden|clip`) alongside 20 `IntersectionObserver` thresholds; uses the minimum intersection of card, viewport, and scroll-port dimensions so both tall cards and partial occlusions are evaluated accurately.
+- `min_visible_ms: 400`: The approval card must stay visibly unobstructed for at least `400 ms` before confirmation is accepted.
+- `event.isTrusted === true`: Rejects synthetic script-dispatched clicks.
+- **Shadow DOM isolation:** The panel and approval card mount in an isolated Shadow DOM container (`overlay_z_index: 2147483646`) separated from host stylesheets.
 
-- `min_visible_ratio: 0.9` — computed across ancestor overflow boxes (`auto|scroll|hidden|clip`) and `IntersectionObserver` thresholds (`0..1` in 20 steps), clamping by whichever is smallest of card box, viewport, and clipping scrollport.
-- `min_visible_ms: 400` — card must remain visibly exposed for at least `400 ms` continuously before an approval click is accepted.
-- `event.isTrusted === true` — synthetic DOM click events dispatched via scripts are refused immediately.
-- **Shadow DOM isolation:** Panel styles and interactive approval controls render inside a Shadow DOM container (`overlay_z_index: 2147483646`) separated from host page stylesheets.
+## 4. Credential Redaction and Egress Audit
 
----
+Redaction runs across URLs, DOM observations, audit journals, trace exports, and outbound model calls:
 
-## 4. Credential, handoff & egress redaction
+1. **Handoff params & credential assignments (`src/web_operation_agent/privacy.py`):**
+   - `SESSION_HANDOFF_KEYS` (`externalLoginKey`, `externaLoginKey`, `externLoginKey`, `jsessionid`) can be extended per adapter via `SessionHandoffPolicy.extending(port.session_handoff_query_keys)`.
+   - `SENSITIVE_CREDENTIAL_ASSIGNMENT` matches `password`, `passwd`, `pwd`, `secret`, `token`, `access_token`, `refresh_token`, `id_token`, `api_key`, and `authorization` assignments, using recursive URL decoding (`url_decode_depth=3`) to catch multi-encoded values.
+2. **Content-free model egress audit (`src/web_operation_agent/modeling/egress.py`):**
+   - `AuditedChat` wraps the model client (`complete` and `complete_cancellable`), running `ProviderEgressPolicy.inspect(messages, tools)` before dispatch and appending content-free `provider_egress` entries to the audit ledger.
+3. **Trace export pre-write check (`src/web_operation_agent/state/traceview.py`):**
+   - Rescans projected fields at `url_decode_depth=3` before writing replay HTML; refuses raw output if any credential pattern remains.
 
-PageHelm defends against credential leakage in URLs, DOM snapshots, logs, trace replays, and outbound LLM prompts:
+## 5. Optional `SourceTree` Allowlist
 
-1. **Handoff & secret assignment redaction (`src/web_operation_agent/privacy.py`):**
-   - `SESSION_HANDOFF_KEYS` (`externalLoginKey`, `externaLoginKey`, `externLoginKey`, `jsessionid`) forms the closed baseline, widened per adapter via `SessionHandoffPolicy.extending(port.session_handoff_query_keys)`.
-   - `SENSITIVE_CREDENTIAL_ASSIGNMENT` matches secret assignments (`password`, `passwd`, `pwd`, `secret`, `token`, `access_token`, `refresh_token`, `id_token`, `api_key`, `authorization`) across literal and multi-encoded URL parameters (`has_unredacted(..., url_decode_depth=3)` decodes nested percent-encoding before checking).
-2. **Model egress auditing (`src/web_operation_agent/modeling/egress.py`):**
-   - `AuditedChat` wraps the model client (forwarding both `complete` and `complete_cancellable`) and runs `ProviderEgressPolicy.inspect(messages, tools)` before sending to any external LLM endpoint, appending only non-content metadata (`provider_egress`) to the session ledger.
-3. **Trace & log hygiene (`src/web_operation_agent/state/traceview.py`):**
-   - Before writing replay files or timelines, trace exporters re-scan sanitized output with `url_decode_depth=3` and refuse to persist raw payload text if an unredacted credential pattern remains.
+When source-assisted inspection is enabled, `SourceTree` (`src/web_operation_agent/planning/sourcetree.py`) restricts reads to an explicit allowlist:
 
----
+- Policy files (`policies/<name>.json`) carry no local paths; the host injects `source_root` at startup.
+- Policies configure `allow_globs`, `deny_globs`, and `max_bytes_per_read` (default `262144` bytes), excluding `.env`, databases, uploads, and user data.
+- `SourceTree.resolve(rel)` evaluates `deny_globs` and `allow_globs` against both the raw relative path `rel` and the canonical resolved path to block symlink escapes.
 
-## 5. Opt-in `SourceTree` allowlist
+## 6. Prompt-Injection and Protocol Isolation
 
-Optional source inspection for troubleshooting or schema confirmation never receives unrestricted filesystem access:
+Page DOM text, record notes, Skill Markdown, and free-form model output are all treated as untrusted data:
 
-- `SourceTree` (`src/web_operation_agent/planning/sourcetree.py`) requires an explicit absolute `source_root` injected by the host at runtime (policies themselves are forbidden from hardcoding `"root"`).
-- Adapters ship packaged policies under `policies/<name>.json` declaring explicit `allow_globs`, `deny_globs`, and `max_bytes_per_read` (`262144` bytes default).
-- `SourceTree.resolve(rel)` verifies **both** the requested path string `rel` and its canonical resolved path against `deny_globs` and `allow_globs`, blocking symlink/relative-path traversal (`views/Foo.vue -> ../secrets/Foo.vue`) from laundering denied secrets, `.env` files, databases, uploads, or user data.
+- Untrusted content cannot mint an `approval_id`, alter safety mode, widen `SourceTree` globs, or bypass the single-flight lock.
+- Approval card diffs are validated on the server via `validate_details` rather than accepting arbitrary client strings.
+- Unknown fields or out-of-bounds payloads raise typed `RemoteProtocolError` errors without falling back to exception-message matching.
 
----
+## 7. Host CSP Checklist
 
-## 6. Prompt-injection privilege separation
+When embedding into an application with a strict Content Security Policy:
 
-Browser page titles, customer notes, Skill markdown instructions, and model tool outputs are all treated as **untrusted inputs**:
+- Allow loading `assistant.js` and `assistant.css` from the same origin or trusted gateway (`script-src 'self'`, `style-src 'self'`; `unsafe-eval` is not needed).
+- Allow same-origin `/v1/sessions/*` requests and `/events` SSE streams in `connect-src`.
+- Deploy behind HTTPS with same-origin cookies and handle session expiry according to `start.final_statuses: [401, 403]` in `frontend/src/presentation.json`.
 
-- Untrusted text cannot mint an `approval_id`, alter `ExecutionMode`, add `allow_globs` to `SourceTree`, or satisfy an approval gate.
-- Structured field diffs displayed on the approval card are normalized and validated on the server (`validate_details`), not trusted verbatim from unverified browser strings.
-- Unknown or out-of-policy keys in protocol payloads trigger typed `RemoteProtocolError` responses rather than best-effort parsing.
+## Next Steps
 
----
-
-## 7. Production CSP checklist
-
-When embedding `assistant.js` into a strict Content Security Policy deployment:
-
-- Serve `assistant.js` and `assistant.css` from the same origin or explicitly trusted gateway origin (`script-src 'self'`, `style-src 'self'` — runtime code uses Shadow DOM styling without requiring `unsafe-eval`).
-- Allow `connect-src 'self'` (or your reverse-proxied gateway prefix) for `/v1/sessions/*` POST calls and SSE `/events` streams.
-- Pair same-site authenticated cookies with reverse-proxy TLS termination (`HTTPS`) and configure `start.final_statuses: [401, 403]` behavior cleanly when user sessions expire.
-
----
-
-## Next steps
-
-- Review SQLite backups, indeterminate-write resolution, spend limits, and OTLP telemetry in [Operations & Observability](./operations-and-observability.md).
-- Inspect exact `/v1/sessions/*` wire payloads and limits in [Protocol & Configuration Reference](../reference/protocol-and-configuration.md).
+- Deployment, SQLite backups, and `INDETERMINATE` reconciliation: [Deployment & Operations](./operations-and-observability.md)
+- Wire protocol endpoints and config schema: [Configuration & Protocol](../reference/protocol-and-configuration.md)

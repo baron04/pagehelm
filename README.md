@@ -53,7 +53,7 @@ cp pagehelm.example.toml pagehelm.toml  # Pick provider ("deepseek"|"qwen"|"open
 | Live UI navigation & form prefill | None | Slow full-page loops | None | Same-origin DOM Runtime + handover |
 | Tabular reads (thousands of rows) | Needs custom endpoints | Slow UI pagination | Memory/node bottlenecks | Same-actor API + `TurnTables` SQL |
 | Auth & permission inheritance | Often service keys | Server holds user cookies | Static shared keys | Delegated per-session browser identity |
-| Write safety & retry control | Custom per tool | Clicks live save buttons | Auto-retry risks duplicates | 8-stage approval + `INDETERMINATE` lock |
+| Write safety & retry control | Custom per tool | Clicks live save buttons | Auto-retry risks duplicates | Single-consume `WritePipeline` + `INDETERMINATE` lock |
 
 ## Development
 
@@ -67,6 +67,6 @@ python -m pip install --no-deps --editable examples/yudao
 
 ## Documentation & Legal
 
-- **Docs:** [English](docs/index.md) · [简体中文](docs/zh-cn/index.md) · [Architecture](docs/architecture/overview.md) · [Execution & Runtime](docs/architecture/execution-and-runtime.md) · [Quickstart & Ops](docs/integration/quickstart.md) · [L0–L3 Integration](docs/integration/levels.md) · [Skills & Writes](docs/integration/skills-and-writes.md) · [Verified Writes](docs/security/verified-writes.md) · [Ops & Observability](docs/security/operations-and-observability.md) · [Protocol Reference](docs/reference/protocol-and-configuration.md) · [Tools & Capabilities](docs/reference/tools-and-capabilities.md)
+- **Docs:** [English](docs/index.md) · [简体中文](docs/zh-cn/index.md) · [Local Demo Quickstart](docs/integration/quickstart.md) · [L0–L3 Integration](docs/integration/levels.md) · [Skills & Writes](docs/integration/skills-and-writes.md) · [Architecture](docs/architecture/overview.md) · [Execution & Runtime](docs/architecture/execution-and-runtime.md) · [Write Safety & Privacy](docs/security/verified-writes.md) · [Deployment & Operations](docs/security/operations-and-observability.md) · [Configuration & Protocol](docs/reference/protocol-and-configuration.md) · [Tools & Capabilities](docs/reference/tools-and-capabilities.md)
 - **Docs site (`frontend/docs/`):** Built from `docs/` via Astro Starlight with `/llms.txt` & `/llms-full.txt`.
 - **Notice:** Alpha software; evaluate only against isolated synthetic data. [SECURITY](SECURITY.md) · [LICENSE](LICENSE) · [THIRD_PARTY](THIRD_PARTY.md)

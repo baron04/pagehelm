@@ -8,9 +8,9 @@ const docsRoot = path.resolve(here, '../../docs')
 const site = process.env.ASTRO_SITE || 'https://pagehelm.dev'
 const rawBase = process.env.ASTRO_BASE || '/'
 const base = rawBase === '/' ? '/' : `/${rawBase.replace(/^\/+|\/+$/g, '')}`
+const prefix = base === '/' ? '' : base
 
 function rewriteRelativeDocsLinks() {
-  const prefix = base === '/' ? '' : base
   return {
     name: 'pagehelm-docs-link-rewriter',
     hooks: {
@@ -66,11 +66,22 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'PageHelm',
-      description: 'Embedded AI operations helm for first-party web applications.',
+      description: 'Embedded server-governed AI operations framework for first-party web applications.',
       logo: {
         src: './src/assets/logo.svg',
         alt: 'PageHelm',
       },
+      head: [
+        {
+          tag: 'link',
+          attrs: {
+            rel: 'alternate',
+            type: 'text/plain',
+            href: `${prefix}/llms.txt`,
+            title: 'LLM Documentation Index',
+          },
+        },
+      ],
       defaultLocale: 'root',
       locales: {
         root: { label: 'English', lang: 'en' },
@@ -79,40 +90,41 @@ export default defineConfig({
       components: {
         Header: './src/components/Header.astro',
         Hero: './src/components/Hero.astro',
+        Footer: './src/components/Footer.astro',
       },
       customCss: ['./src/styles/custom.css'],
       sidebar: [
         {
-          label: 'Architecture & Concepts',
-          translations: { 'zh-cn': '架构与核心原理' },
+          label: 'Getting Started & Integration',
+          translations: { 'zh-cn': '起步与接入' },
           items: [
-            { label: 'Architecture Overview', translations: { 'zh-cn': '架构概览与信任边界' }, slug: 'architecture/overview' },
+            { label: 'Local Demo Quickstart', translations: { 'zh-cn': '本地示例上手' }, slug: 'integration/quickstart' },
+            { label: 'L0–L3 Integration Guide', translations: { 'zh-cn': 'L0–L3 接入指南' }, slug: 'integration/levels' },
+            { label: 'Skills & Typed Writes', translations: { 'zh-cn': 'Skill 与类型化写入' }, slug: 'integration/skills-and-writes' },
+          ],
+        },
+        {
+          label: 'Architecture',
+          translations: { 'zh-cn': '架构与执行' },
+          items: [
+            { label: 'Architecture Overview', translations: { 'zh-cn': '架构总览' }, slug: 'architecture/overview' },
             { label: 'Execution & Browser Runtime', translations: { 'zh-cn': '执行引擎与浏览器运行时' }, slug: 'architecture/execution-and-runtime' },
           ],
         },
         {
-          label: 'Quickstart & Integration',
-          translations: { 'zh-cn': '快速上手与应用接入' },
-          items: [
-            { label: '5-Min Quickstart & Ops', translations: { 'zh-cn': '5 分钟快速上手与运维' }, slug: 'integration/quickstart' },
-            { label: 'L0–L3 Progressive Integration', translations: { 'zh-cn': 'L0–L3 分级接入指南' }, slug: 'integration/levels' },
-            { label: 'Authoring Skills & Writes', translations: { 'zh-cn': 'Skill、约定更新与提交编写' }, slug: 'integration/skills-and-writes' },
-          ],
-        },
-        {
           label: 'Security & Operations',
-          translations: { 'zh-cn': '安全治理与生产运维' },
+          translations: { 'zh-cn': '安全与运维' },
           items: [
-            { label: 'Security & Verified Writes', translations: { 'zh-cn': '安全边界与八阶段核验写入' }, slug: 'security/verified-writes' },
-            { label: 'Operations & Observability', translations: { 'zh-cn': '持久化运维、预算与可观测' }, slug: 'security/operations-and-observability' },
+            { label: 'Write Safety & Privacy', translations: { 'zh-cn': '写入安全与隐私边界' }, slug: 'security/verified-writes' },
+            { label: 'Deployment & Operations', translations: { 'zh-cn': '部署、运维与排障' }, slug: 'security/operations-and-observability' },
           ],
         },
         {
           label: 'Reference',
-          translations: { 'zh-cn': '协议与参考手册' },
+          translations: { 'zh-cn': '参考手册' },
           items: [
-            { label: 'Protocol & Configuration', translations: { 'zh-cn': '配置项与双端通信协议' }, slug: 'reference/protocol-and-configuration' },
-            { label: 'Tools, Capabilities & Checks', translations: { 'zh-cn': '内置工具、能力开关与程序检查' }, slug: 'reference/tools-and-capabilities' },
+            { label: 'Configuration & Protocol', translations: { 'zh-cn': '配置与通信协议' }, slug: 'reference/protocol-and-configuration' },
+            { label: 'Tools, Capabilities & Checks', translations: { 'zh-cn': '内置工具、能力与自检' }, slug: 'reference/tools-and-capabilities' },
           ],
         },
       ],

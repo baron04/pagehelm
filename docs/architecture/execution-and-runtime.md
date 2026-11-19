@@ -1,117 +1,92 @@
 ---
-title: Execution Engine & Browser Runtime
-description: Inside ModelDrivenTurnExecutor, TurnBudget, concurrent read commit ordering, Decimal summaries, TurnTables SQL, and bounded DOM settling.
+title: Execution & Browser Runtime
+description: Shared TurnBudget, concurrent read prefetch with deterministic commit, Decimal summaries, TurnTables SQL, and browser settling.
 ---
 
-> **TL;DR:** Every user request executes inside a single shared-budget loop (`ModelDrivenTurnExecutor` + `TurnHarness` + `TurnBudget`), batching pure reads concurrently while committing tables and receipts in deterministic order, computing exact Decimal summaries (`read_summary`) or ephemeral SQLite analytics (`TurnTables`), and driving the tab cleanly with bounded DOM observation (`<= 200` elements) and noise-suppressed settling.
+Each user turn runs inside a shared-budget loop (`ModelDrivenTurnExecutor` + `TurnHarness` + `TurnBudget`). Read calls can execute concurrently and commit in deterministic order on the main thread, numeric aggregations run in deterministic `Decimal` or temporary read-only SQL engines, and browser actions are bounded by snapshot caps and noise-filtered settle checks.
 
-[简体中文](../zh-cn/architecture/execution-and-runtime.md)
-
-## 1. Turn orchestration and shared budget
+## 1. Turn Orchestration and Shared Budget (`TurnBudget`)
 
 ```text
-User Prompt
+User task input
    |
    v
-TurnHarness (session binding, action fence, approval watch, trace)
+TurnHarness (session binding, action fences, approval monitor, tracing)
    |
-   +--> TurnBudget(steps, seconds)  <-- Single shared counter + monotonic clock
-   |       - Every model call (including retries) consumes 1 step
-   |       - Moving from API read -> SQL -> UI navigation NEVER resets budget
+   +--> TurnBudget(steps, seconds)  <-- single atomic step counter & monotonic clock
+   |       - every model call (including retries) consumes 1 step
+   |       - switching between API reads, SQL, and UI actions does not reset budget
    |
    v
 ModelDrivenTurnExecutor loop
-   |---> Concurrent pure reads  ---> Deterministic main-thread commit (t1, ev_*)
-   |---> Bounded browser action ---> PageSettleWatch (80ms quiet / 2s max)
-   |---> finish(table_ref=...)  ---> Redacted <DataTable> in Shadow DOM panel
-   |---> finish(status="need_input", options=[...]) ---> One-click option pills
+   |---> concurrent read-only workers ----> ordered main-thread commit (t1, ev_*)
+   |---> guarded browser UI actions ------> PageSettleWatch (80ms quiet / 2s max)
+   |---> finish(table_ref=...) -----------> Shadow DOM <DataTable>
+   |---> finish(status="need_input", options=[...]) --> clickable disambiguation pills
 ```
 
-Unlike multi-agent pipelines where sub-agents silently spawn independent timeouts, `TurnBudget` (`src/web_operation_agent/execution/budget.py`) enforces one atomic step counter and one wall-clock deadline across the entire turn:
+`TurnBudget` (`src/web_operation_agent/execution/budget.py`) enforces one shared step limit and wall-clock deadline across the turn (excluding human approval wait time):
 
-- `TurnBudget.reserve()` checks cancellation and remaining wall time before bumping `used` up to `steps`.
-- Every bounded read checkpoint (`stopped_read` in `data_tools.py`) inspects the same `TurnBudget`, producing explicit terminal codes: `"user_cancelled"`, `"step_budget"`, `"token_budget"`, or `"wall_clock_budget"`.
+- Before each model call, `TurnBudget.reserve()` checks cancellation, remaining seconds, and remaining steps.
+- Read-tool checkpoints (`stopped_read` in `data_tools.py`) read the same `TurnBudget` and stop cleanly on `user_cancelled`, `step_budget`, `token_budget`, or `wall_clock_budget`.
 
----
+## 2. Concurrent Reads with Deterministic Main-Thread Commit
 
-## 2. Concurrent read batching with sequential commit
+When a model issues parallel read calls in one step or an adapter fetches paginated slices concurrently, execution follows "concurrent prefetch, ordered single-thread commit":
 
-When the model issues multiple read-only calls in a single assistant step (or an adapter runs multi-slice pagination through a procedure such as `_ConcurrentReadProcedure`), workers perform network fetches as **pure reads**:
+- Workers perform network requests, check response limits, and prepare redactions without mutating shared `TurnTables` or receipt stores directly.
+- After workers finish, the main thread registers table handles (`t1`, `t2`, ...) and evidence receipts (`ev_<hex12>_<n>`) in strict call order so traces and regression tests stay reproducible.
 
-- Worker threads redact payloads and validate row bounds without mutating shared turn state (`TurnTables`, knowledge caches, or receipt counters).
-- Once the batch resolves, the main turn thread commits each slice in deterministic issue order so table handles (`t1`, `t2`, ...) and evidence receipts (`ev_<hex12>_<n>`) remain strictly reproducible across runs and replay traces.
+## 3. Server-Side Deterministic Summaries (`read_summary.py`)
 
----
+`src/web_operation_agent/execution/read_summary.py` runs closed-set `Decimal` aggregations on same-actor reads instead of relying on model arithmetic or UI pagination:
 
-## 3. Exact server-side aggregations (`read_summary.py`)
-
-Counting or summing across hundreds of records should never rely on floating-point guesses in LLM prose or slow DOM loops. `src/web_operation_agent/execution/read_summary.py` executes deterministic, Decimal-backed aggregations directly against an actor-bound read:
-
-| Constraint / Capability | Verified Behavior |
+| Constraint or capability | Implemented behavior |
 | --- | --- |
-| Row & response bounds | `MAX_ROWS = 5000`, `MAX_RESULT_CHARS = 100_000` |
-| Supported column kinds | `text`, `number`, `boolean`, `date`, `datetime`, `relation` |
-| Filter operators | `=`, `!=`, `contains`, `prefix`, `in`, `>`, `>=`, `<`, `<=`, `between`, `empty`, `not_empty` |
-| Exact measure set | `_MEASURES = ("count", "count_distinct", "sum", "min", "max")` (Decimal math; **no `avg`** here—use `TurnTables` SQL when computing averages or joins) |
-| Unit safety | `SummaryColumn.unverified_unit=True` marks monetary numbers whose unit has not been convention-proven so raw figures are shown honestly without guessing currency |
-| Truncation safety | When an upstream response marks data `truncated=True`, core answer checks forbid presenting a partial page slice as an exhaustive dataset total |
+| Row and output caps | `MAX_ROWS = 5000`, `MAX_RESULT_CHARS = 100_000` per summary |
+| Supported column types | `text`, `number`, `boolean`, `date`, `datetime`, `relation` |
+| Filter operators | `=`, `!=`, `contains`, `prefix`, `in`, `>`, `>=`, `<=`, `<`, `between`, `empty`, `not_empty` |
+| Measures | `count`, `count_distinct`, `sum`, `min`, `max` (exact `Decimal`; use `TurnTables` SQL for `AVG` or joins) |
+| Currency/unit safety | Unverified amount columns carry `SummaryColumn.unverified_unit=True` and render raw values without guessing units |
+| Truncation guard | When upstream sets `truncated=True`, partial slices cannot be reported as complete totals |
 
----
+## 4. Per-Turn Temporary SQL (`TurnTables`) and `<DataTable>`
 
-## 4. Ephemeral turn SQL (`TurnTables`) and `<DataTable>`
+For joins, rankings, averages (`AVG`), or secondary slicing over rows already fetched in the current turn, adapters can attach `TurnTables`:
 
-For multi-endpoint joins, group-by rankings, average calculations, or follow-up slicing over already observed API responses, adapters can bind an ephemeral in-memory SQLite workspace per turn (`TurnTables`):
+- **Isolation and lifecycle:** Opens `sqlite3.connect(":memory:", cached_statements=0)` with `SQLITE_LIMIT_ATTACHED = 0` and releases immediately on `TurnTables.close()` at turn end.
+- **Bounds:** See [Configuration & Protocol](../reference/protocol-and-configuration.md) (36 tables/turn, 5000 rows/table, 128 columns, 200-row / 14000-char model preview, 1.5s query timeout).
+- **Read-only SQL allowlist:** Permits only a single `SELECT` or `WITH` statement (others return `sql_refused`), strips comments while preserving string literals, and allowlists pure functions (`abs`, `avg`, `coalesce`, `count`, `date`, `datetime`, `dense_rank`, `group_concat`, `json_extract`, `lag`, `lead`, `rank`, `round`, `row_number`, `strftime`, `sum`, etc.).
+- **Redacted ingestion and export:** Drops sensitive column names on load and applies `SessionHandoffPolicy` cleaning.
 
-- **Isolation & cleanup:** Uses `sqlite3.connect(":memory:", cached_statements=0)` with `SQLITE_LIMIT_ATTACHED = 0`, destroyed at turn end via `TurnTables.close()`.
-- **Hard capacity caps:**
-  - `MAX_TABLES = 36` tables per turn (`t1`, `t2`, ...; saved query results `q1`, `q2`, ...)
-  - `MAX_ROWS = 5000` rows per table
-  - `MAX_COLUMNS = 128` columns per table
-  - `MAX_SQL_ROWS = 200` / `MAX_SQL_CHARS = 14000` returned to model context, with a `1.5s` query deadline
-- **Strict SQL safety:** Accepts a single `SELECT` or `WITH` query only (`sql_refused` otherwise); strips SQL comments while preserving string literals; permits only an explicit safe scalar/window/aggregate function allowlist (`abs`, `avg`, `coalesce`, `count`, `date`, `datetime`, `dense_rank`, `group_concat`, `json_extract`, `lag`, `lead`, `rank`, `round`, `row_number`, `strftime`, `sum`, etc.).
-- **Automatic redaction:** Filters out secret-named columns and applies `SessionHandoffPolicy` before inserting rows and again before exporting cells.
+### Direct Structured Tables via `finish(table_ref=...)`
 
-### Zero-copy structured reporting with `finish(table_ref=...)`
+When a query returns many rows, the model passes `table_ref="t1"` or `"q1"` to `finish` instead of transcribing rows into prose:
 
-Rather than asking the model to transcribe 150 rows into Markdown prose—introducing transcription mistakes and wasting tokens—the model passes `table_ref="t1"` or `table_ref="q1"` to `finish`:
+1. The server exports the redacted dataset via `TurnTables.export_table(ref)` (caps in the protocol reference).
+2. The Shadow DOM panel renders `<DataTable>` with live filtering bound to the server evidence receipt (`ev_*`).
 
-1. Server resolves the reference via `TurnTables.export_table(ref)` (capped at `EXPORT_MAX_COLS = 24`, `EXPORT_MAX_ROWS = 2000`, `EXPORT_CELL_CHARS = 300`, `EXPORT_TITLE_CHARS = 120`).
-2. `export_table` enforces credential/handoff redaction across every exported header, cell, and title.
-3. The panel renders a native interactive `<DataTable>` with instant client-side filtering and full row visibility, backed by a real turn evidence receipt (`ev_*`).
+## 5. Browser Runtime: Snapshots, Settling, and Form Handover
 
----
+### Bounded Page Observations
 
-## 5. Browser runtime: DOM snapshots, settling, and UI helpers
+`src/web_operation_agent/web_runtime/browser_contract.json` caps each frame at `200` interactive elements. When a modal dialog or drawer is open, `PageController` prioritizes controls inside the active dialog before adding background elements.
 
-### Bounded Page Observation (`MAX_OBSERVATION_ELEMENTS = 200`)
+### Noise-Filtered Settling (`pageSettle.ts`)
 
-`src/web_operation_agent/web_runtime/browser_contract.json` fixes `observation.max_elements = 200`. When a busy admin screen exposes an active modal dialog or drawer, `PageController` prioritizes interactive controls inside the active modal surface first before surrounding background elements, tagging controls cleanly for targeting, candidate lookup, and form fill.
+Single-page apps commonly run heartbeat requests, SSE streams, or no-op attribute updates. `PageSettleWatch` in `frontend/src/runtime/pageSettle.ts` bounds wait time with explicit thresholds:
 
-### Noise-suppressed settling (`pageSettle.ts`)
+- `DEFAULT_SETTLE_QUIET_MS = 80` ms: Considered settled after 80 ms without meaningful DOM changes.
+- `DEFAULT_SETTLE_MAX_WAIT_MS = 2000` ms: Maximum wait per action.
+- `DEFAULT_LONG_TAIL_REQUEST_MS = 1500` ms: Requests older than 1.5 s do not block observation.
+- **Ignored noise:** No-op attribute mutations where `oldValue === currentValue`, internal Shadow DOM panel changes, `#playwright-highlight-container`, `/woa/` internal endpoints, and `/events` SSE streams.
 
-Modern SPAs continuously fire background pings, SSE streams, and CSS attribute churn. `frontend/src/runtime/pageSettle.ts` implements `PageSettleWatch` with tight deterministic bounds:
+When a click, select, or navigation settles, `src/web_operation_agent/execution/loop_guard.py` caches `settled_action_observation` keyed by `obs.epoch` and `page_fingerprint(obs)` so the executor avoids a redundant `observe` round trip while the channel stays fresh.
 
-- `DEFAULT_SETTLE_QUIET_MS = 80` ms of DOM quiet before declaring settled
-- `DEFAULT_SETTLE_MAX_WAIT_MS = 2000` ms maximum wait per action
-- `DEFAULT_LONG_TAIL_REQUEST_MS = 1500` ms threshold beyond which pre-existing long-tail network requests are ignored
-- **Ignored noise:** no-op attribute writes (`oldValue === currentValue`), mutations inside the Shadow DOM assistant panel, `#playwright-highlight-container`, internal `/woa/` endpoints, and `/events` SSE streams.
+### Form Prefill Receipts and Undo
 
-Right after a navigation, click, or select settles cleanly, `src/web_operation_agent/execution/loop_guard.py` records `settled_action_observation` keyed by `obs.epoch` and `page_fingerprint(obs)`. If the channel still reflects that exact state, the executor reuses the settled observation immediately instead of burning an extra model round-trip calling `observe`.
+After form prefill, the browser returns an `ActionReceipt` distinguishing three field outcomes:
 
-### Framework integration modules & safe form handoff
-
-Generic runtime code stays library-agnostic. Reusable Vue / Element Plus DOM helpers live cleanly under `frontend/src/integrations/element-plus/`:
-
-- `date-picker.js` (`isElDateRangeInput`, date panel helpers)
-- `form.js` (label extraction, form bounds `depth: 8`, `nodes: 6000`, `bytes: 200000`)
-- `select.js` (`readElSelectVisibleCandidates`, inner-input avoidance)
-- `table.js` (table header/row readers)
-- `vue.js` (framework state inspection)
-
-When prefilling forms in `assisted-draft` or handing off an operation, `ActionReceipt` reports structured per-field outcomes back to the turn loop:
-
-- `applied_fields` and `previous_fields` (enabling one-click host rollback via `undoFormFill(turnId)`)
-- `rejected_fields` and `candidate_labels` (when a dropdown or autocomplete option does not match)
-- `restricted_fields` (secret/password controls intentionally skipped by prefill and focused for manual entry)
-
-For ambiguous requests (`"Update Zhang's record"` when two records exist), the model terminates cleanly via `finish(status="need_input", options=[...])`, rendering clickable clarifying pills in the Shadow DOM composer rather than guessing.
+- `applied_fields` and `previous_fields`: Filled values and prior values powering one-click `undoFormFill(turnId)` in the panel.
+- `rejected_fields` and `candidate_labels`: Unmatched enum fields with actual available labels.
+- `restricted_fields`: Password, secret, or file upload inputs skipped and focused for manual entry.

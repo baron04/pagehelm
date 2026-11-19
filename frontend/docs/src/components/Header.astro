@@ -17,22 +17,22 @@ const currentSlug = starlightRoute.entry?.id || '';
 
 const navLinks = [
   {
+    label: isZh ? '快速开始' : 'Quickstart',
+    href: routePath(`${localePrefix}integration/quickstart/`),
+    active: currentSlug.endsWith('integration/quickstart'),
+  },
+  {
+    label: isZh ? '接入指南' : 'Integration',
+    href: routePath(`${localePrefix}integration/levels/`),
+    active: currentSlug.includes('integration/levels') || currentSlug.includes('integration/skills'),
+  },
+  {
     label: isZh ? '架构' : 'Architecture',
     href: routePath(`${localePrefix}architecture/overview/`),
     active: currentSlug.includes('architecture/'),
   },
   {
-    label: isZh ? '快速上手' : 'Quickstart',
-    href: routePath(`${localePrefix}integration/quickstart/`),
-    active: currentSlug.endsWith('integration/quickstart'),
-  },
-  {
-    label: isZh ? '分级接入' : 'Integration',
-    href: routePath(`${localePrefix}integration/levels/`),
-    active: currentSlug.includes('integration/levels') || currentSlug.includes('integration/skills'),
-  },
-  {
-    label: isZh ? '安全与运维' : 'Security',
+    label: isZh ? '安全与运维' : 'Security & Ops',
     href: routePath(`${localePrefix}security/verified-writes/`),
     active: currentSlug.includes('security/'),
   },
@@ -40,11 +40,6 @@ const navLinks = [
     label: isZh ? '参考手册' : 'Reference',
     href: routePath(`${localePrefix}reference/protocol-and-configuration/`),
     active: currentSlug.includes('reference/'),
-  },
-  {
-    label: 'llms.txt',
-    href: routePath('/llms.txt'),
-    active: false,
   },
 ];
 

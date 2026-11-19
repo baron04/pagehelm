@@ -180,7 +180,7 @@ def make_plan(paths: list[str], profile: str = 'dev', reason: str = 'explicit pa
         add('core boundary', ['@python', 'scripts/check_core_boundary.py'])
     if (core or yudao or contacts or frontend or bool(docs_site_paths) or tooling or broad
             or any(f in {'.env.example', '.gitignore', 'SECURITY.md'} for f in p)
-            or any(f.startswith('evals/') for f in p)):
+            or any(f.startswith(('.agents/', 'evals/')) for f in p)):
         add('repository hygiene', ['@python', 'scripts/check_repo_hygiene.py'])
     if dependencies or any(f in {'scripts/lock_and_sbom.py', 'sbom.json', 'THIRD_PARTY.md'} for f in p):
         add('dependency lock/SBOM', ['@python', 'scripts/lock_and_sbom.py', '--check'])
@@ -242,7 +242,7 @@ def make_plan(paths: list[str], profile: str = 'dev', reason: str = 'explicit pa
         if any(f.startswith(prefix) for f in p):
             add(prefix.rstrip('/') + ' apparatus', ['@python', '-m', 'unittest', 'discover', '-s', directory,
                                                     '-t', top], needs_python_packages=True)
-    known = lambda f: (f.startswith((CORE, 'frontend/', 'examples/yudao/', 'testapps/contacts/', 'evals/', 'docs/', 'scripts/', '.github/'))
+    known = lambda f: (f.startswith((CORE, '.agents/', 'frontend/', 'examples/yudao/', 'testapps/contacts/', 'evals/', 'docs/', 'scripts/', '.github/'))
                        or f in {'AGENTS.md', '.gitignore', '.gitattributes', '.editorconfig', '.env.example',
                                 'LICENSE', 'SECURITY.md', 'pagehelm.example.toml', 'pyproject.toml',
                                 'requirements.lock', 'sbom.json', 'THIRD_PARTY.md'}

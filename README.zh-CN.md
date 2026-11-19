@@ -53,7 +53,7 @@ cp pagehelm.example.toml pagehelm.toml  # 选择 provider（deepseek/qwen/openai
 | 真实界面定位与表单预填 | 不支持 | 纯视觉/DOM 慢速试错 | 不支持 | 同源语义 DOM + 人工交接 |
 | 数千行列表汇总分析 | 依赖现成聚合接口 | 逐页点击耗时高、易漏页 | 节点内存与超时受限 | 同账号接口 + 内存 SQL |
 | 身份与数据权限继承 | 常见全局服务密钥 | 服务端托管用户 Cookie | 静态共享凭据 | 浏览器会话绑定同账号令牌 |
-| 写入安全与防重复机制 | 依赖各工具自行处理 | 易误触原生保存按钮 | 超时重跑有重复写入风险 | 八步单次审批 + 未决态锁死 |
+| 写入安全与防重复机制 | 依赖各工具自行处理 | 易误触原生保存按钮 | 超时重跑有重复写入风险 | 单次审批 `WritePipeline` + 未决态锁死 |
 
 ## 本地开发
 
@@ -67,6 +67,6 @@ python -m pip install --no-deps --editable examples/yudao
 
 ## 文档与合规声明
 
-- **文档入口：** [简体中文](docs/zh-cn/index.md) · [English](docs/index.md) · [架构概览](docs/zh-cn/architecture/overview.md) · [执行引擎与运行时](docs/zh-cn/architecture/execution-and-runtime.md) · [快速上手与运维](docs/zh-cn/integration/quickstart.md) · [L0–L3 接入](docs/zh-cn/integration/levels.md) · [Skill 与写入](docs/zh-cn/integration/skills-and-writes.md) · [核验写入](docs/zh-cn/security/verified-writes.md) · [运维与可观测性](docs/zh-cn/security/operations-and-observability.md) · [协议参考](docs/zh-cn/reference/protocol-and-configuration.md) · [工具与能力](docs/zh-cn/reference/tools-and-capabilities.md)
+- **文档入口：** [简体中文](docs/zh-cn/index.md) · [English](docs/index.md) · [本地示例上手](docs/zh-cn/integration/quickstart.md) · [L0–L3 接入](docs/zh-cn/integration/levels.md) · [Skill 与写入](docs/zh-cn/integration/skills-and-writes.md) · [架构总览](docs/zh-cn/architecture/overview.md) · [执行引擎与运行时](docs/zh-cn/architecture/execution-and-runtime.md) · [写入安全与隐私](docs/zh-cn/security/verified-writes.md) · [部署与运维](docs/zh-cn/security/operations-and-observability.md) · [配置与协议](docs/zh-cn/reference/protocol-and-configuration.md) · [工具与能力](docs/zh-cn/reference/tools-and-capabilities.md)
 - **文档站（`frontend/docs/`）：** 直接读取 `docs/` 由 Astro Starlight 构建，同步生成 `/llms.txt` 与 `/llms-full.txt`。
 - **提示：** Alpha 阶段框架，仅在隔离合成数据下使用。[SECURITY](SECURITY.md) · [LICENSE](LICENSE) · [THIRD_PARTY](THIRD_PARTY.md)

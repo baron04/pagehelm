@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const siteRoot = path.resolve(here, '..')
+const docsRoot = path.resolve(siteRoot, '../../docs')
 const distDir = path.join(siteRoot, 'dist')
 
 const baseArgIndex = process.argv.indexOf('--base')
@@ -18,19 +19,36 @@ for (const rel of required) {
   }
 }
 
-function walkHtml(dir) {
+function walkFiles(dir, ext) {
   const out = []
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name)
-    if (entry.isDirectory()) out.push(...walkHtml(full))
-    else if (entry.name.endsWith('.html')) out.push(full)
+    if (entry.isDirectory()) out.push(...walkFiles(full, ext))
+    else if (entry.name.endsWith(ext)) out.push(full)
   }
   return out
 }
 
+// Check 1:1 EN/ZH Markdown parity and basic editorial hygiene in docs/
+const allMd = walkFiles(docsRoot, '.md').map((p) => path.relative(docsRoot, p).split(path.sep).join('/'))
+const enMd = allMd.filter((rel) => !rel.startsWith('zh-cn/')).sort()
+const zhMd = allMd
+  .filter((rel) => rel.startsWith('zh-cn/'))
+  .map((rel) => rel.slice('zh-cn/'.length))
+  .sort()
+if (JSON.stringify(enMd) !== JSON.stringify(zhMd)) {
+  throw new Error(`EN/ZH docs file mismatch.\nEN: ${enMd.join(', ')}\nZH: ${zhMd.join(', ')}`)
+}
+for (const rel of allMd) {
+  const text = fs.readFileSync(path.join(docsRoot, rel), 'utf8')
+  if (/\bTL;DR\b/i.test(text)) {
+    throw new Error(`Disallowed boilerplate ("TL;DR") found in docs/${rel}`)
+  }
+}
+
 const forbiddenUserPrefix = '/' + 'Us' + 'ers/'
 const forbiddenFileScheme = 'fi' + 'le://'
-const htmlFiles = walkHtml(distDir)
+const htmlFiles = walkFiles(distDir, '.html')
 const broken = []
 
 for (const file of [...htmlFiles, path.join(distDir, 'llms.txt'), path.join(distDir, 'llms-full.txt')]) {
@@ -51,8 +69,13 @@ function targetExists(distRelativePath) {
 }
 
 const hrefPattern = /\bhref="([^"]+)"/g
+const topNavPattern = /<nav[^>]*class="[^"]*ph-topnav[^"]*"[^>]*>([\s\S]*?)<\/nav>/i
 for (const htmlFile of htmlFiles) {
   const content = fs.readFileSync(htmlFile, 'utf8')
+  const topNavMatch = content.match(topNavPattern)
+  if (topNavMatch && /llms\.txt/i.test(topNavMatch[1])) {
+    throw new Error(`Primary navigation must not contain llms.txt (${path.relative(distDir, htmlFile)})`)
+  }
   const pageDir = path.dirname(path.relative(distDir, htmlFile))
   for (const match of content.matchAll(hrefPattern)) {
     const rawHref = match[1]
@@ -116,4 +139,4 @@ if (llmsLinksChecked < 20) {
 if (broken.length > 0) {
   throw new Error(`Broken documentation links found for base=${base}:\n${broken.join('\n')}`)
 }
-console.log(`Verified ${htmlFiles.length} HTML files, llms.txt (${llmsLinksChecked} links), and llms-full.txt for base=${base} (0 broken links, 0 leaks).`)
+console.log(`Verified ${htmlFiles.length} HTML files, ${enMd.length} EN/ZH doc pairs, llms.txt (${llmsLinksChecked} links), and llms-full.txt for base=${base} (0 broken links, 0 leaks).`)

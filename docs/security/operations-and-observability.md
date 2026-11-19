@@ -1,112 +1,93 @@
 ---
-title: Operations & Observability
-description: SQLite operational backup and isolated restore, reconciling indeterminate writes, 3-tier spend governance, content-free OTLP telemetry, and troubleshooting.
+title: Deployment & Operations
+description: Online rollout with ./deploy, graceful shutdown probes, SQLite WAL backup and isolated restore, INDETERMINATE reconciliation, spend caps, OTLP telemetry, and troubleshooting.
 ---
 
-> **TL;DR:** Production instances isolate persistent state in SQLite (`WAL`), support online checksummed backups with writer-isolated restores, never auto-retry `INDETERMINATE` writes without operator reconciliation, enforce 3-tier turn/daily/ledger spend caps, and stream content-free OpenTelemetry spans and counters without exposing prompts or row data.
+This page covers online deployment and runtime operations: rollout scripts, health probes and graceful drain, SQLite consistent backups and restores, `INDETERMINATE` write reconciliation, three-tier spend limits, content-free telemetry, and troubleshooting.
 
-[简体中文](../zh-cn/security/operations-and-observability.md)
+## 1. Online Deployment (`./deploy`)
 
-## 1. Consistent SQLite backup, verify, and restore
-
-`web_operation_agent.composition.operations` (`src/web_operation_agent/composition/operations.py`) packages consistent snapshots of local operational SQLite stores (sessions, mutation journals, spend caps) into self-contained verification bundles:
-
-- **Bundle format:** Writes a `0o700` bundle directory with `manifest.json` (`BACKUP_SCHEMA_VERSION = 1`), SHA-256 checksums for every database file, and SQLite `PRAGMA quick_check` validation.
-- **No secrets in backups:** Bundles contain operational state and digests only—never model keys, cookies, or execution tokens.
-- **Isolated restore by design:** Restoring creates a **new** directory and refuses to overwrite a live deployment directory in place, requiring explicit attestation that writers are stopped so old mutation journals are inspected for reconciliation rather than replayed.
+Hosted deployments default to `read-only` (writes, edit prefill, and user-facing source lookup disabled), with read-only HTTP method guards on static assets and proxy paths:
 
 ```bash
-# Inspect current operational database status and integrity
-.venv/bin/python -m web_operation_agent.composition.operations inspect --help
+cp deploy.example.toml deploy.local.toml   # Set ssh_target and public_origin (git-ignored)
+./deploy check                             # Read-only check of local build and remote prerequisites
+./deploy                                   # Build frontend & wheel, upload release, check health, switch current
+./deploy status                            # Inspect remote release.json and verify live assistant.js digest
+```
 
-# Create a consistent online backup bundle and verify its SHA-256 manifest
+## 2. Graceful Shutdown and Health Probes (`/healthz` & `/readyz`)
+
+`gateway.py` exposes unauthenticated probes for container orchestrators and reverse proxies:
+
+| Endpoint | Healthy response | Behavior after `SIGTERM` drain starts |
+| --- | --- | --- |
+| `GET /healthz` | `200` `{"ok": true, "protocol": 1, "schema_version": 1}` | Process liveness probe |
+| `GET /readyz` | `200` `{"ready": true, "accepting_sessions": true, "session_count": N}` | Switches to HTTP `503` (`ready: false`, `accepting_sessions: false`), stops accepting new turns, and waits for in-flight dispatch/readback up to `shutdown_drain_timeout_s` |
+
+## 3. SQLite Consistent Backup and Isolated Restore
+
+Session stores, mutation journals, and spend ledgers use WAL-mode SQLite. **Do not `cp` live `-wal` database files directly.** Use `web_operation_agent.composition.operations` (`src/web_operation_agent/composition/operations.py`):
+
+- **Backup bundle:** Creates a `0o700` directory with `manifest.json` (`BACKUP_SCHEMA_VERSION = 1`), SHA-256 digests for all database files, and `PRAGMA quick_check` validation.
+- **No credentials:** Bundles contain runtime ledgers and digests only—no model keys, cookies, or replayable tokens.
+- **Isolated restore:** `restore` writes only to a fresh target directory (never overwriting a live runtime directory) and requires `--writer-isolated` to confirm writer isolation. Restored `mutation_journal` records serve as reconciliation evidence only, never replay authority.
+
+```bash
+.venv/bin/python -m web_operation_agent.composition.operations inspect --help
 .venv/bin/python -m web_operation_agent.composition.operations backup --help
 .venv/bin/python -m web_operation_agent.composition.operations verify --help
-
-# Restore into a fresh 0o700 target directory (only after stopping writers)
 .venv/bin/python -m web_operation_agent.composition.operations restore --writer-isolated --help
 ```
 
-*(Pass `--help` on any subcommand above to view exact database-dir / bundle-dir paths for your deployment layout.)*
+## 4. Reconciling `INDETERMINATE` Writes
 
----
+When a write records `mutation_claimed` (`dispatching` or `indeterminate`) in `SQLiteMutationJournal` and the external call times out or disconnects, the framework **never retries automatically** because a single read cannot prove whether the prior backend transaction rolled back or is still committing.
 
-## 2. Reconciling `INDETERMINATE` writes
+Use `web_operation_agent.business.operations` (`src/web_operation_agent/business/operations.py`) or the session API to reconcile:
 
-When a single-flight write has already written `mutation_claimed` into `SQLiteMutationJournal` (`state` = `"dispatching"` or `"indeterminate"`) and the upstream network request times out or drops, PageHelm **stops and never retries automatically**: a finite read cannot prove that the earlier server transaction aborted safely.
-
-Inspect and resolve pending intents via `web_operation_agent.business.operations` (`src/web_operation_agent/business/operations.py`) or the live HTTP reconciliation endpoint:
-
-1. **List unresolved journal intents (`list`):** Displays each pending `proposal_digest`, reached execution phase, captured `result_digest`, and original actor identity digest so an operator does not need to reconstruct CAS states by hand.
-2. **Verify upstream outcome under the original actor (`reconcile`):** Performs a read-only actor-bound inspection returning `outcome`, `requires_human`, `dispatches: 0`, and `journal_changed: False`.
-3. **Commit operator resolution:**
-   - **Offline / stopped writer CLI:**
+1. **Inspect unresolved items (`list`):** Lists each unresolved item's `proposal_digest`, last stage, captured `result_digest`, and actor digest.
+2. **Read-only check (`reconcile`):** Runs a read-only check as the original actor (`dispatches: 0`, `journal_changed: False`) and reports whether human confirmation is still needed (`requires_human`).
+3. **Record the resolution:**
+   - **Offline/stopped-writer CLI** (dry-run by default; requires both `--apply` and `--writer-stopped` to modify the journal):
      ```bash
      .venv/bin/python -m web_operation_agent.business.operations list --help
      .venv/bin/python -m web_operation_agent.business.operations resolve --writer-stopped --help
      ```
-     (`resolve` runs in dry-run preview mode unless `--apply` is explicitly supplied, and requires `--writer-stopped` attestation.)
-   - **Active session HTTP API:** Submit an authenticated operator decision to `POST /v1/sessions/<id>/reconciliations` so the timeline records the resolved outcome alongside the original audit chain.
+   - **Online session API:** An authorized operator submits the finding to `POST /v1/sessions/<id>/reconciliations`, appending the outcome to the session timeline.
 
----
+## 5. Three-Tier Budget and Spend Controls
 
-## 3. Graceful shutdown and health probes
+`src/web_operation_agent/modeling/spend.py` and `src/web_operation_agent/execution/budget.py` enforce three independent layers:
 
-The gateway exposes unauthenticated operational probes designed for container orchestrators and reverse proxies (`gateway.py`):
-
-| Endpoint | Healthy response | Behavior during drain / shutdown |
-| --- | --- | --- |
-| `GET /healthz` | `200` `{"ok": true, "protocol": 1, "schema_version": 1}` | Process liveness check |
-| `GET /readyz` | `200` `{"ready": true, "accepting_sessions": true, "session_count": N}` | Transitions to HTTP `503` (`"ready": false`, `"accepting_sessions": false`) on shutdown / SIGTERM drain so load balancers stop routing new sessions immediately while active turns finish or record cancellation cleanly |
-
----
-
-## 4. Three-tier cost and quota governance
-
-`src/web_operation_agent/modeling/spend.py` and `src/web_operation_agent/execution/budget.py` enforce layered spending limits:
-
-| Tier | Class | Scope | Persistence & Edge Behavior |
+| Layer | Component | Scope | Persistence & boundary behavior |
 | --- | --- | --- | --- |
-| **1. Turn execution cap** | `TurnBudget` | Single turn (`steps`, `seconds`) | Shared atomic request counter + monotonic clock across read/SQL/browser stages; retries consume steps |
-| **2. Per-actor daily cap** | `DailyAllowance` | Per deployment principal key per calendar day | Checked pre-dispatch; tally is **rebuilt from persisted ledger rows at startup** so process restarts never reset daily quotas |
-| **3. Persistent reserve cap** | `SQLiteSpendCap` + `SpendMeter` | Deployment/run spend ledger (`turn_reserve_cny=0.02` default) | Reserves minimum turn cost before model dispatch and records exact token/CNY accounting atomically |
+| Turn budget | `TurnBudget` | Single turn (`steps`, `seconds`) | Shared atomic step count and monotonic clock across API, SQL, and UI stages; retries count as steps |
+| Daily actor allowance | `DailyAllowance` | Per day + per actor principal | Checked before dispatch; reconstructed from persisted daily ledger after process restart |
+| Atomic ledger cap | `SQLiteSpendCap` + `SpendMeter` | Process/deployment spend ledger (default `turn_reserve_cny = 0.02`) | Atomically reserves minimum headroom before model calls and records actual token cost on completion |
 
----
+## 6. Content-Free Telemetry and Turn Diagnostics
 
-## 5. Content-free OTLP telemetry (`RuntimeObservability`)
+### OTLP Telemetry (`RuntimeObservability`)
 
-`RuntimeObservability` (`src/web_operation_agent/modeling/observability.py`) ships operational telemetry without ever emitting raw user prompts, session handoff tokens, or row cell data:
+`src/web_operation_agent/modeling/observability.py` exports structured metrics and spans via a background daemon thread (`woa-otel-export`, bounded queue size `256`) without user prompts, cookies, or business table payloads:
 
-- **Background OTLP exporter (`woa-otel-export`):** Daemon thread with a bounded 256-item queue exporting SHA-256 trace/span IDs per `run_id`, timestamps, and structural counters:
-  - `turns`, `failed_turns`
-  - `provider_failures`, `provider_deadlines` (also tracks failure/deadline streaks)
-  - `indeterminate_writes`, `stale_runs_reaped`, `maintenance_failures`
-  - `exports_failed`, `alerts_failed`
-- **Cost & anomaly alerting:** Configure `otlp_endpoint`, optional `alert_webhook`, and `cost_alert_cny` threshold (bounded positive float up to `1_000_000`) to notify on-call channels cleanly.
+- Deterministic SHA-256 trace/span IDs per `run_id` with stage timings.
+- Built-in counters: `turns`, `failed_turns`, `provider_failures`, `provider_deadlines` (including consecutive failure/deadline counts), `indeterminate_writes`, `stale_runs_reaped`, `maintenance_failures`, `exports_failed`, and `alerts_failed`.
+- Configurable `otlp_endpoint`, `alert_webhook`, and `cost_alert_cny` (positive float up to `1_000_000`).
 
----
+### Single-Turn Diagnostics (`TurnTrace` & `trace_replay.html`)
 
-## 6. Per-turn diagnostics: `TurnTrace` and `trace_replay.html`
+- **`TurnTrace` (`execution/turn_trace.py`):** Records `stage_timings`, `tool_timings`, `first_route_kind`, `stop_reason`, and `checks`, audited and rescanned at `url_decode_depth=3` before writing.
+- **`trace_replay.html` (`state/traceview.py`):** Generates a static redacted replay page from the append-only `SessionLedger`, projecting only `VISIBLE_EVENTS` (`approval_requested`, `approval_decided`, `tool_call`, `application_entered`, `action_receipt`, `write_permitted`, `success_claim`, `run_finished`, `product_verification`, etc.).
 
-- **`TurnTrace` (`execution/turn_trace.py`):** Captures structural per-turn latency diagnostics (`stage_timings` via `record_stage`, per-tool durations and `error_code` via `record_tool_timing`, `first_route_kind`, `stop_reason`, and programmatic `checks`), alongside accepted model messages. Before persistence, records pass provider egress verification and credential pattern scanning (`url_decode_depth=3`).
-- **`trace_replay.html` (`state/traceview.py`):** Compiles a self-contained, redacted timeline replay from `SessionLedger` filtering strictly to `VISIBLE_EVENTS` (`approval_requested`, `approval_decided`, `tool_call`, `application_entered`, `action_receipt`, `write_permitted`, `success_claim`, `run_finished`, `product_verification`, etc.).
+## 7. Troubleshooting
 
----
-
-## 7. Operational troubleshooting matrix
-
-| Symptom | Likely root cause | Diagnostic check | Resolution |
+| Symptom | Common cause | Diagnosis | Resolution |
 | --- | --- | --- | --- |
-| Bootstrap fails with HTTP `401` / `403` | Application actor login expired or reverse proxy stripped identity headers | Check `start.final_statuses` / upstream auth header forwarding | Refresh upstream application login; verify reverse-proxy header pass-through |
-| `404` `runtime_unavailable` on `/woa/assistant.js` | Packaged installation missing built JS/CSS assets | Check `GET /woa/assistant.js` status message | Run `python scripts/build_runtime.py` before launching gateway |
-| `409` conflict on tab action or approval | Duplicate tab rotation triggered Web Locks reset, or single-use `approval_id` replayed | Inspect tab `woa.assistant.tab.v1` / panel timeline event | Refresh panel turn cleanly; request fresh approval card if proposal changed |
-| Turn stops with `step_budget` / `wall_budget` | Overly broad query triggered many pagination rounds or long UI exploration | Inspect `TurnTrace` `stage_timings` and `stop_reason` | Narrow date/entity filters, register typed summary/SQL read, or adjust `TurnBudget` |
-| `INDETERMINATE` write state in panel/journal | Network drop after single-flight `mutation_claimed` | Run `business.operations list` | Verify upstream record manually, then run `resolve --writer-stopped --apply` or `POST /reconciliations` |
-| `/readyz` returns `503` | Process draining during shutdown or readiness hook reports unhealthy | `curl -i /readyz` | Wait for active drain completion or inspect upstream dependency readiness |
-
----
-
-## Next steps
-
-- Check local startup, configuration keys, and CI gates in [5-Min Quickstart & Ops](../integration/quickstart.md).
-- Inspect exact `/v1/sessions/*` JSON contracts and environment variables in [Protocol & Configuration Reference](../reference/protocol-and-configuration.md).
+| `/bootstrap` returns `401` / `403` | Expired host login or proxy stripped auth headers | Check `start.final_statuses` and reverse proxy headers | Re-authenticate in the host app and verify header forwarding |
+| `/v1/runtime/assistant.js` returns `404` (`runtime_unavailable`) | Built frontend runtime asset missing | Inspect JSON error `code` | Run `python scripts/build_runtime.py` before starting the gateway |
+| Action or approval returns `409` | Duplicate tab triggered Web Locks rotation, or `approval_id` replayed | Inspect `woa.assistant.tab.v1` and latest `/timeline` events | Refresh the panel conversation or confirm a newly generated approval card |
+| Turn ends early with `step_budget` or `wall_budget` | Broad query caused repeated pagination or excessive UI exploration | Inspect `TurnTrace` `stage_timings` and `stop_reason` | Narrow filters, use summary/SQL tools, or raise configured budget |
+| `INDETERMINATE` entry in journal | Timeout or disconnect after `mutation_claimed` | Run `business.operations list` | Verify outcome in the target system, then run `resolve --writer-stopped --apply` or `POST /reconciliations` |
+| `/readyz` returns `503` | Process draining on shutdown or upstream readiness failed | Run `curl -i /readyz` | Wait for drain completion or check model/backend connectivity |
