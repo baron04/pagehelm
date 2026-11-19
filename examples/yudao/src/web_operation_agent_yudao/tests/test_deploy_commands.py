@@ -7,8 +7,9 @@ import importlib.util
 import io
 import json
 import os
-import re
 from pathlib import Path
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -269,6 +270,242 @@ elif tool=='curl':
         self.assertIn("host.drain()", serve_src)
         self.assertLess(serve_src.index("host.drain()"), serve_src.index("boot.shutdown()"))
         self.assertLess(serve_src.index("host.drain()"), serve_src.index("host.close()"))
+
+
+class DeployUploadTests(unittest.TestCase):
+    """Verify deploy.sh upload layout and hardlink reuse via real rsync and disposable directories."""
+
+    def setUp(self):
+        self.assertIsNotNone(shutil.which("rsync"), "rsync must be installed to run upload tests")
+        self.temp = tempfile.TemporaryDirectory(prefix="deploy with spaces ")
+        self.addCleanup(self.temp.cleanup)
+        base = Path(self.temp.name)
+        self.repo = base / "repo"
+        self.cache = base / "cache"
+        self.host = base / "host"
+        self.bin = base / "bin"
+        self.bin.mkdir()
+        (self.host / "releases").mkdir(parents=True)
+        self._populate_repo()
+        self._populate_cache()
+        self._install_shims()
+
+    def _write_text(self, path: Path, text: str, mode: int | None = None) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        if mode is not None:
+            path.chmod(mode)
+        return path
+
+    def _populate_repo(self):
+        for rel in (
+            "scripts/python.sh",
+            "examples/yudao/deploy/compose.yaml",
+            "examples/yudao/deploy/compose.cloud.yaml",
+            "examples/yudao/deploy/cloud/deploy.sh",
+            "examples/yudao/deploy/cloud/manifest.py",
+            "examples/yudao/deploy/cloud/activate.sh",
+            "examples/yudao/deploy/cloud/yudao-loader.js",
+            "examples/yudao/deploy/cloud/agent.Dockerfile",
+            "examples/yudao/deploy/cloud/native-policy/verified-money.json",
+        ):
+            target = self.repo / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(REPO / rel, target)
+        venv_python = self.repo / ".venv/bin/python"
+        venv_python.parent.mkdir(parents=True, exist_ok=True)
+        venv_python.symlink_to(sys.executable)
+        for rel, body in (
+            ("frontend/dist/integrations/yudao/page-facts.js", "facts\n"),
+            ("frontend/dist/integrations/yudao/yudao-page-controller.js", "controller\n"),
+            ("frontend/dist/integrations/yudao/form-surface.js", "form\n"),
+            ("src/web_operation_agent/web_runtime/assistant.js", "assistant-v1\n"),
+            ("src/web_operation_agent/web_runtime/trace_replay.html", "<html></html>\n"),
+        ):
+            self._write_text(self.repo / rel, body)
+
+    def _populate_cache(self):
+        jar = self.cache / "server/yudao-server/target/yudao-server.jar"
+        jar.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(jar, "w") as archive:
+            archive.writestr("cn/iocoder/yudao/server/woa/WoaPageGuard.class", b"guard")
+        for rel, body in (
+            ("server/sql/mysql/ruoyi-vue-pro.sql", "SELECT 1;\n"),
+            ("server/sql/mysql/quartz.sql", "SELECT 2;\n"),
+            ("business-schema.sql", "SELECT 3;\n"),
+            ("ui/dist-cloud/index.html", "<html>ui</html>\n"),
+            ("ui/dist-cloud/assets/app.js", "console.log('ui');\n"),
+            ("woa/page-controller.js", "woa-controller\n"),
+            ("woa/LICENSE", "MIT\n"),
+            ("ui/src/main.ts", "export {};\n"),
+            ("ui/src/views/system/User.vue", "<template></template>\n"),
+            ("ui/src/views/system/README.md", "ignore\n"),
+            ("ui/src/ignored_only/note.txt", "prune\n"),
+            ("server/yudao-module-system/src/main/java/cn/iocoder/Sys.java", "class Sys {}\n"),
+            ("server/yudao-module-mall/yudao-module-product/src/main/java/cn/iocoder/Prod.java", "class Prod {}\n"),
+            ("server/yudao-module-system/src/main/resources/application.yaml", "ignored: true\n"),
+        ):
+            self._write_text(self.cache / rel, body)
+
+    def _install_shims(self):
+        self._write_text(
+            self.bin / "uv",
+            f"#!{sys.executable}\n"
+            "from pathlib import Path\n"
+            "import sys, zipfile\n"
+            "args = sys.argv[1:]\n"
+            "out = Path(args[args.index('--out-dir') + 1])\n"
+            "target = Path(args[-1])\n"
+            "runtime = Path(__import__('os').environ['FAKE_REPO']) / 'src/web_operation_agent/web_runtime/assistant.js'\n"
+            "name = 'web_operation_agent_yudao-0.4.0-py3-none-any.whl' if target.name == 'yudao' else 'web_operation_agent-0.4.0-py3-none-any.whl'\n"
+            "with zipfile.ZipFile(out / name, 'w') as zf:\n"
+            "    if name.startswith('web_operation_agent-'):\n"
+            "        zf.writestr('web_operation_agent/web_runtime/assistant.js', runtime.read_bytes())\n"
+            "    else:\n"
+            "        zf.writestr('web_operation_agent_yudao/__init__.py', b'')\n",
+            0o755,
+        )
+        self._write_text(
+            self.bin / "git",
+            f"#!{sys.executable}\n"
+            "import sys\n"
+            "if 'rev-parse' in sys.argv:\n"
+            "    print('a' * 40)\n",
+            0o755,
+        )
+        self._write_text(
+            self.bin / "ssh",
+            f"#!{sys.executable}\n"
+            "import json, os, sys\n"
+            "from pathlib import Path\n"
+            "host = os.environ['FAKE_HOST']\n"
+            "args = sys.argv[1:]\n"
+            "with (Path(host) / 'ssh_calls.jsonl').open('a', encoding='utf-8') as log:\n"
+            "    log.write(json.dumps(args) + '\\n')\n"
+            "i = 0\n"
+            "while i < len(args):\n"
+            "    if args[i] in ('-l', '-o', '-p'):\n"
+            "        i += 2; continue\n"
+            "    if args[i].startswith('-'):\n"
+            "        i += 1; continue\n"
+            "    break\n"
+            "cmd = args[i + 1:]\n"
+            "if cmd[:3] == ['sh', '-s', '--']:\n"
+            "    sys.stdin.read()\n"
+            "    current = Path(host) / 'current'\n"
+            "    nxt = Path(host) / 'current.next'\n"
+            "    nxt.unlink(missing_ok=True)\n"
+            "    nxt.symlink_to(f'releases/{cmd[3]}')\n"
+            "    os.replace(nxt, current)\n"
+            "    sys.exit(0)\n"
+            "if len(cmd) == 1:\n"
+            "    os.execvp('sh', ['sh', '-c', cmd[0].replace('/opt/yudao', host)])\n"
+            "rewritten = []\n"
+            "for arg in cmd:\n"
+            "    val = arg.replace('/opt/yudao', host)\n"
+            "    if val.startswith('--link-dest='):\n"
+            "        p = val[len('--link-dest='):]\n"
+            "        if not os.path.exists(p) and os.path.exists(p.replace('\\\\ ', ' ')):\n"
+            "            val = '--link-dest=' + p.replace('\\\\ ', ' ')\n"
+            "    rewritten.append(val)\n"
+            "os.execvp(rewritten[0], rewritten)\n",
+            0o755,
+        )
+
+    def _run_deploy(self):
+        call_log = self.host / "ssh_calls.jsonl"
+        before_calls = len(call_log.read_text(encoding="utf-8").splitlines()) if call_log.exists() else 0
+        env = dict(
+            os.environ,
+            PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
+            YUDAO_CACHE=str(self.cache),
+            WOA_PUBLIC_ORIGIN="https://demo.example",
+            FAKE_HOST=str(self.host),
+            FAKE_REPO=str(self.repo),
+        )
+        result = subprocess.run(
+            ["/bin/sh", str(self.repo / "examples/yudao/deploy/cloud/deploy.sh"), "fixture-host"],
+            cwd=self.repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(0, result.returncode, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+        lines = call_log.read_text(encoding="utf-8").splitlines()[before_calls:]
+        release_dir = (self.host / "current").resolve()
+        return release_dir, lines
+
+    def test_first_deploy_layout_filtering_and_consolidated_ssh_calls(self):
+        release, ssh_calls = self._run_deploy()
+        self.assertLessEqual(len(ssh_calls), 8, ssh_calls)
+
+        expected_files = (
+            "server/yudao-server/target/yudao-server.jar",
+            "server/sql/mysql/ruoyi-vue-pro.sql",
+            "server/sql/mysql/quartz.sql",
+            "business-schema.sql",
+            "compose.yaml",
+            "compose.cloud.yaml",
+            "release.json",
+            "runtime.sha256",
+            "ui/index.html",
+            "ui/assets/app.js",
+            "woa/page-controller.js",
+            "woa/LICENSE",
+            "woa/yudao-loader.js",
+            "woa/page-facts.js",
+            "woa/yudao-page-controller.js",
+            "woa/form-surface.js",
+            "agent/agent.Dockerfile",
+            "agent/wheels/web_operation_agent-0.4.0-py3-none-any.whl",
+            "agent/wheels/web_operation_agent_yudao-0.4.0-py3-none-any.whl",
+            "native-policy/verified-money.json",
+            "source/ui/src/main.ts",
+            "source/ui/src/views/system/User.vue",
+            "source/server/yudao-module-system/src/main/java/cn/iocoder/Sys.java",
+            "source/server/yudao-module-mall/yudao-module-product/src/main/java/cn/iocoder/Prod.java",
+        )
+        for rel in expected_files:
+            self.assertTrue((release / rel).is_file(), f"missing uploaded file: {rel}")
+
+        self.assertFalse((release / "source/ui/src/views/system/README.md").exists())
+        self.assertFalse((release / "source/ui/src/ignored_only").exists())
+        self.assertFalse((release / "source/server/yudao-module-system/src/main/resources").exists())
+
+    def test_second_deploy_hardlinks_unchanged_cache_and_updates_runtime(self):
+        rel1, _ = self._run_deploy()
+        v1_digest = hashlib.sha256(b"assistant-v1\n").hexdigest()
+        self.assertEqual(v1_digest + "\n", (rel1 / "runtime.sha256").read_text(encoding="utf-8"))
+
+        (self.repo / "src/web_operation_agent/web_runtime/assistant.js").write_text("assistant-v2\n", encoding="utf-8")
+        rel2, ssh_calls2 = self._run_deploy()
+        self.assertNotEqual(rel1, rel2)
+        self.assertLessEqual(len(ssh_calls2), 8, ssh_calls2)
+
+        for rel in (
+            "server/yudao-server/target/yudao-server.jar",
+            "server/sql/mysql/ruoyi-vue-pro.sql",
+            "ui/index.html",
+            "ui/assets/app.js",
+            "source/ui/src/main.ts",
+            "source/ui/src/views/system/User.vue",
+            "source/server/yudao-module-system/src/main/java/cn/iocoder/Sys.java",
+            "source/server/yudao-module-mall/yudao-module-product/src/main/java/cn/iocoder/Prod.java",
+        ):
+            self.assertEqual(
+                (rel1 / rel).stat().st_ino,
+                (rel2 / rel).stat().st_ino,
+                f"expected hardlink reuse across releases for {rel}",
+            )
+
+        v2_digest = hashlib.sha256(b"assistant-v2\n").hexdigest()
+        self.assertEqual(v1_digest + "\n", (rel1 / "runtime.sha256").read_text(encoding="utf-8"))
+        self.assertEqual(v2_digest + "\n", (rel2 / "runtime.sha256").read_text(encoding="utf-8"))
+        with zipfile.ZipFile(rel1 / "agent/wheels/web_operation_agent-0.4.0-py3-none-any.whl") as z1:
+            self.assertEqual(b"assistant-v1\n", z1.read("web_operation_agent/web_runtime/assistant.js"))
+        with zipfile.ZipFile(rel2 / "agent/wheels/web_operation_agent-0.4.0-py3-none-any.whl") as z2:
+            self.assertEqual(b"assistant-v2\n", z2.read("web_operation_agent/web_runtime/assistant.js"))
 
 
 if __name__ == "__main__":

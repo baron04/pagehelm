@@ -62,31 +62,58 @@ echo "release $RELEASE -> $TARGET"
 # the assistant's host refuse every page operation, since its window is never confirmed.
 unzip -l "$JAR" | grep -q 'cn/iocoder/yudao/server/woa/WoaPageGuard.class' \
   || { echo "the server jar was built without patches/server (see the deploy README)" >&2; exit 1; }
-ssh "$TARGET" "mkdir -p $DIR/server/yudao-server/target $DIR/server/sql/mysql $DIR/ui $DIR/woa $DIR/agent/wheels $DIR/source/ui $DIR/native-policy"
-rsync -az "$JAR" "$TARGET:$DIR/server/yudao-server/target/"
-rsync -az "$YUDAO_CACHE/server/sql/mysql/ruoyi-vue-pro.sql" "$YUDAO_CACHE/server/sql/mysql/quartz.sql" \
-  "$TARGET:$DIR/server/sql/mysql/"
-rsync -az "$YUDAO_CACHE/business-schema.sql" "$DEPLOY/compose.yaml" "$DEPLOY/compose.cloud.yaml" "$TARGET:$DIR/"
-rsync -az "$STAGING/release.json" "$STAGING/runtime.sha256" "$TARGET:$DIR/"
-rsync -az --delete "$YUDAO_CACHE/ui/dist-cloud/" "$TARGET:$DIR/ui/"
-rsync -az --delete "$YUDAO_CACHE/woa/" "$TARGET:$DIR/woa/"
-rsync -az "$HERE/yudao-loader.js" "$TARGET:$DIR/woa/"
-rsync -az "$REPO/frontend/dist/integrations/yudao/page-facts.js" \
+PREV_BASES=$(ssh "$TARGET" "
+  set -eu
+  mkdir -p '$DIR/server/yudao-server/target' '$DIR/server/sql/mysql' '$DIR/ui' '$DIR/source/ui' '$DIR/source/server'
+  prev=\$(cd -P '/opt/yudao/current' 2>/dev/null && pwd -P || true)
+  if [ -n \"\$prev\" ]; then
+    for sub in server/yudao-server/target server/sql/mysql ui source/ui source/server; do
+      [ -d \"\$prev/\$sub\" ] && printf '%s=%s\n' \"\$sub\" \"\$prev/\$sub\"
+    done
+  fi
+")
+
+rsync_cached() {
+  sub=$1; shift
+  base=$(printf '%s\n' "$PREV_BASES" | awk -v key="$sub=" 'index($0, key) == 1 { print substr($0, length(key) + 1); exit }')
+  if [ -n "$base" ]; then
+    rsync -rlptz --link-dest="$base" "$@"
+  else
+    rsync -rlptz "$@"
+  fi
+}
+
+# Stage the small per-release bundle locally so one rsync replaces eight separate transfers.
+BUNDLE=$STAGING/bundle
+mkdir -p "$BUNDLE/agent"
+cp -p "$YUDAO_CACHE/business-schema.sql" "$DEPLOY/compose.yaml" "$DEPLOY/compose.cloud.yaml" \
+  "$STAGING/release.json" "$STAGING/runtime.sha256" "$BUNDLE/"
+cp -Rp "$YUDAO_CACHE/woa" "$BUNDLE/woa"
+cp -fp "$HERE/yudao-loader.js" \
+  "$REPO/frontend/dist/integrations/yudao/page-facts.js" \
   "$REPO/frontend/dist/integrations/yudao/yudao-page-controller.js" \
-  "$REPO/frontend/dist/integrations/yudao/form-surface.js" "$TARGET:$DIR/woa/"
-rsync -az "$WHEELS/" "$TARGET:$DIR/agent/wheels/"
-rsync -az "$HERE/agent.Dockerfile" "$TARGET:$DIR/agent/"
-rsync -az --delete "$HERE/native-policy/" "$TARGET:$DIR/native-policy/"
+  "$REPO/frontend/dist/integrations/yudao/form-surface.js" "$BUNDLE/woa/"
+cp -Rp "$WHEELS" "$BUNDLE/agent/wheels"
+cp -p "$HERE/agent.Dockerfile" "$BUNDLE/agent/"
+cp -Rp "$HERE/native-policy" "$BUNDLE/native-policy"
+rsync -rlptz "$BUNDLE/" "$TARGET:$DIR/"
+
+# Reuse unchanged cached artifacts from the active release via --link-dest (and avoid UID/GID mismatch).
+rsync_cached server/yudao-server/target "$JAR" "$TARGET:$DIR/server/yudao-server/target/"
+rsync_cached server/sql/mysql "$YUDAO_CACHE/server/sql/mysql/ruoyi-vue-pro.sql" \
+  "$YUDAO_CACHE/server/sql/mysql/quartz.sql" "$TARGET:$DIR/server/sql/mysql/"
+rsync_cached ui --delete "$YUDAO_CACHE/ui/dist-cloud/" "$TARGET:$DIR/ui/"
 # The source the assistant compiles its rules from and reads the UI's lists and tables in:
 # the pages' .vue and .ts files, and every module's Java.
-rsync -az --prune-empty-dirs --include='*/' --include='*.vue' --include='*.ts' --exclude='*' \
+rsync_cached source/ui --prune-empty-dirs --include='*/' --include='*.vue' --include='*.ts' --exclude='*' \
   "$YUDAO_CACHE/ui/src" "$TARGET:$DIR/source/ui/"
-for module in $(cd "$YUDAO_CACHE/server" && find . -path '*/yudao-module-*/src/main/java' -type d 2>/dev/null \
-                 | sed 's#^\./##; s#/src/main/java$##' | sort); do
-  ssh "$TARGET" "mkdir -p $DIR/source/server/$module/src/main/java"
-  rsync -az "$YUDAO_CACHE/server/$module/src/main/java/" \
-    "$TARGET:$DIR/source/server/$module/src/main/java/"
-done
+(
+  cd "$YUDAO_CACHE/server"
+  set -- $(find . -path '*/yudao-module-*/src/main/java' -type d 2>/dev/null | sed 's#^\./##' | sort)
+  if [ "$#" -gt 0 ]; then
+    rsync_cached source/server -R "$@" "$TARGET:$DIR/source/server/"
+  fi
+)
 
 ssh "$TARGET" sh -s -- "$RELEASE" "${WOA_PUBLIC_ORIGIN:-}" < "$HERE/activate.sh"
 
