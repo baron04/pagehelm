@@ -312,10 +312,10 @@ def main(argv=None) -> int:
                     start(config, restart=args.action == "restart")
         return 0
     except ImportError:
-        print("本地Python依赖尚未安装；见 docs/guides/local-yudao.md。", file=sys.stderr)
+        print("本地Python依赖尚未安装；见 docs/zh-cn/integration/quickstart.md。", file=sys.stderr)
         return 1
     except (cfg.LocalError, OSError, ValueError, subprocess.SubprocessError) as exc:
-        print(f"环境{config.number}：{exc}\n操作指南：docs/guides/local-yudao.md", file=sys.stderr)
+        print(f"环境{config.number}：{exc}\n操作指南：docs/zh-cn/integration/quickstart.md", file=sys.stderr)
         return 1
 
 

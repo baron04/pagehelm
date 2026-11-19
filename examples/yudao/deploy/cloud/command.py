@@ -37,7 +37,7 @@ def run(args: list[str], *, capture: bool = False, **kwargs) -> str:
 def configuration() -> tuple[str, str]:
     path = ROOT / "deploy.local.toml"
     if not path.is_file():
-        raise DeploymentError("缺少 deploy.local.toml。复制 deploy.example.toml 并填写服务器和域名；见 docs/guides/deploy-yudao.md。")
+        raise DeploymentError("缺少 deploy.local.toml。复制 deploy.example.toml 并填写服务器和域名；见 docs/zh-cn/integration/quickstart.md。")
     with path.open("rb") as handle:
         values = tomllib.load(handle)
     if set(values) != {"ssh_target", "public_origin"}:
@@ -59,7 +59,7 @@ def require_tools() -> None:
     missing = [name for name in ("git", "ssh", "rsync", "uv", "npm", "node", "unzip", "openssl", "python3")
                if not shutil.which(name)]
     if missing:
-        raise DeploymentError("缺少本地命令：" + ", ".join(missing) + "；见 docs/guides/deploy-yudao.md。")
+        raise DeploymentError("缺少本地命令：" + ", ".join(missing) + "；见 docs/zh-cn/integration/quickstart.md。")
 
 
 def check_cache() -> None:
@@ -110,7 +110,7 @@ def status(target: str, origin: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="./deploy", description="无参数发布；缓存固定为 .q0-cache/yudao。详见 docs/guides/deploy-yudao.md。")
+    parser = argparse.ArgumentParser(prog="./deploy", description="无参数发布；缓存固定为 .q0-cache/yudao。详见 docs/zh-cn/integration/quickstart.md。")
     parser.add_argument("action", nargs="?", choices=("deploy", "check", "status"), default="deploy",
                         help="deploy 发布（默认）；check 只检查；status 查看线上版本")
     args = parser.parse_args(argv)
@@ -154,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except (DeploymentError, OSError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"部署失败：{exc}", file=sys.stderr)
-        print("排查入口：docs/guides/deploy-yudao.md", file=sys.stderr)
+        print("排查入口：docs/zh-cn/integration/quickstart.md", file=sys.stderr)
         return 1
 
 

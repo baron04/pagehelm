@@ -7,11 +7,11 @@ Applies throughout this repository.
 - Read `README.md` once, then only relevant docs/code/tests. Use `rg`; exclude caches, generated output, runs and worktrees unless relevant. Reuse context; code and passing tests resolve prose drift.
 - Preserve the owner's reasoning, context and compaction settings. Default to one agent; delegate only when authorized for bounded independent work. Retain protocol-required independent authoring/review.
 - Keep large outputs in temporary logs; never hide errors or claim unread checks passed. Hand over commit, changes, checks/skips, constraints and next action briefly; do not add reviews without new risk/change.
-- Keep both READMEs aligned and limited to overview. Public behavior belongs in the matching Chinese `docs/` page; internal plans/research/reviews belong in ignored `.workbench/`, never product Git/public links. It has separate instructions, Git and commit authorization. Preserve frozen protocols/artifacts and original verdicts; label hypotheses and avoid generalizing fixture results.
+- Keep both READMEs aligned and limited to overview. Public behavior belongs in synchronized English and Chinese `docs/` pages (`docs/` and `docs/zh-cn/`); internal plans/research/reviews belong in ignored `.workbench/`, never product Git/public links. It has separate instructions, Git and commit authorization. Preserve frozen protocols/artifacts and original verdicts; label hypotheses and avoid generalizing fixture results.
 
 ## Task entry points
 
-Local environments: [guide](docs/guides/local-yudao.md). Online deployment: [guide](docs/guides/deploy-yudao.md).
+Local environments & online deployment: [quickstart](docs/integration/quickstart.md) ([简体中文](docs/zh-cn/integration/quickstart.md)).
 
 ## Architecture
 
@@ -37,7 +37,7 @@ Use Python 3.13 and select checks from the actual diff:
 .venv/bin/python scripts/check.py
 ```
 
-- For code/config changes read [development checks](docs/guides/development-checks.md). Finish selected checks and focused regressions before handoff. Docs/config-only changes require syntax, links and relevant invariants. Reuse passed checks only while relevant code/inputs/environment remain unchanged; repairs rerun affected checks. Skips are not integration evidence.
+- For code/config changes read [development checks](docs/integration/quickstart.md#5-development-checks) ([简体中文](docs/zh-cn/integration/quickstart.md#五开发检查)). Finish selected checks and focused regressions before handoff. Docs/config-only changes require syntax, links and relevant invariants. Reuse passed checks only while relevant code/inputs/environment remain unchanged; repairs rerun affected checks. Skips are not integration evidence.
 - Merge checks: `--profile ci --base <ref>`; packaging/dependencies require `bash scripts/check_wheels.sh`; browser changes require the relevant integration lane. Full `scripts/qualify.sh --require-browser` only for explicit full qualification or release candidates. Never drop acceptance, independent review or safety regressions to save tokens, or duplicate encompassing/subset suites.
 - Tests must not call paid models or alter the real spend ledger. Intentional model evaluations need no approval, spend cap or cost stop; report provider/model, calls, tokens and ledger reference cost. Preserve failures/unknowns/verdicts; repeat frozen acceptance only for changed inputs or an explicit stability question.
 - Inspect status and every changed hunk; preserve unrelated work and update affected tests/docs. No published-history rewrites, push, release, remote creation or upstream submission without explicit owner authorization.

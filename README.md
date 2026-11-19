@@ -1,65 +1,72 @@
-# Web Operation Agent
+# PageHelm
 
 [简体中文](README.zh-CN.md)
 
-An alpha framework for embedding an AI assistant in a first-party web application. The server owns planning, model access, credentials, approvals and audit; the browser observes the page, runs fixed tools and displays progress.
+**PageHelm** (`web_operation_agent`) is an alpha framework for embedding a server-governed AI operations assistant directly inside first-party web applications.
 
-[Yudao](examples/yudao/deploy/README.md) is the default demo and test application. Interfaces may change; the project is not production-ready.
+- **Server-owned control:** Model keys, Skill manuals, session policy, safety gates, and audit logs remain strictly on the server.
+- **Same-actor hybrid execution:** Combines server-side delegated API + SQL reads (`TurnTables`, `<DataTable>`) with live browser DOM navigation and prefill (`assistant.js`, `PageController`).
+- **Fresh visible write approvals:** Mutations default **off** (`read-only`); enabled writes require exact diffs, trusted visible clicks, single-consume dispatch, same-actor readback, and **never** retry `INDETERMINATE` outcomes.
+- **Incremental onboarding (L0–L3):** Start with the single-script panel and shared `frontend/src/integrations/element-plus/` helpers, then layer typed reads, domain playbooks, and verified writes.
 
-## Capabilities and architecture
-
-- Application-owned Skills, typed reads and optional source retrieval.
-- Goal-directed queries/navigation and reviewed form prefill with user handover.
-- Writes default off; enabled writes require exact approval, dispatch once and application verification. Uncertain writes are never retried automatically.
-- A React panel over server state, multi-page sessions and optional SQLite persistence.
+## Architecture
 
 ```text
-First-party page + browser Runtime
-              ↕ authenticated observations/actions
-Application-neutral server + session policy/model/approval/audit
-              ↕ typed application ports
-Application adapter + identity/routes/reads/writes/verification
+First-party Page (assistant.js + Shadow DOM Panel + PageController)
+                        ^ authenticated observations / actions / approvals
+                        v
+Application-Neutral Server (Executor · TurnHarness · WriteSafetyPipeline · SQLite Store)
+                        ^ typed ports (ApplicationPorts & GoalData)
+                        v
+Application Adapter (Identity · Routes · Same-Actor Reads · Verified Writes)
 ```
 
-Applications provide their own trusted identity, permissions and verification. Browser actions cannot supply database transactions or rollback. Implemented paths and evaluation samples do not establish general accuracy. See [runtime behavior and limits](docs/reference/runtime-behavior.md), [system design](docs/concepts/overview.md) and [security](SECURITY.md).
+## 5-Minute Quickstart
 
-## Run Yudao
+Requires Python 3.13, Node.js (>=22), and Docker Compose 2.30+. Prepare reference fixtures in `.q0-cache/yudao/` per [deploy reference](examples/yudao/deploy/README.md).
 
-### Local environments
+```bash
+cp .env.example .env                    # Fill 1-3 lines with your API key only (e.g. DEEPSEEK_API_KEY)
+cp pagehelm.example.toml pagehelm.toml  # Pick provider ("deepseek"|"qwen"|"openai") & safety mode
+./local --synthetic-clock               # Launch local sandbox env 1 at http://localhost:40001
+```
 
-| Local environment | Command | URL |
-| --- | --- | --- |
-| Environment 1 (default) | `./local` | <http://localhost:40001> |
-| Environment 2 | `./local --env 2` | <http://localhost:40002> |
+## Progressive Integration (L0–L3)
 
-Each Compose project contains its assistant, application, database and Redis. Source is mounted from the directory containing `local`; ordinary source updates restart only the selected assistant. Setup and diagnostics: [local guide](docs/guides/local-yudao.md).
+| Level | Integration work | Unlocked capability | Reference |
+| --- | --- | --- | --- |
+| **L0** | Embed `/v1/runtime/assistant.js` + `/bootstrap` | Shadow DOM panel, semantic DOM actions, Element Plus helpers | `frontend/src/integrations/element-plus/` |
+| **L1** | Implement `Identity`, `Routes`, and typed read ports | Same-actor queries, `TurnTables` SQL, paginated `<DataTable>` | [`testapps/contacts`](testapps/contacts/adapter.py) |
+| **L2** | Add domain playbooks, conventions & `entity_rules` | Module disambiguation, compiled rule checks, `need_input` pills | [L0–L3 Guide](docs/integration/levels.md) |
+| **L3** | Add journal, postcondition verifier & Skills / `SubmitPort` | Typed Skill writes, flat `update_record`, native submit & undo prefill | [Verified Writes](docs/security/verified-writes.md) |
 
-### Online environment (demo)
+## Safety Matrix & Approach Comparison
 
-Deploy to a configured server with `./deploy`; setup and recovery: [online deployment guide](docs/guides/deploy-yudao.md).
+| Mode | Reads & nav | Form prefill | Write proposals | Mutation dispatch |
+| --- | --- | --- | --- | --- |
+| `read-only` (prod default) | Read-only window | Off | Off | Off |
+| `assisted-draft` | Read-only window | On (handoff + undo) | Prepare only | Off |
+| `verified-operate` (local default) | Read-only window | On | On | Once after fresh approval |
+
+| Dimension | Pure API / RAG Bot | Headless Browser Agent / RPA | Low-Code Workflow Builder | **PageHelm** |
+| --- | --- | --- | --- | --- |
+| Live UI navigation & form prefill | None | Slow full-page loops | None | Same-origin DOM Runtime + handover |
+| Tabular reads (thousands of rows) | Needs custom endpoints | Slow UI pagination | Memory/node bottlenecks | Same-actor API + `TurnTables` SQL |
+| Auth & permission inheritance | Often service keys | Server holds user cookies | Static shared keys | Delegated per-session browser identity |
+| Write safety & retry control | Custom per tool | Clicks live save buttons | Auto-retry risks duplicates | 8-stage approval + `INDETERMINATE` lock |
 
 ## Development
 
-Use Python 3.13 and Node.js:
-
 ```bash
-python3.13 -m venv .venv
-. .venv/bin/activate
-PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 python -m pip install --editable .
+python3.13 -m venv .venv && . .venv/bin/activate
+PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 python -m pip install --editable ".[browser]"
 python -m pip install --no-deps --editable examples/yudao
-cp .env.example .env  # fill only needed settings; never commit .env
-python scripts/build_runtime.py --install
-python scripts/build_panel.py
-python scripts/check.py --plan
-python scripts/check.py
+.venv/bin/python scripts/build_panel.py --install && .venv/bin/python scripts/build_runtime.py --skip-build
+.venv/bin/python scripts/check.py --plan && .venv/bin/python scripts/check.py
 ```
 
-Rebuild browser assets after frontend changes and in each checkout. Model configuration and container updates follow the local/deployment guides. Checks, merge validation and explicit full qualification: [development guide](docs/guides/development-checks.md).
+## Documentation & Legal
 
-Source: `src/` (neutral core), `frontend/` (browser code), `examples/` (adapters/deployment), `testapps/` (synthetic test apps), `evals/` (separate evaluation apparatus).
-
-[Documentation index](docs/README.md) · [Integrate an application](docs/guides/integrate-an-application.md) · [Write model](docs/concepts/writes.md) · [Durable operation](docs/guides/operate-durably.md)
-
-## License
-
-[LICENSE](LICENSE) · [THIRD_PARTY.md](THIRD_PARTY.md)
+- **Docs:** [English](docs/index.md) · [简体中文](docs/zh-cn/index.md) · [Architecture](docs/architecture/overview.md) · [Quickstart & Ops](docs/integration/quickstart.md) · [L0–L3 Integration](docs/integration/levels.md) · [Verified Writes](docs/security/verified-writes.md) · [Protocol Reference](docs/reference/protocol-and-configuration.md)
+- **Docs site (`frontend/docs/`):** Built from `docs/` via Astro Starlight with `/llms.txt` & `/llms-full.txt`.
+- **Notice:** Alpha software; evaluate only against isolated synthetic data. [SECURITY](SECURITY.md) · [LICENSE](LICENSE) · [THIRD_PARTY](THIRD_PARTY.md)

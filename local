@@ -3,7 +3,7 @@
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 if [ ! -x "$ROOT/.venv/bin/python" ]; then
-  echo '缺少 .venv；请按 docs/guides/local-yudao.md 完成首次准备。' >&2
+  echo '缺少 .venv；请按 docs/zh-cn/integration/quickstart.md 完成首次准备。' >&2
   exit 2
 fi
 PYTHON="$ROOT/.venv/bin/python"
