@@ -1047,6 +1047,73 @@ class NativeCliTests(unittest.TestCase):
             self.assertEqual(ex2.exception.code, 2)
             self.assertIn("multiple provider API keys", err2.getvalue())
 
+    def test_http_bootstrap_retries_transient_upstream_errors_only(self):
+        import threading
+        import urllib.error
+        import urllib.request
+        from unittest.mock import Mock, call
+        from web_operation_agent.composition.live import LiveProductCapacityError
+        from web_operation_agent_yudao.host import native_server as native
+
+        host = Mock()
+        httpd = native.ThreadingHTTPServer(("127.0.0.1", 0), native._handler(host))
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        url = f"http://127.0.0.1:{httpd.server_port}/bootstrap"
+
+        def post():
+            req = urllib.request.Request(
+                url,
+                data=b'{"runtime_instance_id":"tab-1"}',
+                method="POST",
+                headers={"Authorization": "Bearer synthetic-a", "tenant-id": "1"},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+
+        with patch.object(native.time, "sleep") as sleep_mock:
+            host.bootstrap.side_effect = [
+                YudaoReadRefused("dict: 503", code=503),
+                YudaoReadRefused("perm: 502", code=502),
+                DataRefused("perm: URLError", read_failed=True),
+                {"session_id": "s-1"},
+            ]
+            status, body = post()
+            self.assertEqual((status, body), (200, {"session_id": "s-1"}))
+            self.assertEqual(host.bootstrap.call_count, 4)
+            self.assertEqual(sleep_mock.call_args_list, [call(1.5), call(3.0), call(4.5)])
+
+            sleep_mock.reset_mock()
+            host.bootstrap.reset_mock()
+            host.bootstrap.side_effect = BootstrapRefused(401, "unauthorized")
+            with self.assertRaises(urllib.error.HTTPError) as err_401:
+                post()
+            self.assertEqual(err_401.exception.code, 401)
+            self.assertEqual(json.loads(err_401.exception.read().decode("utf-8")), {"error": "unauthorized"})
+            self.assertEqual(host.bootstrap.call_count, 1)
+            sleep_mock.assert_not_called()
+
+            sleep_mock.reset_mock()
+            host.bootstrap.reset_mock()
+            host.bootstrap.side_effect = LiveProductCapacityError("busy")
+            with self.assertRaises(urllib.error.HTTPError) as err_busy:
+                post()
+            self.assertEqual(err_busy.exception.code, 503)
+            self.assertEqual(json.loads(err_busy.exception.read().decode("utf-8")), {"error": "assistant_busy"})
+            self.assertEqual(host.bootstrap.call_count, 1)
+            sleep_mock.assert_not_called()
+
+            sleep_mock.reset_mock()
+            host.bootstrap.reset_mock()
+            host.bootstrap.side_effect = YudaoReadRefused("down: 503", code=503)
+            with self.assertRaises(urllib.error.HTTPError) as err_down:
+                post()
+            self.assertEqual(err_down.exception.code, 503)
+            self.assertEqual(host.bootstrap.call_count, 4)
+            self.assertEqual(sleep_mock.call_count, 3)
+
 
 if __name__ == "__main__":
     unittest.main()

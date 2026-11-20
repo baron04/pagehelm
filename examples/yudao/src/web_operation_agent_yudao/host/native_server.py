@@ -1044,8 +1044,22 @@ def _handler(host: YudaoHost):
                     raise BootstrapRefused(400, "invalid_request")
                 auth = self.headers.get("Authorization") or ""
                 token = auth[7:].strip() if auth.startswith("Bearer ") else ""
-                payload = host.bootstrap(token, str(self.headers.get("tenant-id") or ""),
-                                         str(body.get("runtime_instance_id") or ""))
+                tenant_id = str(self.headers.get("tenant-id") or "")
+                runtime_instance_id = str(body.get("runtime_instance_id") or "")
+                for attempt in range(4):
+                    try:
+                        payload = host.bootstrap(token, tenant_id, runtime_instance_id)
+                        break
+                    except Exception as exc:  # noqa: BLE001 -- retry transient upstream warmup errors only
+                        transient = (
+                            (isinstance(exc, YudaoReadRefused)
+                             and (exc.read_failed or exc.code in (500, 502, 503, 504)))
+                            or getattr(exc, "read_failed", False) is True
+                            or isinstance(exc, (ConnectionError, TimeoutError))
+                        )
+                        if not transient or attempt == 3:
+                            raise
+                        time.sleep(1.5 * (attempt + 1))
                 self._json(200, payload)
             except BootstrapRefused as exc:
                 self._json(exc.status, {"error": exc.code})
