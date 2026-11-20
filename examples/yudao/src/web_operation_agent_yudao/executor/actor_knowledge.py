@@ -25,6 +25,30 @@ _NOT_A_QUANTITY = re.compile(r"(?:^|[a-z])(?:Id|No|Status|State|Type|Sort|Level|
 #: actor may make: {read path: {column: (lookup path, name field, column title)}}.
 _RELATION_NAMES = {"system/dept/list": {"leaderUserId": ("system/user/simple-list", "nickname", "负责人")}}
 _RECORD_KEY = re.compile(r"(?i)(^|_)(id|no|name|title|subject)$|name$")
+_SENSITIVE_COL_KEY = re.compile(r"(?:password|secret|token|apikey|privatekey)", re.I)
+
+#: Narrowed 16 pure default-config / financial-report-snapshot writing GETs allowed
+#: ONLY on active user Q&A `call_api` (2026-10-29 & 2026-11-20 owner decisions).
+#: Business side-effect GETs (mail, pay notify, visit counters, Redis) and binary
+#: exports remain refused; background warm/previews/probes refuse all.
+USER_READ_WRITING_GET_ALLOWLIST: frozenset[str] = frozenset({
+    "/admin-api/fms/closing/period/overview",
+    "/admin-api/fms/closing/scheme/list",
+    "/admin-api/fms/home/get",
+    "/admin-api/fms/home/metric-detail",
+    "/admin-api/fms/report/balance-sheet/check",
+    "/admin-api/fms/report/balance-sheet/get",
+    "/admin-api/fms/report/cash-flow-statement/adjustment/list",
+    "/admin-api/fms/report/cash-flow-statement/check",
+    "/admin-api/fms/report/cash-flow-statement/get",
+    "/admin-api/fms/report/income-statement/check",
+    "/admin-api/fms/report/income-statement/get",
+    "/admin-api/mes/wm/material-stock/page",
+    "/admin-api/pay/wallet-transaction/page",
+    "/admin-api/pay/wallet/get",
+    "/admin-api/pms/kb/group/list",
+    "/admin-api/pms/pm/project-group/list",
+})
 
 
 def _grams(text: str) -> set[str]:
@@ -101,12 +125,14 @@ class ActorKnowledge:
     """The signed-in actor's menu pages and the application's read-only API, searchable."""
 
     def __init__(self, client, api_docs, writing_gets=frozenset(), time_zone: str = "Asia/Shanghai",
-                 codes=None, money_review=None, filter_semantics=None, columns=None, query_choices=None):
+                 codes=None, money_review=None, filter_semantics=None, columns=None, query_choices=None,
+                 derived_columns=None):
         self.client, self._docs, self.writing_gets = client, api_docs, frozenset(writing_gets)
         #: `codes(list_path)`: the names of a list's coded values by field, when the
         #: application names them ({"bizType": {"50": "销售出库"}}).
         self._codes = codes
         self._columns = columns
+        self._derived_columns = derived_columns
         self._query_choices = query_choices
         self.money_review = money_review
         #: What each published query parameter's condition means, compiled from the
@@ -114,7 +140,7 @@ class ActorKnowledge:
         #: in summaries; comparison labels alone are not executable bindings.
         self.filter_semantics = filter_semantics
         self._zone = ZoneInfo(time_zone)
-        self._menu = self._ops = self._by_path = self._schemas = None
+        self._menu = self._ops = self._by_path = self._schemas = self._s3_index = None
         #: The host may load this ahead of the first turn, or concurrent read threads may race _load().
         self._loading = threading.RLock()
         self.user_name = ""
@@ -127,6 +153,8 @@ class ActorKnowledge:
         self.last_read: dict | None = None
         self.last_keys: tuple[str, ...] = ()
         self.turn_targets: dict[str, set[str]] = {}
+        self.probed_s3_edges: set[str] = set()
+        self.last_writing_get_allowed: bool = False
 
     def _load(self):
         with self._loading:
@@ -151,6 +179,77 @@ class ActorKnowledge:
         self._menu = []
         self._walk(info.get("menus") or [], [], "")
         self._ops = ops
+
+    def _s3_bridge(self):
+        self._load()
+        with self._loading:
+            if self._s3_index is None:
+                from ..reads.evidence_sheet import S3ErpStockRecordIndex
+
+                def safe_codes(rel: str) -> dict:
+                    if self._codes is None:
+                        return {}
+                    try:
+                        return self._codes(rel) or {}
+                    except (DataRefused, LookupError, ValueError):
+                        return {}
+
+                self._s3_index = S3ErpStockRecordIndex.build(
+                    self._by_path, self.writing_gets, codes_fn=safe_codes
+                )
+            return self._s3_index
+
+    def fms_dual_month_context(self, today: str) -> tuple[str, tuple[str, ...]]:
+        """Read non-writing FMS account-sets & closing period for dual-month alignment."""
+        self._load()
+        acct_path = "/admin-api/fms/config/account-set/list"
+        curr_path = "/admin-api/fms/closing/period/current-month"
+        if (acct_path not in self._by_path or curr_path not in self._by_path
+                or acct_path in self.writing_gets or curr_path in self.writing_gets):
+            return "", ()
+        try:
+            acct_sets = self._read("fms/config/account-set/list")
+        except DataRefused:
+            return "", ()
+        if not isinstance(acct_sets, list) or not acct_sets:
+            return "", ()
+        ordered = sorted(
+            (a for a in acct_sets if isinstance(a, dict) and a.get("id") is not None),
+            key=lambda a: (0 if a.get("defaultStatus") else 1, str(a.get("id"))),
+        )[:3]
+        if not ordered:
+            return "", ()
+        cal_month = str(today or "")[:7]
+        parts: list[str] = []
+        vals: list[str] = []
+        if re.fullmatch(r"\d{4}-\d{2}", cal_month):
+            parts.append(f"系统当前日历月={cal_month}")
+            vals.extend((cal_month, cal_month[:4], str(int(cal_month[5:7]))))
+        for acct in ordered:
+            aid = acct["id"]
+            cname = str(acct.get("companyName") or f"账套#{aid}").strip()
+            try:
+                raw_month = self._read("fms/closing/period/current-month", accountSetId=aid)
+            except DataRefused:
+                continue
+            period_str = str(raw_month or "").strip()
+            m = re.fullmatch(r"(\d{4})-?(\d{2})", period_str)
+            if m:
+                y, mo = m.group(1), int(m.group(2))
+                norm = f"{y}-{mo:02d}"
+                parts.append(f"账套「{cname}」(accountSetId={aid}) 当前会计期={norm}（year={y}，period={mo}）")
+                vals.extend((str(aid), norm, y, str(mo), f"{y}{mo:02d}"))
+            elif period_str:
+                parts.append(f"账套「{cname}」(accountSetId={aid}) 当前会计期={period_str}")
+                vals.extend((str(aid), period_str))
+        if len(parts) <= 1 and not any("当前会计期=" in p for p in parts):
+            return "", ()
+        note = (
+            "财务域双重月份上下文（同账号只读）："
+            + "；".join(parts)
+            + "。查账套总账/明细账/报表或结账期间时，区分系统当前日历月与账套当前会计期（year/period）。"
+        )
+        return note, tuple(dict.fromkeys(vals))
 
     def _walk(self, nodes, names, base):
         for node in nodes or []:
@@ -434,6 +533,9 @@ class ActorKnowledge:
         actor_digest: str = "",
         use_row_sink: bool = False,
         on_page=None,
+        allow_user_writing_gets: bool = False,
+        allow_cluster_probe: bool = False,
+        current_request: str = "",
     ) -> dict:
         """Pure-read preparation for `call_api`; never mutates `self` or `TurnTables`."""
         pages_read: list[int] = []
@@ -481,8 +583,10 @@ class ActorKnowledge:
                 prepared["text"] = f"没有这个只读接口：{path}。相近的接口：\n{near}"
                 return prepared
             if path in self.writing_gets:
-                prepared["text"] = "这个接口读取时会写入数据，助手不允许调用。"
-                return prepared
+                if not allow_user_writing_gets or path not in USER_READ_WRITING_GET_ALLOWLIST:
+                    prepared["text"] = "这个接口读取时会写入数据，助手不允许调用。"
+                    return prepared
+                prepared["writing_get_allowed"] = path
             if isinstance(params, dict):
                 params = dict(params)
                 published_q = {
@@ -606,6 +710,16 @@ class ActorKnowledge:
                 data = present(data)
             else:
                 rows = [present(row) for row in rows]
+                unbound_line = ""
+                if filters and self.filter_semantics is not None:
+                    unbound = self.filter_semantics.unbound_for(path, filters, all_paths=self._by_path)
+                    if unbound:
+                        hints = [f"{key}（可改用已绑定接口：{'、'.join(alts)}）" for key, alts in unbound]
+                        unbound_line = (
+                            "提示：以下参数在该接口后端查询中未绑定，筛选可能未生效："
+                            + "；".join(hints)
+                            + "；请核对返回记录或改用已绑定接口。"
+                        )
                 if fields:
                     scope_lines = (["本次接口查询范围：业务筛选参数如下（本次调用所提交的条件）：",
                                     json.dumps(filters, ensure_ascii=False)] if filters else
@@ -615,10 +729,15 @@ class ActorKnowledge:
                         conditions = self.filter_semantics.condition_line(path, filters)
                         if conditions:
                             scope_lines.append("各条件的语义（按部署版本源码编译）：" + conditions)
+                    if unbound_line:
+                        scope_lines.append(unbound_line)
                     data_lines = {index + len(scope_lines) for index in data_lines}
                     if filters:
                         data_lines.add(1)
                     out[:0] = scope_lines
+                elif unbound_line:
+                    data_lines = {index + 1 for index in data_lines}
+                    out.insert(0, unbound_line)
             column_names = {}
             try:
                 column_names = dict((self._columns(relative) or {}) if self._columns is not None else {})
@@ -680,6 +799,18 @@ class ActorKnowledge:
                 if is_data:
                     data_lines.add(len(out))
                 out.append(line)
+            merged_col_labels = self._merge_column_labels(column_names, keys, props, blanked)
+            code_maps = self._extract_code_maps(native_names, keys, props, blanked)
+            sib_prepared = None
+            if allow_cluster_probe and rows is not None and summary is None:
+                sib_prepared = self._prepare_s3_probe(
+                    path=path,
+                    filters=filters,
+                    rows=rows,
+                    fields=fields,
+                    col_labels=merged_col_labels,
+                    current_request=current_request,
+                )
             if use_row_sink:
                 if (rows is None and isinstance(data, dict) and "id" in filters
                         and "id" in data and str(filters["id"]) != str(data["id"])):
@@ -701,12 +832,18 @@ class ActorKnowledge:
                     "total": declared_total if rows is not None else len(observed),
                     "complete": whole if rows is not None else True,
                     "published": tuple(dict.fromkeys((*props, *fields))) if not observed else (),
+                    "column_labels": merged_col_labels,
+                    "code_maps": code_maps,
                 }
                 prepared["out"] = out
                 prepared["data_lines"] = data_lines
                 prepared["shown_rows"] = shown_rows
                 prepared["clock_notes"] = clock_notes
+                prepared["sib_prepared"] = sib_prepared
                 return prepared
+            if sib_prepared and sib_prepared.get("note"):
+                data_lines.add(len(out))
+                out.append(sib_prepared["note"])
             if rows is None:
                 shown = self._row(data) if isinstance(data, dict) else data
                 if isinstance(data, dict):
@@ -726,6 +863,108 @@ class ActorKnowledge:
         except (QueryParametersError, TurnReadError, SummaryRefused, DataRefused) as exc:
             prepared["error"] = exc
             return prepared
+
+    def _merge_column_labels(self, column_names: dict, keys, props: dict, blanked: set) -> dict[str, str]:
+        merged: dict[str, str] = {}
+        for k in dict.fromkeys((*column_names, *keys, *props)):
+            if k in blanked or _SENSITIVE_COL_KEY.search(k):
+                continue
+            lbl = str(column_names.get(k) or "").strip()
+            if not lbl and k in props:
+                desc = str(self._deref(props[k]).get("description") or "").strip()
+                lbl = desc.split("，")[0].split(",")[0].split("(")[0].split("（")[0].strip()[:24]
+            if lbl:
+                merged[k] = lbl
+        return merged
+
+    def _extract_code_maps(self, native_names: dict, keys, props: dict, blanked: set) -> dict[str, dict[str, str]]:
+        return {
+            k: {str(c): str(lbl) for c, lbl in native_names[k].items()}
+            for k in dict.fromkeys((*keys, *props))
+            if k in native_names and native_names[k] and k not in blanked and not _SENSITIVE_COL_KEY.search(k)
+        }
+
+    def _prepare_s3_probe(
+        self,
+        *,
+        path: str,
+        filters: dict,
+        rows: list,
+        fields: tuple,
+        col_labels: dict[str, str],
+        current_request: str,
+    ) -> dict | None:
+        from ..reads.evidence_sheet import map_sibling_params, metric_columns, should_trigger_s3_probe
+
+        reason = should_trigger_s3_probe(
+            rows, fields=fields, current_request=current_request, col_labels=col_labels
+        )
+        if not reason:
+            return None
+        edges = self._s3_bridge().edges_for(path)
+        if not edges:
+            return None
+        for edge in edges[:2]:
+            if edge.edge_id in self.probed_s3_edges:
+                continue
+            sib_path = edge.target_path
+            if sib_path in self.writing_gets or sib_path not in self._by_path:
+                continue
+            sib_op = self._by_path[sib_path]
+            sib_params = map_sibling_params(filters, edge, sib_op["op"].get("parameters") or [])
+            if sib_params is None:
+                continue
+            sib_rel = sib_path.removeprefix("/admin-api/")
+            try:
+                self._validate_params(sib_path, sib_params)
+                _d, sib_rows, sib_total, sib_whole, _rq = self._pages(sib_rel, sib_params, False)
+            except (QueryParametersError, DataRefused, TurnReadError):
+                continue
+            if sib_rows is None or len(sib_rows) == 0:
+                continue
+            dict_sib = [r for r in sib_rows if isinstance(r, dict)]
+            sib_metrics = metric_columns(dict_sib)
+            if reason == "all_zero_metrics" and sib_metrics and all(
+                sum(float(r.get(k) or 0) for r in dict_sib) == 0.0 for k in sib_metrics
+            ):
+                continue
+            sib_props = self._row_schema(sib_path)
+            sib_native = self._names(sib_rel)
+            try:
+                sib_col_names = dict((self._columns(sib_rel) or {}) if self._columns is not None else {})
+            except (DataRefused, LookupError, ValueError):
+                sib_col_names = {}
+            sib_keys = tuple(dict_sib[0].keys()) if dict_sib else tuple(sib_props)
+            sib_blanked = {k for r in dict_sib for k, v in r.items() if v == REDACTED}
+            sib_labels = self._merge_column_labels(sib_col_names, sib_keys, sib_props, sib_blanked)
+            sib_codes = self._extract_code_maps(sib_native, sib_keys, sib_props, sib_blanked)
+            sib_shown = [self._row(r) if isinstance(r, dict) else r for r in sib_rows]
+            sib_filters = {k: v for k, v in sib_params.items() if k not in {"pageNo", "pageSize"}}
+            sib_cands, _ = _cell_values(sib_rows, sib_col_names)
+            eff_total = sib_total if type(sib_total) is int and sib_total >= 0 else len(sib_rows)
+            note = (
+                f"库存流水旁路对照（{reason} 触发同账号只读补查）：GET {sib_path} "
+                f"条件 {json.dumps(sib_filters, ensure_ascii=False)} 返回 {eff_total} 条。"
+            )
+            return {
+                "edge_id": edge.edge_id,
+                "reason": reason,
+                "sib_path": sib_path,
+                "row_sink_payload": {
+                    "path": sib_rel,
+                    "params": sib_filters,
+                    "rows": sib_rows,
+                    "total": eff_total,
+                    "complete": bool(sib_whole),
+                    "published": tuple(dict.fromkeys((*sib_props,))),
+                    "column_labels": sib_labels,
+                    "code_maps": sib_codes,
+                },
+                "shown_rows": sib_shown,
+                "cell_values": sib_cands,
+                "note": note,
+            }
+        return None
 
     def _commit_call_api(self, prepared: dict, *, row_sink=None) -> str:
         """Apply turn-scoped `ActorKnowledge` and `TurnTables` mutations on the main thread."""
@@ -765,10 +1004,43 @@ class ActorKnowledge:
                 else:
                     out.append("样例（不是全表）：" + json.dumps(shown_rows[:3], ensure_ascii=False)[:2600])
             out.extend(prepared["clock_notes"])
+            sib = prepared.get("sib_prepared")
+            if sib is not None:
+                self.probed_s3_edges.add(sib["edge_id"])
+                sib_name = f"{info['name']}_sib"
+                try:
+                    sib_info = row_sink(**sib["row_sink_payload"], table_name=sib_name)
+                except TurnReadError:
+                    sib_info = None
+                if sib_info is not None:
+                    out.append(
+                        f"{sib['note']} 已写入独立关联行表 {sib_info['name']}，读取回执 {sib_info['receipt']}。"
+                    )
+                    data_lines.add(len(out))
+                    out.append(json.dumps(sib_info, ensure_ascii=False))
+                    sib_shown = sib["shown_rows"]
+                    sib_inline = (
+                        json.dumps(sib_shown, ensure_ascii=False)
+                        if sib_info["complete"] and len(sib_shown) <= 30
+                        else ""
+                    )
+                    data_lines.add(len(out))
+                    if sib_inline and len(sib_inline) <= 6000:
+                        out.append(f"{sib_info['name']} 全部行：" + sib_inline)
+                    else:
+                        out.append(f"{sib_info['name']} 样例：" + json.dumps(sib_shown[:5], ensure_ascii=False)[:2200])
+                    if self.last_read is not None and sib.get("cell_values"):
+                        existing_vals = list(self.last_read.get("values") or ())
+                        self.last_read["values"] = existing_vals + list(sib["cell_values"])
+                else:
+                    out.append(sib["note"])
         return self._told(out, data_lines)
 
     def call_api(self, path: str, params: dict, fields=(), *, row_offset: int = 0,
-                 summary=None, actor_digest: str = "", row_sink=None, on_page=None) -> str:
+                 summary=None, actor_digest: str = "", row_sink=None, on_page=None,
+                 allow_user_writing_gets: bool = True,
+                 allow_cluster_probe: bool = False,
+                 current_request: str = "") -> str:
         prepared = self._prepare_call_api(
             path, params, fields,
             row_offset=row_offset,
@@ -776,7 +1048,11 @@ class ActorKnowledge:
             actor_digest=actor_digest,
             use_row_sink=row_sink is not None,
             on_page=on_page,
+            allow_user_writing_gets=allow_user_writing_gets,
+            allow_cluster_probe=allow_cluster_probe,
+            current_request=current_request,
         )
+        self.last_writing_get_allowed = bool(prepared.get("writing_get_allowed"))
         return self._commit_call_api(prepared, row_sink=row_sink)
 
     def _finish_plain_rows(self, *, out: list, data_lines: set, rows: list, fields: tuple,
@@ -1020,17 +1296,25 @@ class ActorKnowledge:
             labels = (self._columns(path) or {}) if self._columns is not None else {}
         except (DataRefused, LookupError, ValueError):
             labels = {}
+        try:
+            derived = (self._derived_columns(path) or {}) if self._derived_columns is not None else {}
+        except (DataRefused, LookupError, ValueError):
+            derived = {}
         fields = [key for key in keys if key in props][:24]
         shown = {key: str(labels[key])[:80] for key in fields if key in labels}
         choices = {key: {str(code)[:40]: str(label)[:80]
                          for code, label in list(names[key].items())[:12]}
                    for key in fields if key in names and names[key]}
         choices = dict(list(choices.items())[:8])
-        if not shown and not choices:
+        derived_shown = {str(lbl)[:80]: str(expr)[:80] for lbl, expr in list(derived.items())[:8]}
+        if not shown and not choices and not derived_shown:
             return ""
+        payload: dict = {"read_path": path, "columns": shown, "choices": choices}
+        if derived_shown:
+            payload["derived_columns"] = derived_shown
         return "\n" + self._told([
             "该实体的部署列表列名与应用字典（不是当前页面就绪证明；空结果也不改变这些代码的含义）：",
-            json.dumps({"read_path": path, "columns": shown, "choices": choices}, ensure_ascii=False)], {1})
+            json.dumps(payload, ensure_ascii=False)], {1})
 
     def _told(self, out: list, data_lines: set) -> str:
         """A read as the model is told it."""

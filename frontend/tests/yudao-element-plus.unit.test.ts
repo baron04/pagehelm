@@ -7,6 +7,10 @@ import {installElOverlayOffset, pressElConfirmButton, readElConfirmBox, readElFo
 import {findElSelectWrapperForClick, resolveElControlElement} from '../src/integrations/element-plus/select.js'
 // @ts-expect-error Generic Element Plus modules ship as framework-free JS.
 import {annotateElLineControls, collectElFormLineControls} from '../src/integrations/element-plus/table.js'
+// @ts-expect-error Generic Element Plus modules ship as framework-free JS.
+import {annotateElDescriptions} from '../src/integrations/element-plus/descriptions.js'
+// @ts-expect-error Generic Element Plus modules ship as framework-free JS.
+import {annotateActiveDialogElTrees} from '../src/integrations/element-plus/tree.js'
 
 const cleanups: Array<() => void> = []
 
@@ -96,5 +100,65 @@ describe('generic Element Plus integration helpers', () => {
       ? document.adoptedStyleSheets.map(s => Array.from(s.cssRules).map(r => r.cssText).join('\n')).join('\n')
       : ''
     expect(styleEl?.textContent ?? sheetCss).toContain('.el-overlay, .el-drawer__wrapper')
+  })
+
+  it('annotates visible .el-descriptions pairs while prioritizing dialogs and filtering sensitive labels', () => {
+    const host = document.createElement('div')
+    host.innerHTML = '<div class="el-descriptions"><table><tbody>'
+      + '<tr><th class="el-descriptions__label">Background</th><td class="el-descriptions__content">Ignored</td></tr>'
+      + '</tbody></table></div>'
+      + '<div role="dialog"><div class="el-descriptions">'
+      + '<table><tbody>'
+      + '<tr><th class="el-descriptions__label">Leave Type</th><td class="el-descriptions__content">Annual</td></tr>'
+      + '<tr><th class="el-descriptions__label">apiSecret</th><td class="el-descriptions__content">s3cr3t</td></tr>'
+      + '</tbody></table>'
+      + '<div class="el-descriptions__cell"><span class="el-descriptions__label">Reason</span><span class="el-descriptions__content">Family trip</span></div>'
+      + '</div></div>'
+    document.body.append(host)
+    for (const el of host.querySelectorAll('*')) {
+      el.getBoundingClientRect = () => ({width: 120, height: 24, top: 10, bottom: 34, left: 0, right: 120, x: 0, y: 10, toJSON: () => ({})})
+    }
+    const out = annotateElDescriptions('[1]<button>Close />', document)
+    expect(out).toContain('Leave Type=Annual')
+    expect(out).toContain('Reason=Family trip')
+    expect(out).not.toContain('Background=Ignored')
+    expect(out).not.toContain('apiSecret')
+    expect(out).not.toContain('s3cr3t')
+  })
+
+  it('reads collapsed checked and half-checked nodes from active dialog ElTree instances and DOM fallback', () => {
+    const host = document.createElement('div')
+    host.innerHTML = '<div role="dialog"><header class="el-dialog__header"><span class="el-dialog__title">菜单权限</span></header>'
+      + '<form class="el-form"><div class="el-form-item"><label class="el-form-item__label">菜单权限</label>'
+      + '<div class="el-tree" id="vue-tree"></div>'
+      + '<div class="el-tree" id="dom-tree"><div class="el-tree-node"><div class="el-tree-node__content">'
+      + '<span class="el-checkbox is-checked"></span><span class="el-tree-node__label">用户管理</span></div></div>'
+      + '<div class="el-tree-node"><div class="el-tree-node__content">'
+      + '<span class="el-checkbox is-indeterminate"></span><span class="el-tree-node__label">系统管理</span></div></div></div>'
+      + '</div></form></div>'
+    document.body.append(host)
+    for (const el of host.querySelectorAll('*')) {
+      el.getBoundingClientRect = () => ({width: 200, height: 100, top: 10, bottom: 110, left: 0, right: 200, x: 0, y: 10, toJSON: () => ({})})
+    }
+    const vueTree = host.querySelector('#vue-tree')!
+    const findComponent = (root: Element, name: string) => {
+      if (root === vueTree && name === 'ElTree') {
+        return {
+          instance: {
+            props: {showCheckbox: true, props: {label: 'name'}},
+            exposed: {
+              getCheckedNodes: () => [{id: 1, name: '角色查询'}, {id: 2, name: '角色新增'}],
+              getHalfCheckedNodes: () => [{id: 10, name: '系统权限'}],
+            },
+          },
+        }
+      }
+      return undefined
+    }
+    const out = annotateActiveDialogElTrees('[1]<button>OK />', document, {findComponent})
+    expect(out).toContain('tree checked (2): 角色查询, 角色新增')
+    expect(out).toContain('tree half-checked (1): 系统权限')
+    expect(out).toContain('tree checked (1): 用户管理')
+    expect(out).toContain('tree half-checked (1): 系统管理')
   })
 })

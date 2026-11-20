@@ -34,7 +34,10 @@ from .java_scan import (
     _CALL,
     _CASCADE_VERBS,
     _CLASS_MAPPING,
+    _DICT_CONST_DECL,
+    _ENUM_CODE_VALUE,
     _ENUM_CONSTANT,
+    _ENUM_STR_CODE_VALUE,
     _ERROR_CODE,
     _MAPPER_CALL,
     _MAPPER_FIELD,
@@ -57,6 +60,7 @@ from .java_scan import (
     _signature_params,
     _throws,
     _throws_param,
+    parse_resp_vo_code_bindings,
 )
 from .ui_scan import (
     _API_URL,
@@ -170,6 +174,50 @@ class YudaoSource:
             for constant, name in _ENUM_CONSTANT.findall(self._read(self._relative(path))):
                 out[(path.stem, constant)] = name
         return out
+
+    def enum_value_labels(self) -> dict[str, dict[str, str]]:
+        """Compile-time ``EnumClass -> {code_str: label}`` across ``*Enum.java`` files."""
+        with self._instance_lock:
+            cached = getattr(self, "_enum_value_labels_cache", None)
+            if cached is not None:
+                return cached
+            out: dict[str, dict[str, str]] = {}
+            for path in self._java_files("Enum.java"):
+                text = self._read(self._relative(path))
+                items = _ENUM_CODE_VALUE.findall(text)
+                if not items and "ArrayValuable<String>" in text:
+                    items = _ENUM_STR_CODE_VALUE.findall(text)
+                if items:
+                    out[path.stem] = {str(code): label for code, label in items}
+            self._enum_value_labels_cache = out
+            return out
+
+    def dict_type_constants(self) -> dict[str, str]:
+        """Compile-time ``CONST_NAME -> dict_type`` from ``*DictTypeConstants.java``."""
+        with self._instance_lock:
+            cached = getattr(self, "_dict_const_cache", None)
+            if cached is not None:
+                return cached
+            out: dict[str, str] = {}
+            for path in self._java_files("DictTypeConstants.java"):
+                out.update(_DICT_CONST_DECL.findall(self._read(self._relative(path))))
+            self._dict_const_cache = out
+            return out
+
+    def resp_vo_code_bindings(self) -> dict[str, dict[str, tuple[str, str]]]:
+        """Compile-time ``VOClass -> {field: ('dict', dict_type) | ('enum', enum_class)}``."""
+        with self._instance_lock:
+            cached = getattr(self, "_resp_vo_bindings_cache", None)
+            if cached is not None:
+                return cached
+            consts = self.dict_type_constants()
+            out: dict[str, dict[str, tuple[str, str]]] = {}
+            for path in self._java_files("RespVO.java"):
+                bindings = parse_resp_vo_code_bindings(self._read(self._relative(path)), consts)
+                if bindings:
+                    out[path.stem] = bindings
+            self._resp_vo_bindings_cache = out
+            return out
 
     def _operations(self) -> dict[str, tuple[str, str, str, str, str, str]]:
         """URL path ("crm/contract/submit") -> (service type, service method, permission,

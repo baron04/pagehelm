@@ -26,8 +26,15 @@ from web_operation_agent.business.convention_writes import (
     ConventionFieldSpec,
     ConventionUpdateSpec,
     TwoStateStatusSpec,
+    WriteRouteCapability,
     _values_equal,
     convention_tool_definitions,
+)
+
+YUDAO_WRITE_ROUTE_CAPABILITY = WriteRouteCapability(
+    compiled_api_writes=True,
+    inline_row_status_submit=True,
+    page_form_mode="prefill_handoff",
 )
 from web_operation_agent.business.errors import (
     BusinessToolIdentityError,
@@ -1209,6 +1216,9 @@ class YudaoConventionWritePort:
     def invalidate_reads(self, entities: frozenset[str]) -> None:
         self.goal_data.invalidate_reads(entities)
 
+    def write_route_capability(self) -> WriteRouteCapability:
+        return YUDAO_WRITE_ROUTE_CAPABILITY
+
 
 def yudao_convention_tools(client, goal_data):
     port = YudaoConventionWritePort(client, goal_data)
@@ -1219,4 +1229,4 @@ def yudao_convention_tools(client, goal_data):
     )
 
 
-__all__ = ["YudaoConventionWritePort", "yudao_convention_tools"]
+__all__ = ["YUDAO_WRITE_ROUTE_CAPABILITY", "YudaoConventionWritePort", "yudao_convention_tools"]

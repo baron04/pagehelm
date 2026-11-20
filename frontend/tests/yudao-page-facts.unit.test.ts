@@ -1501,4 +1501,32 @@ describe('native editor mode is current application state', () => {
     expect(snapshot.model).toEqual({id: 99, totalPrice: 2751.56, inTime: 1795485600000})
     dialog.remove()
   })
+  it('retains bounded non-sensitive list and page query parameters across generic XHR routes', async () => {
+    pageTable(mountedPage('/system/dept', 'SystemDept'), [{id: 101}])
+    class Request extends EventTarget {
+      responseType = 'json'; response = {code: 0, data: [{id: 101}]}; status = 200
+      open() {}
+      send() { this.dispatchEvent(new Event('loadend')) }
+    }
+    const facts = installPageFacts({location: window.location, fetch: window.fetch,
+      XMLHttpRequest: Request, crypto: window.crypto}, document)
+    const path = '/admin-api/system/dept/list'
+    try {
+      const req = new Request()
+      // @ts-expect-error Installed XHR wrapper accepts URL strings.
+      req.open('GET', `${path}?status=0&createTime%5B0%5D=2026-10-01%2000%3A00%3A00`)
+      req.send()
+      await vi.waitFor(() => {
+        expect(facts.readPageQuery()).toEqual({
+          path,
+          parameters: {status: '0', 'createTime[0]': '2026-10-01 00:00:00'},
+        })
+      })
+      const secretReq = new Request()
+      // @ts-expect-error Installed XHR wrapper accepts URL strings.
+      secretReq.open('GET', `${path}?status=0&accessToken=secret`)
+      secretReq.send()
+      expect(facts.readPageQuery()).toBeUndefined()
+    } finally { facts.dispose() }
+  })
 })

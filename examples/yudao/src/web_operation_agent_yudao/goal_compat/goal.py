@@ -31,6 +31,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Callable
 
+from web_operation_agent.business.convention_writes import WriteRouteCapability
 from web_operation_agent.business.page_entries import PageEntry
 from web_operation_agent.goal.data import (EVERYTHING, ID, NAME, All, Native, Choice, Compare, Cond,
                                             DataRefused, EntitySchema, FieldSchema, Group,
@@ -956,6 +957,11 @@ class YudaoGoalData:
         template = self._ui.records.get(page)
         return template.format(id=id) if template else page
 
+    def write_route_capability(self) -> WriteRouteCapability:
+        from ..writes.convention_writes import YUDAO_WRITE_ROUTE_CAPABILITY
+
+        return YUDAO_WRITE_ROUTE_CAPABILITY
+
     def code_names(self, list_path: str) -> dict[str, dict[str, str]]:
         """Coded values of the exact entity's list or detail API, by field.
 
@@ -963,15 +969,44 @@ class YudaoGoalData:
         """
         if not list_path.strip("/"):
             return {}
+        rel = list_path.strip("/")
         schema = self._known()
         with self._lock:
             keys = [k for k, spec in self._entities.items()
-                    if list_path.strip("/") in {spec.list_path.strip("/"),
-                                                spec.get_path.strip("/") if spec.get_path else ""}]
+                    if rel in {spec.list_path.strip("/"),
+                               spec.get_path.strip("/") if spec.get_path else ""}]
+            dicts_copy = dict(self._dicts)
+            docs = self._docs
+            source = self._source
         entity = schema.entity(keys[0]) if len(keys) == 1 else None
-        if entity is None:
-            return {}
-        return {f.key: {c.key: c.label for c in f.choices} for f in entity.fields if f.choices}
+        out: dict[str, dict[str, str]] = (
+            {f.key: {c.key: c.label for c in f.choices} for f in entity.fields if f.choices}
+            if entity is not None else {}
+        )
+        if source is not None:
+            op = (docs.get("paths") or {}).get(f"/admin-api/{rel}", {}).get("get", {})
+            schemas = (docs.get("components") or {}).get("schemas") or {}
+            vo_name = _endpoint_resp_vo(op, schemas)
+            if vo_name:
+                bindings = source.resp_vo_code_bindings().get(vo_name) or {}
+                if bindings:
+                    enum_labels = source.enum_value_labels()
+                    enum_by_snake = {
+                        re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", cls_name.removesuffix("Enum")).lower(): vals
+                        for cls_name, vals in enum_labels.items()
+                    }
+                    for field, (kind, ref_name) in bindings.items():
+                        if field in out:
+                            continue
+                        if kind == "enum" and ref_name in enum_labels:
+                            out[field] = dict(enum_labels[ref_name])
+                        elif kind == "dict":
+                            pairs = dicts_copy.get(ref_name)
+                            if pairs:
+                                out[field] = {str(k): str(v) for k, v in pairs}
+                            elif ref_name in enum_by_snake:
+                                out[field] = dict(enum_by_snake[ref_name])
+        return out
 
     def query_choices(self, read_path: str) -> dict[str, dict[str, str]]:
         """Choices of this actor's exact list search form; optional source facts only."""
@@ -1012,6 +1047,24 @@ class YudaoGoalData:
                         if key in spec.props:
                             labels.setdefault(key, set()).add(label)
         return {key: next(iter(names)) for key, names in labels.items() if len(names) == 1}
+
+    def derived_columns(self, read_path: str) -> dict[str, str]:
+        if not read_path.strip("/"):
+            return {}
+        self._known()
+        derived: dict[str, set[str]] = {}
+        with self._lock:
+            for spec in self._entities.values():
+                if read_path.strip("/") not in {spec.list_path.strip("/"),
+                                               spec.get_path.strip("/") if spec.get_path else ""}:
+                    continue
+                if (spec.view is not None
+                        and spec.view.endpoint.strip("/") == spec.list_path.strip("/")):
+                    for label, expr in getattr(spec.view, "derived_columns", ()):
+                        fields_in_expr = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", expr))
+                        if fields_in_expr and fields_in_expr <= set(spec.props):
+                            derived.setdefault(label, set()).add(expr)
+        return {label: next(iter(exprs)) for label, exprs in derived.items() if len(exprs) == 1}
 
     def page_list_path(self, route: str) -> str | None:
         """The admin API path this actor's menu page reads its own list from, or None.
@@ -1694,13 +1747,28 @@ def _page_item(operation: dict, schemas: dict) -> str:
     """The item schema of a list endpoint's `CommonResult<PageResult<Item>>`, or of an
     unpaged one's `CommonResult<List<Item>>` (a tree's nodes, a short list of levels)."""
     try:
-        ref = operation["responses"]["200"]["content"]["*/*"]["schema"]["$ref"].split("/")[-1]
+        content = next(iter((operation.get("responses") or {}).get("200", {}).get("content", {}).values()))
+        ref = content["schema"]["$ref"].split("/")[-1]
         data = schemas[ref]["properties"]["data"]
         if data.get("type") == "array":
             return data["items"]["$ref"].split("/")[-1]
         page = data["$ref"].split("/")[-1]
         return schemas[page]["properties"]["list"]["items"]["$ref"].split("/")[-1]
-    except (KeyError, TypeError):
+    except (KeyError, StopIteration, TypeError):
+        return ""
+
+
+def _endpoint_resp_vo(operation: dict, schemas: dict) -> str:
+    """Resolve item or detail VO schema name for any GET operation."""
+    item = _page_item(operation, schemas)
+    if item:
+        return item
+    try:
+        content = next(iter((operation.get("responses") or {}).get("200", {}).get("content", {}).values()))
+        ref = content["schema"]["$ref"].split("/")[-1]
+        data = schemas[ref]["properties"]["data"]
+        return data.get("$ref", "").split("/")[-1]
+    except (KeyError, StopIteration, TypeError, AttributeError):
         return ""
 
 

@@ -163,11 +163,11 @@ class FindRecordTests(unittest.TestCase):
 
     def test_nothing_found_among_the_named_entities_says_where_it_looked_and_how_to_look_further(self):
         told = self.find(self.Port(), "恒昌五金", "供应商")
-        self.assertIn("在名称里有“供应商”的模块（ERP 供应商）里，按名称“恒昌五金”和它的一部分（“恒昌”“五金”）查列表，"
+        self.assertIn("在名称里有“供应商”的模块（ERP 供应商）及全局模块里，按名称“恒昌五金”和它的一部分（“恒昌”“五金”）查列表，"
                       "都没有名称是或包含“恒昌五金”的记录。", told)
-        self.assertIn("这些模块没有该名称（cannot），不要再换名字查", told)
+        self.assertIn("均没有该名称（cannot）", told)
         self.assertIn("不证明原生ID或业务编号不存在", told)
-        self.assertIn("不带 kind 再查一次", told)
+        self.assertIn("不要再缩短名称或换 kind 重查", told)
 
     def test_new_draft_name_miss_points_to_create_form_instead_of_cannot(self):
         told = self.find(self.Port(), "星澜物资", "供应商",
@@ -187,7 +187,7 @@ class FindRecordTests(unittest.TestCase):
     def test_records_a_part_of_the_name_finds_are_said_not_to_be_the_one_asked_for(self):
         port = self.Port(parts={"周远": (), "远航": (("hrm/employee", (("8", "李远航", ""),)),)})
         told = self.find(port, "周远航", "员工")
-        self.assertEqual(port.asked, ["周远航", "周远", "远航"])
+        self.assertEqual(port.asked, ["周远航", "周远", "远航", "周远航"])
         self.assertIn("和它的一部分（“周远”“远航”）", told)
         self.assertIn("名称与用户说的不同，不是它：\n" + BEGIN + "\n李远航\n" + END, told)
 

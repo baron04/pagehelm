@@ -218,13 +218,18 @@ def verify_entry_provenance(
     entry,
     scoped_cands: list[tuple[str, str]],
     texts: tuple[str, ...] | list[str],
+    *,
+    receipts: Iterable[str] = (),
 ) -> bool:
-    """Validate one value entry against user texts and scoped candidate values."""
-    from ..execution.value_source import SourceLedger, check_entries
+    """Validate one value entry against user texts, scoped candidates, and turn receipts."""
+    from ..execution.value_source import Receipt, SourceLedger, check_entries
 
     sub = SourceLedger()
     if scoped_cands:
         sub.add_candidates([(entry.field, val) for _binding, val in scoped_cands])
+    for val in receipts or ():
+        if isinstance(val, str) and val.strip():
+            sub.receipt(Receipt("", val.strip()))
     sub.add(entry)
     return check_entries(sub, list(texts))[0].ok
 

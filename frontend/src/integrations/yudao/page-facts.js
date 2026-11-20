@@ -6,6 +6,8 @@
  * Generic Element Plus component detection/binding lives in `../element-plus/`.
  * This is observation, never the application's API write fence.
  */
+import {annotateElDescriptions} from '../element-plus/descriptions.js'
+import {annotateActiveDialogElTrees} from '../element-plus/tree.js'
 import {
   bindElDateRangeInput,
   nativeRangeDateCell,
@@ -110,11 +112,29 @@ function creationRangeQuery(url) {
   return {path: url.pathname, parameters}
 }
 
+const BOUNDED_QUERY_KEY = /^[A-Za-z][A-Za-z0-9_]*(?:\[[0-9]{1,3}\])?$/
+const SENSITIVE_QUERY_KEY = /(?:pass(?:word)?|pwd|secret|token|credential|auth|cookie|session|key)/i
+const LIST_READ_PATH = /\/(?:page|list)(?:-[a-z0-9-]+)?$/
+
+function boundedListQuery(url) {
+  if (!LIST_READ_PATH.test(url.pathname)) return null
+  const pairs = Array.from(url.searchParams)
+  if (pairs.length > 24 || new Set(pairs.map(([key]) => key)).size !== pairs.length) return null
+  const parameters = {}
+  for (const [key, value] of pairs) {
+    if (!BOUNDED_QUERY_KEY.test(key) || key.length > 64 || SENSITIVE_QUERY_KEY.test(key)) return null
+    if (typeof value !== 'string' || value.length > 128 ||
+        Array.from(value).some(c => c.charCodeAt(0) <= 31 || c.charCodeAt(0) === 127)) return null
+    parameters[key] = value
+  }
+  return {path: url.pathname, parameters}
+}
+
 // Retain a digest and paging numbers, never arbitrary query values.
 function listReadQuery(url, view) {
   const pairs = Array.from(url.searchParams)
   const page = url.searchParams.get('pageNo'), size = url.searchParams.get('pageSize')
-  if (!url.pathname.endsWith('/page') || pairs.length > 32 ||
+  if (!LIST_READ_PATH.test(url.pathname) || pairs.length > 32 ||
       !/^[1-9][0-9]*$/.test(page || '') || !/^[1-9][0-9]*$/.test(size || '') ||
       !Number.isSafeInteger(Number(page)) || !Number.isSafeInteger(Number(size)) ||
       url.searchParams.getAll('pageNo').length !== 1 || url.searchParams.getAll('pageSize').length !== 1 ||
@@ -248,11 +268,10 @@ export function createPageFacts({view = window, doc = document} = {}) {
       // Application-owned scalar query observation for the first native report.
       // Retain only reviewed query fields, never headers, bodies or arbitrary URLs.
       query = ledger ? ledgerQuery(url) : order ? orderQuery(url) : creationRangeQuery(url)
-    } else if (url.pathname.endsWith('/page') && route && route.indexOf('/detail/') < 0) {
+    } else if (LIST_READ_PATH.test(url.pathname) && route && route.indexOf('/detail/') < 0) {
       // Any other collection list read may be the page's applied query once a page
-      // table renders it. Scalar projection stays on reviewed lists; this general
-      // capture feeds applied-query facets for target settlement on every list.
-      query = {path: url.pathname, parameters: Object.fromEntries(url.searchParams)}
+      // table renders it. Scalar projection stays bounded and non-sensitive.
+      query = boundedListQuery(url)
     }
     // A newer request to an endpoint replaces its earlier list at send, failures included.
     let list = null
@@ -562,9 +581,12 @@ export function installPageFacts(view = window, doc = document) {
         const ledger = view.location.pathname === '/fms/ledger/general' && target.pathname === '/admin-api/fms/ledger/general/list'
         const order = view.location.pathname === '/erp/sale/order' && target.pathname === '/admin-api/erp/sale-order/page'
         const creation = creationRangeList(view.location.pathname, target.pathname)
+        const isList = LIST_READ_PATH.test(target.pathname)
         // Retain only a bounded scalar projection; open alone starts no read.
-        const query = ledger ? ledgerQuery(target) : order ? orderQuery(target) : creation ? creationRangeQuery(target) : null
-        requests.set(this, {method, path: target.pathname, ledger, order, creation, query, readQuery: listReadQuery(target, view),
+        const query = ledger ? ledgerQuery(target) : order ? orderQuery(target) : creation ? creationRangeQuery(target)
+          : isList ? boundedListQuery(target) : null
+        requests.set(this, {method, path: target.pathname, ledger, order, creation, isList, query,
+          readQuery: listReadQuery(target, view),
           id: /^[0-9]{1,20}$/.test(id) ? id : ''})
       }
     } catch { /* The original implementation owns invalid URL errors. */ }
@@ -582,6 +604,13 @@ export function installPageFacts(view = window, doc = document) {
         if (!request.query) target.searchParams.set('invalidQuery', '1')
         for (const [key, value] of Object.entries(request.query?.parameters || {})) {
           target.searchParams.set(keys[key] || key, value)
+        }
+      } else if (request.isList) {
+        if (!request.query) target.searchParams.set('_invalidQuery', '1')
+        else {
+          for (const [key, value] of Object.entries(request.query.parameters || {})) {
+            target.searchParams.set(key, value)
+          }
         }
       } else if (request.id) target.searchParams.set('id', request.id)
     }
@@ -913,6 +942,29 @@ export function withObservedRowColumns(html, root = document, selectorMap = new 
     formatRow: (rowIndex, columns) => `第${rowIndex + 1}行 ${columns.join('；')}`,
     formatSummary: facts => '可见列表行（每行的表头和值）: ' + facts.join(' | ').slice(0, 3000),
   })
+}
+
+export function withObservedSurfaceDetails(html, root = document) {
+  let next = annotateElDescriptions(html, root, {
+    formatSummary: pairs => '可见详情字段: ' + pairs.map(([k, v]) => `${k}=${v}`).join('；').slice(0, 2400),
+  })
+  next = annotateActiveDialogElTrees(next, root, {
+    findComponent: pageComponentForRoot,
+    formatTree: tree => {
+      const prefix = tree.label ? `「${tree.label}」` : ''
+      const parts = []
+      if (tree.checked.length) {
+        const truncated = tree.checkedCount > tree.checked.length
+          ? `（展示前${tree.checked.length}项，完整列表请展开或滚动核对）` : ''
+        parts.push(`弹窗树已勾选${prefix}（共${tree.checkedCount}项）: ${tree.checked.join('、')}${truncated}`)
+      }
+      if (tree.halfChecked.length) {
+        parts.push(`弹窗树半选父节点${prefix}（共${tree.halfCheckedCount}项）: ${tree.halfChecked.join('、')}`)
+      }
+      return parts.join(' | ')
+    },
+  })
+  return next
 }
 
 export function boundRecord(element) {

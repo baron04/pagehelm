@@ -224,7 +224,19 @@ class TurnTables:
         self.receipts.add(reference)
         return reference
 
-    def add(self, *, path, params, rows, total, complete, published=()):
+    def add(
+        self,
+        *,
+        path,
+        params,
+        rows,
+        total,
+        complete,
+        published=(),
+        column_labels=None,
+        code_maps=None,
+        table_name: str | None = None,
+    ):
         if len(self.tables) >= MAX_TABLES or len(rows) > MAX_ROWS:
             raise TurnReadError("table_limit", "本轮行表已达容量上限。")
         rows = [row if isinstance(row, dict) else {"value": row}
@@ -241,16 +253,44 @@ class TurnTables:
                         break
             if len(columns) >= MAX_COLUMNS:
                 break
-        name = f"t{len(self.tables) + 1}"
+        raw_columns = list(columns)
+        derived_maps: list[tuple[str, str, dict[str, str]]] = []
+        if isinstance(code_maps, dict):
+            for raw_col in raw_columns:
+                cmap = code_maps.get(raw_col)
+                if not isinstance(cmap, dict) or not cmap:
+                    continue
+                label_col = f"{raw_col}_label"
+                if (len(columns) < MAX_COLUMNS and label_col.casefold() not in seen
+                        and not _secret_field(label_col)):
+                    columns.append(label_col)
+                    seen.add(label_col.casefold())
+                    derived_maps.append((
+                        label_col,
+                        raw_col.casefold(),
+                        {str(k): str(v) for k, v in cmap.items()},
+                    ))
+        if table_name is not None:
+            if not re.fullmatch(r"t\d+(?:_sib\d*)?", table_name) or table_name in self.tables:
+                raise TurnReadError("table_limit", "本轮行表名称冲突或非法。")
+            name = table_name
+        else:
+            primary_count = sum(1 for k in self.tables if "_sib" not in k)
+            name = f"t{primary_count + 1}"
         field_defs = ", ".join(_quoted(key) for key in ("_row", *columns))
         insert = f"INSERT INTO {name} VALUES ({','.join('?' for _ in range(len(columns) + 1))})"
-        folded_keys = [key.casefold() for key in columns]
+        folded_keys = [key.casefold() for key in raw_columns]
 
         def values(row):
             folded = {}
             for k, v in row.items():
                 folded.setdefault(str(k).casefold(), v)
-            return tuple(_cell(folded.get(key)) for key in folded_keys)
+            base_vals = [_cell(folded.get(key)) for key in folded_keys]
+            for _lbl_col, raw_folded, cmap in derived_maps:
+                raw_val = folded.get(raw_folded)
+                mapped = cmap.get(str(raw_val)) if raw_val is not None and not isinstance(raw_val, (dict, list)) else None
+                base_vals.append(_cell(mapped))
+            return tuple(base_vals)
 
         try:
             with self.connection:
@@ -263,6 +303,19 @@ class TurnTables:
         info = {"name": name, "receipt": self.issue_receipt(), "path": path,
                 "params": redacted(params, self.handoffs), "columns": columns,
                 "row_count": len(rows), "total": total, "complete": complete}
+        if isinstance(column_labels, dict) and column_labels:
+            clean_labels = {
+                col: str(column_labels[col])[:60]
+                for col in raw_columns
+                if col in column_labels and column_labels[col]
+            }
+            for lbl_col, raw_folded, _ in derived_maps:
+                orig_col = next((c for c in raw_columns if c.casefold() == raw_folded), "")
+                base_lbl = clean_labels.get(orig_col, orig_col)
+                if base_lbl:
+                    clean_labels[lbl_col] = f"{base_lbl}字典标签"
+            if clean_labels:
+                info["column_labels"] = clean_labels
         self.tables[name] = info
         return info
 
@@ -550,8 +603,15 @@ class TurnTables:
         lowered = {}
         for i, col in enumerate(probe_cols):
             lowered.setdefault(col.casefold(), i)
+        tie_terms = list(terms)
+        while len(tie_terms) >= 2:
+            tail = tie_terms[-1].strip()
+            if not re.fullmatch(r"[0-9]+", tail) and _order_key(tail).casefold() in {"id", "_row"}:
+                tie_terms.pop()
+            else:
+                break
         idx = []
-        for term in terms:
+        for term in tie_terms:
             if re.fullmatch(r"[0-9]+", term.strip()):
                 idx.append(int(term.strip()) - 1)
             else:

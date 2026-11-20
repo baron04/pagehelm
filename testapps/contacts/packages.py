@@ -12,6 +12,7 @@ from web_operation_agent.business.convention_writes import (
     ConventionFieldSpec,
     ConventionUpdateSpec,
     TwoStateStatusSpec,
+    WriteRouteCapability,
     convention_tool_definitions,
 )
 from web_operation_agent.business.effects import EffectProjection, RequestedEffect, canonical
@@ -93,6 +94,13 @@ class ContactsConventionWritePort:
 
     def status_specs(self) -> dict[str, TwoStateStatusSpec]:
         return {"contact-subscriptions": _SUBSCRIPTION_STATUS_SPEC}
+
+    def write_route_capability(self) -> WriteRouteCapability:
+        return WriteRouteCapability(
+            compiled_api_writes=True,
+            inline_row_status_submit=False,
+            page_form_mode="prefill_handoff",
+        )
 
     def verify_actor(self, context) -> str:
         if context is None:

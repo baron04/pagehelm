@@ -22,7 +22,7 @@ from ..state.ledger import SessionLedger
 from ..business.tools.registry import validate_input
 from ..composition.binding import BoundApplication
 from ..goal.skill_writes import SkillWrites
-from ..business.convention_writes import normalize_changes_argument
+from ..business.convention_writes import normalize_changes_argument, resolve_write_route_capability
 from ..goal.ports import capabilities_of
 from ..goal.data import DataRefused
 from ..modeling.chat import require_chat_port
@@ -1029,8 +1029,9 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             op_name = op_name.strip()
             owned = writes.owner_for_operation(op_name)
             if owned is None:
+                cap = resolve_write_route_capability(self.goal_port)
                 return LoopToolResult(
-                    f"当前部署或账号下没有可用的写入操作「{op_name}」；请核对“已安装的写入操作”清单，或改走页面表单 request_submit。",
+                    cap.unavailable_operation_message(op_name),
                     kind="write", state="unavailable", error_code="tool_unavailable")
             skill, definition = owned
             if skill.skill_id not in writes.loaded_ids:
@@ -2355,6 +2356,12 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             for cand in getattr(source_ledger, "candidates", ()):
                 if cand.binding and isinstance(cand.value, str) and cand.value.strip():
                     existing_map.setdefault(cand.binding, []).append(cand.value)
+            for rec in getattr(source_ledger, "receipts", ()):
+                val = getattr(rec, "value", "")
+                if isinstance(val, str) and val.strip():
+                    existing_map.setdefault("__receipt__", []).append(val.strip())
+                    if getattr(rec, "field", ""):
+                        existing_map.setdefault(rec.field, []).append(val.strip())
         existing_values = {k: tuple(dict.fromkeys(v)) for k, v in existing_map.items()} or None
         with s.receipt.stage('business'):
             outcome = writes.propose(operation, inputs, step=s.step,

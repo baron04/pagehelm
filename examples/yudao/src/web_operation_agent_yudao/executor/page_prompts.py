@@ -10,10 +10,12 @@ from typing import Any
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
+from web_operation_agent.business.convention_writes import WriteRouteCapability
 from web_operation_agent.business.tools.contracts import form_control_unavailable
 from web_operation_agent.privacy import redact_sensitive_assignments
 
 from ..reads.turn_tables import TurnReadError, date_range
+from ..writes.convention_writes import YUDAO_WRITE_ROUTE_CAPABILITY
 from ..writes.write_intent import WriteIntent
 
 #: Requests a turn may make of the model for its steps; the check at the end is extra.
@@ -251,13 +253,82 @@ SYSTEM_RULES = """
 - 不编造数值、代码含义、范围或权限，不从首屏外推全体。未知字典代码如实保留未知。仅交付用户要求结果，别附带未经核实字段。
 - 一次可顺序调多个工具；页面变化后旧序号无效。全部义务完成才done；缺信息need_input，做不到cannot。只有工具answer或finish会送达答复；普通说明用简洁中文Markdown。
 """
-NATIVE_SUBMIT_RULES = """
-页面表单预填交接与行内动作（本部署规则）：
-- 页面表单（弹窗或页面里的新增、编辑、填单）：只预填、不代点提交——按用户原话把原生表单必填和给出字段全部填好（必填信息缺失、说法含糊或有多个目标候选时先用 finish(need_input) 问清楚，有 2~4 个真实候选时附结构化 options，不沿用旧值、不猜；值按用户原话、选定的页面候选或本轮日期/计算填写），通过 fill_fields 的 then_highlight 标出提交按钮（如「确定」「保存」），交给用户核对后自行点击提交；**完成表单预填与提交按钮交接即算完成，直接调用 finish(status="done")，不要对表单提交按钮调用 request_submit，也不要标为 cannot。**
-- 表格行内按钮动作（行内启停、审核、关闭等无表单弹窗的按钮）：直接对该行按钮用 request_submit(index=按钮序号) 申请批准后点击并回读核对。
-- 若本轮调过 request_submit 并退回为“已标出提交按钮的表单交接”，如实说明尚未提交及需手动点击后，调用 finish(status="done") 结束。
-- 删除、作废、关闭等危险动作：先说明对这条记录的影响，用 finish(need_input, options=[确认/取消选项]) 请用户明确确认，确认后才请求。
-"""
+_OLD_WRITE_LEAD = (
+    "只有下面“已安装的 Skill”覆盖的操作能办：你提出写入提案，用户在批准卡片上确认后，程序执行一次并回读核对。\n"
+    "   - 本轮提供了 Skill 写入工具且用户要求办理其覆盖的事时，先 load_skill，再用已安装操作提出提案；没有对应 Skill 时把表单填好交接。"
+)
+_OLD_PARTIAL_RULE = (
+    "用户要的事里有 Skill 办不到的部分（参数里没有的字段、另一种业务动作）：先如实说明办不到的是哪部分（cannot），不要只办能办的那部分就说完成。"
+)
+
+
+def build_native_submit_rules(cap: WriteRouteCapability = YUDAO_WRITE_ROUTE_CAPABILITY) -> str:
+    """Derive deployment submit/handoff rules from the declarative WriteRouteCapability."""
+    if cap.page_form_mode == "prefill_handoff":
+        form_line = (
+            "- 页面表单（弹窗或页面里的新增、编辑、填单）：只预填、不代点提交——按用户原话把原生表单必填和给出字段全部填好"
+            "（必填信息缺失、说法含糊或有多个目标候选时先用 finish(need_input) 问清楚，有 2~4 个真实候选时附结构化 options，不沿用旧值、不猜；"
+            "值按用户原话、选定的页面候选或本轮日期/计算填写），通过 fill_fields 的 then_highlight 标出提交按钮（如「确定」「保存」），"
+            "交给用户核对后自行点击提交；**完成表单预填与提交按钮交接即算完成，直接调用 finish(status=\"done\")，不要对表单提交按钮调用 request_submit，也不要标为 cannot。**"
+        )
+        fallback_line = "- 若本轮调过 request_submit 并退回为“已标出提交按钮的表单交接”，如实说明尚未提交及需手动点击后，调用 finish(status=\"done\") 结束。"
+    else:
+        form_line = "- 页面表单提交已关闭：只读核对或说明当前部署不支持表单提交，禁止对表单调用 request_submit。"
+        fallback_line = "- 当前部署不开放页面表单交接提交。"
+    row_line = (
+        "- 表格行内按钮动作（行内启停、审核、关闭等无表单弹窗的按钮）：直接对该行按钮用 request_submit(index=按钮序号) 申请批准后点击并回读核对。"
+        if cap.inline_row_status_submit
+        else "- 表格行内按钮动作未开放 request_submit；有对应写入操作时优先用 propose_operation 办理。"
+    )
+    return "\n".join((
+        "",
+        "页面表单预填交接与行内动作（本部署规则）：",
+        form_line,
+        row_line,
+        fallback_line,
+        "- 删除、作废、关闭等危险动作：先说明对这条记录的影响，用 finish(need_input, options=[确认/取消选项]) 请用户明确确认，确认后才请求。",
+        "",
+    ))
+
+
+def apply_write_route_capability(
+    instructions: str,
+    cap: WriteRouteCapability = YUDAO_WRITE_ROUTE_CAPABILITY,
+    *,
+    native_submit: bool,
+) -> str:
+    """Apply WriteRouteCapability consistently to system instructions."""
+    if not native_submit:
+        return instructions
+    if cap.page_form_mode == "prefill_handoff":
+        row_clause = "；行内启停、审核、关闭等无表单动作可配合 request_submit 经批准卡提交" if cap.inline_row_status_submit else ""
+        partial_row = "（行内动作可配合 request_submit）" if cap.inline_row_status_submit else ""
+        new_lead = (
+            "优先用下面“已安装的 Skill”覆盖的操作提出提案；Skill 未覆盖（或改走页面表单）的新增、修改，"
+            "直接在用户页用原生表单填好并通过 then_highlight 标出提交按钮交由用户自己提交（完成预填交接即 finish(status=\"done\")，不对表单调用 request_submit，也不得因无对应 Skill 而拒绝）"
+            f"{row_clause}。\n"
+            "   - 本轮提供了 Skill 写入工具且用户要求办理其覆盖的事时，先 load_skill，再用已安装操作提出提案（Skill 自身失败不会阻碍你改用页面表单完成预填交接）；走页面表单时填好字段并标出提交按钮即完成交接。"
+        )
+        new_partial = (
+            f"用户要的事里若既有 Skill 参数没覆盖某个字段或动作，表单字段改走用户页表单预填交接{partial_row}；"
+            "若应用页面本身也不支持，再如实说明办不到的是哪部分（cannot），不要只办能办的那部分就说完成。"
+        )
+    else:
+        row_clause = "；表格行内无表单动作可配合 request_submit 经批准卡提交" if cap.inline_row_status_submit else ""
+        new_lead = (
+            f"优先用下面“已安装的 Skill”覆盖的操作提出提案{row_clause}；当前部署不开放页面表单提交。\n"
+            "   - 本轮提供了 Skill 写入工具且用户要求办理其覆盖的事时，先 load_skill，再用已安装操作提出提案。"
+        )
+        new_partial = "用户要的事里有已安装写入操作办不到的部分：先如实说明办不到的是哪部分（cannot），不要只办能办的那部分就说完成。"
+    return (
+        instructions
+        .replace(_OLD_WRITE_LEAD, new_lead, 1)
+        .replace(_OLD_PARTIAL_RULE, new_partial, 1)
+        + build_native_submit_rules(cap)
+    )
+
+
+NATIVE_SUBMIT_RULES = build_native_submit_rules(YUDAO_WRITE_ROUTE_CAPABILITY)
 SYSTEM = "".join((SYSTEM_INTRO, SYSTEM_READ, SYSTEM_PAGE, SYSTEM_FORM, SYSTEM_RULES))
 
 

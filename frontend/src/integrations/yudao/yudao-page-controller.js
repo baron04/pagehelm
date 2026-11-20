@@ -5,7 +5,8 @@ import {isElDateRangeInput} from '../element-plus/date-picker.js'
 import {findElSelectWrapperForClick, isElSubMenuContainer,
   shouldAvoidSelectInnerInput} from '../element-plus/select.js'
 import {lineControls, nativeControlElement, nativeRangeDateCell, nativeRangeDateStep,
-  withLineControls, withTreeQueryControls, withUserStatusControls, withObservedRowColumns} from './page-facts.js'
+  withLineControls, withTreeQueryControls, withUserStatusControls, withObservedRowColumns,
+  withObservedSurfaceDetails} from './page-facts.js'
 import {boundClick, boundInput, boundRecord, readElementPageControl as ordinaryControl} from './page-facts.js'
 import {installOverlayOffset} from './form-surface.js'
 
@@ -103,9 +104,12 @@ export class PageController extends GenericPageController {
     // remain excluded here too, and restore them even if an extension fails.
     this.dispatchEvent(new Event('beforeUpdate'))
     try {
-      const next = withObservedRowColumns(withUserStatusControls(this.selectorMap,
-        withTreeQueryControls(this.selectorMap,
-          withLineControls(this.selectorMap, this.simplifiedHTML, lineControls()))), document, this.selectorMap)
+      const next = withObservedSurfaceDetails(
+        withObservedRowColumns(withUserStatusControls(this.selectorMap,
+          withTreeQueryControls(this.selectorMap,
+            withLineControls(this.selectorMap, this.simplifiedHTML, lineControls()))), document, this.selectorMap),
+        document,
+      )
       this.simplifiedHTML = next
       for (const line of next.split('\n')) {
         const mark = /^\s*\*?\[(\d+)\]</.exec(line)

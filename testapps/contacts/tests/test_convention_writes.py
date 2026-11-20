@@ -432,6 +432,68 @@ class ContactsConventionWriteTests(unittest.TestCase):
         self.assertEqual(len(channel2.approvals), 1)
         self.assertEqual(post_calls["n"], 1)
 
+    def test_write_route_capability_drives_fallback_messages_without_form_request_submit(self):
+        from web_operation_agent.business.convention_writes import (
+            ConventionFieldSpec,
+            ConventionUpdateHandler,
+            ConventionUpdateSpec,
+            WriteRouteCapability,
+            _verify_scaled_number_provenance,
+            resolve_write_route_capability,
+        )
+        from web_operation_agent.business.errors import BusinessToolRequestError
+
+        prefill_cap = WriteRouteCapability(
+            compiled_api_writes=True,
+            inline_row_status_submit=False,
+            page_form_mode="prefill_handoff",
+        )
+        disabled_cap = WriteRouteCapability(
+            compiled_api_writes=True,
+            inline_row_status_submit=False,
+            page_form_mode="disabled",
+        )
+
+        class _Port:
+            def __init__(self, cap):
+                self._cap = cap
+            def write_route_capability(self):
+                return self._cap
+            def update_specs(self):
+                return {
+                    "contacts": ConventionUpdateSpec(
+                        entity="contacts",
+                        label="Contact",
+                        fields=(ConventionFieldSpec("name", "string", label="Name", required=True),),
+                    )
+                }
+            def status_specs(self):
+                return {}
+            def verify_actor(self, context):
+                return "actor-1"
+
+        self.assertEqual(resolve_write_route_capability(_Port(prefill_cap)), prefill_cap)
+        handler = ConventionUpdateHandler(_Port(prefill_cap))
+        with self.assertRaises(BusinessToolRequestError) as cm:
+            handler.prepare({"entity": "unknown", "target": "Ada", "changes": [{"field": "name", "value": "X"}]})
+        msg = str(cm.exception)
+        self.assertIn("完成预填并用 then_highlight 标出提交按钮", msg)
+        self.assertNotIn("配合 request_submit", msg)
+        self.assertNotIn("改走页面表单 request_submit", msg)
+
+        handler_disabled = ConventionUpdateHandler(_Port(disabled_cap))
+        with self.assertRaises(BusinessToolRequestError) as cm_dis:
+            handler_disabled.prepare({"entity": "unknown", "target": "Ada", "changes": [{"field": "name", "value": "X"}]})
+        self.assertIn("当前部署不开放页面表单提交", str(cm_dis.exception))
+        self.assertNotIn("request_submit", str(cm_dis.exception))
+
+        unavail_msg = prefill_cap.unavailable_operation_message("missing_op")
+        self.assertIn("禁止对表单提交按钮调用 request_submit", unavail_msg)
+
+        # Receipt provenance accepts computed yuan/fen values recorded during turn reads
+        fen_field = ConventionFieldSpec("amount", "integer", label="金额", unit_scale=100)
+        _verify_scaled_number_provenance(fen_field, "95元", ("请根据8000加上1500调整金额",), receipts=("95",))
+
 
 if __name__ == "__main__":
     unittest.main()

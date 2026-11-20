@@ -55,6 +55,8 @@ class ListView:
     column_labels: tuple[tuple[str, str], ...] = ()
     #: field -> the unit its column's label states, where the column shows the value as read.
     column_units: tuple[tuple[str, str], ...] = ()
+    #: (column_label, arithmetic_expression) for template columns computing multi-field formulas.
+    derived_columns: tuple[tuple[str, str], ...] = ()
     #: Literal single-choice search options and native dictionary bindings.
     query_choices: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = ()
     query_dicts: tuple[tuple[str, str], ...] = ()
@@ -119,6 +121,7 @@ class UiSource:
             columns = tuple(dict.fromkeys(_COLUMN.findall(text)))
             labels = _literal_column_labels(text)
             units = _shown_units(text)
+            derived = _derived_columns(text)
             dicts = {row: consts[name] for name, row in _DICT_TAG.findall(text) if name in consts}
             endpoint, fixed_params = _list_endpoint(src, text)
             query_choices, query_dicts = _query_choices(text, dictionary)
@@ -136,13 +139,15 @@ class UiSource:
                             columns = tuple(dict.fromkeys(_COLUMN.findall(child_text))) or columns
                             labels = _literal_column_labels(child_text)
                             units = _shown_units(child_text)
+                            derived = _derived_columns(child_text)
                             dicts = {row: consts[name] for name, row in _DICT_TAG.findall(child_text)
                                      if name in consts} or dicts
             if columns or dicts or endpoint:
                 key = path.relative_to(src / "views").with_suffix("").as_posix()
                 views[key] = ListView(columns=columns, dicts=dicts, endpoint=endpoint,
                                       fixed_params=fixed_params, column_labels=labels,
-                                      column_units=units, query_choices=query_choices, query_dicts=query_dicts)
+                                      column_units=units, derived_columns=derived,
+                                      query_choices=query_choices, query_dicts=query_dicts)
         router = (src / "router" / "modules" / "remaining.ts").read_text(encoding="utf-8")
         return UiSource(views=views, records=_record_routes(router), tables=tables,
                         record_sections=_record_sections(src, router), table_dicts=table_dicts,
@@ -194,12 +199,43 @@ def _row_dictionaries(page: str, consts: dict) -> dict:
             for key, names in found.items()}
 
 
+_ROW_FIELD_REFS = re.compile(r"\brow\.([A-Za-z0-9_]+)\b")
+_ARITH_EXPR = re.compile(
+    r"(?:scope\.)?row\.([A-Za-z0-9_]+)\s*([+\-])\s*(?:scope\.)?row\.([A-Za-z0-9_]+)"
+)
+
+
+def _body_renders_other_fields(prop_name: str, body: str) -> bool:
+    refs = set(_ROW_FIELD_REFS.findall(body or ""))
+    return bool(refs and refs != {prop_name})
+
+
+def _derived_columns(page: str) -> tuple[tuple[str, str], ...]:
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for attrs, body in _TABLE_COLUMN.findall(page):
+        label = re.search(r'(?<![:\w-])label="([^"{}]+)"', attrs)
+        if not label or re.search(r'(?:v-bind|:label)\s*[=:]', attrs):
+            continue
+        m = _ARITH_EXPR.search(body or "")
+        if m is None:
+            continue
+        lbl = label[1].strip()
+        expr = f"{m.group(1)} {m.group(2)} {m.group(3)}"
+        if lbl and lbl not in seen:
+            seen.add(lbl)
+            out.append((lbl, expr))
+    return tuple(out)
+
+
 def _literal_column_labels(page: str) -> tuple[tuple[str, str], ...]:
     found = {}
-    for attrs, _body in _TABLE_COLUMN.findall(page):
+    for attrs, body in _TABLE_COLUMN.findall(page):
         prop = _COLUMN_PROP.search(attrs)
         label = re.search(r'(?<![:\w-])label="([^"{}]+)"', attrs)
         if prop and label and not re.search(r'(?:v-bind|:prop|:label)\s*[=:]', attrs):
+            if _body_renders_other_fields(prop[1], body or ""):
+                continue
             found.setdefault(prop[1], set()).add(label[1].strip())
     unique = {key:next(iter(labels)) for key,labels in found.items() if len(labels) == 1}
     return tuple((key,label) for key,label in unique.items() if label
@@ -222,6 +258,8 @@ def _shown_units(page: str) -> tuple[tuple[str, str], ...]:
         prop = _COLUMN_PROP.search(attrs)
         label = re.search(r'(?<![:\w-])label="([^"{}]+)"', attrs)
         if not prop or not label or re.search(r'(?:v-bind|:prop|:label)\s*[=:]', attrs):
+            continue
+        if _body_renders_other_fields(prop[1], body or ""):
             continue
         unit = _LABEL_UNIT.search(label[1].strip())
         shown_as_read = not (body or "").strip() and not _CONVERTS.search(attrs)

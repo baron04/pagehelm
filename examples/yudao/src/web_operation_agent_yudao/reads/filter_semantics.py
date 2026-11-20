@@ -49,9 +49,10 @@ class FilterSemantics:
     binding; neither columns nor value transformations are guessed.
     """
 
-    def __init__(self, apis: dict[str, dict[str, str]], *, equalities=None):
+    def __init__(self, apis: dict[str, dict[str, str]], *, equalities=None, unknown=None):
         self._apis = apis
         self._equalities = equalities or {}
+        self._unknown = {k: frozenset(v) for k, v in (unknown or {}).items()}
 
     @classmethod
     def load(cls, document, *, release: str, source_digest: str | None = None) -> "FilterSemantics":
@@ -65,6 +66,7 @@ class FilterSemantics:
             raise ValueError("the filter semantics policy must match the deployment release and source")
         apis: dict[str, dict[str, str]] = {}
         equalities = {}
+        unknown: dict[str, frozenset[str]] = {}
         for path, entry in document["apis"].items():
             params = entry.get("params") if isinstance(entry, dict) else None
             if not isinstance(path, str) or not isinstance(params, dict):
@@ -75,6 +77,9 @@ class FilterSemantics:
                     raise ValueError("the filter semantics policy carries an unknown condition code")
                 resolved[param] = LABELS[code]
             apis[path] = resolved
+            unk = entry.get("unknown", ())
+            if isinstance(unk, list) and all(isinstance(k, str) for k in unk) and unk:
+                unknown[path] = frozenset(unk)
             bindings = entry.get("equalities", {})
             if (not isinstance(bindings, dict) or any(
                     not isinstance(key, str) or key != column or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", key)
@@ -82,7 +87,7 @@ class FilterSemantics:
                 raise ValueError("native equality bindings require a proven same-column equality")
             if bindings:
                 equalities[path] = dict(bindings)
-        return cls(apis, equalities=equalities)
+        return cls(apis, equalities=equalities, unknown=unknown)
 
     def params_for(self, path: str) -> dict[str, str]:
         return self._apis.get(path, {})
@@ -90,6 +95,33 @@ class FilterSemantics:
     def equalities_for(self, path: str) -> dict[str, str]:
         """Direct same-field/value bindings; old annotation-only policies prove none."""
         return self._equalities.get(path, {})
+
+    def unbound_for(self, path: str, submitted, *, all_paths=()) -> list[tuple[str, tuple[str, ...]]]:
+        """Return `(param, bound_sibling_paths)` when a shared-VO endpoint ignores `<entity>Id`
+        that a dedicated `*-by-<entity>` sibling under the same prefix binds."""
+        if "/" not in path:
+            return []
+        parent, leaf = path.rsplit("/", 1)
+        if "-by-" in leaf:
+            return []
+        unk = self._unknown.get(path, frozenset())
+        if not unk:
+            return []
+        candidates = sorted(set(self._apis) | set(all_paths or ()))
+        out: list[tuple[str, tuple[str, ...]]] = []
+        for key in submitted:
+            if key not in unk or not key.endswith("Id") or len(key) <= 2:
+                continue
+            stem = re.sub(r"([a-z0-9])([A-Z])", r"\1-\2", key[:-2]).lower()
+            alts = tuple(
+                other for other in candidates
+                if other != path and other.rsplit("/", 1)[0] == parent
+                and (other.rsplit("/", 1)[1].endswith("-by-" + stem)
+                     or ("-by-" + stem + "-") in other.rsplit("/", 1)[1])
+            )
+            if alts:
+                out.append((key, alts))
+        return out
 
     def condition_line(self, path: str, submitted) -> str:
         """`name 包含匹配；categoryId 等于` for the submitted conditions this policy resolves."""

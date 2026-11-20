@@ -20,6 +20,14 @@ class NativePageGoalPort(DataGoalPort):
     page_filters = None
     allow_updates = False
 
+    def write_route_capability(self):
+        fn = getattr(self.data, "write_route_capability", None)
+        if callable(fn):
+            return fn()
+        from ..writes.convention_writes import YUDAO_WRITE_ROUTE_CAPABILITY
+
+        return YUDAO_WRITE_ROUTE_CAPABILITY
+
     def capabilities(self):
         # Paging is settled on the page's own pagination controls and list reads, which the
         # page integration reports for every list; it needs no review of its own.

@@ -215,7 +215,7 @@ class PageObservation:
                      and not any(p in {".", ".."} for p in path.split("/")), "invalid query path")
             _require(isinstance(params, dict) and len(params) <= MAX_QUERY_PARAMETERS, "invalid query parameters")
             _require(all(isinstance(k, str) and 0 < len(k) <= MAX_QUERY_KEY_CHARS
-                         and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", k)
+                         and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*(?:\[[0-9]{1,3}\])?", k)
                          and not SENSITIVE_CREDENTIAL_NAME.search(k) and k.lower() not in SESSION_HANDOFF_QUERY_KEYS
                          and isinstance(v, str) and len(v) <= MAX_QUERY_VALUE_CHARS
                          for k, v in params.items()), "invalid query parameter value")

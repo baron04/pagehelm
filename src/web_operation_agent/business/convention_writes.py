@@ -22,7 +22,7 @@ from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 import re
-from typing import Protocol
+from typing import Literal, Protocol
 
 from ..execution.submit_contract import same_value, scalar_text
 from ..execution.value_source import (
@@ -55,6 +55,74 @@ from .write_pipeline import (
 
 _SECRET_FIELD = DEFAULT_SECRET_FIELD_PATTERN
 _FIELD_KINDS = frozenset({"string", "integer", "number", "boolean", "id_array"})
+
+
+@dataclass(frozen=True, slots=True)
+class WriteRouteCapability:
+    """Declarative write-routing capability driving prompts and fallback errors."""
+
+    compiled_api_writes: bool = False
+    inline_row_status_submit: bool = False
+    page_form_mode: Literal["prefill_handoff", "disabled"] = "prefill_handoff"
+
+    def __post_init__(self) -> None:
+        if self.page_form_mode not in {"prefill_handoff", "disabled"}:
+            raise ValueError(f"unsupported page_form_mode: {self.page_form_mode!r}")
+
+    def form_fallback_phrase(self) -> str:
+        if self.page_form_mode == "prefill_handoff":
+            return "打开对应页面表单完成预填并用 then_highlight 标出提交按钮交由用户自行提交（禁止对表单提交按钮调用 request_submit）"
+        return "在说明限制后停止，当前部署不开放页面表单提交"
+
+    def unsupported_entity_message(self, entity: str, *, dedicated: str | None = None) -> str:
+        if dedicated:
+            return (
+                f"实体「{entity}」已有已安装的专用修改操作「{dedicated}」，"
+                f"请直接用 propose_operation(\"{dedicated}\", ...) 办理。"
+            )
+        return (
+            f"实体「{entity}」不满足扁平对称约定更新条件（可能含明细行、非对称字段或无配对详情接口）；"
+            f"请改用已安装的专用操作，或{self.form_fallback_phrase()}。"
+        )
+
+    def unsupported_field_message(self, entity: str, raw_field: str, supported: str) -> str:
+        return (
+            f"实体「{entity}」不支持通过约定更新修改字段「{raw_field}」"
+            f"（支持字段：{supported}）。若是状态字段请改用 toggle_record_status 或专用状态操作；"
+            f"若是其它表单专属字段请{self.form_fallback_phrase()}。"
+        )
+
+    def missing_required_field_message(self, field_name: str) -> str:
+        return (
+            f"目标记录当前缺少必填原字段「{field_name}」，无法安全构造整条更新请求；"
+            f"请{self.form_fallback_phrase()}。"
+        )
+
+    def unsupported_status_message(self, entity: str, *, dedicated: str | None = None) -> str:
+        if dedicated:
+            return (
+                f"实体「{entity}」已有已安装的专用状态操作「{dedicated}」，"
+                f"请直接用 propose_operation(\"{dedicated}\", ...) 办理。"
+            )
+        if self.inline_row_status_submit:
+            row_hint = "使用已安装的专用状态操作，或对该行按钮调用 request_submit"
+        else:
+            row_hint = f"使用已安装的专用状态操作，或{self.form_fallback_phrase()}"
+        return f"实体「{entity}」不属于通用两态互逆状态开关范围（多态业务流转请{row_hint}）。"
+
+    def unavailable_operation_message(self, op_name: str) -> str:
+        return (
+            f"当前部署或账号下没有可用的写入操作「{op_name}」；"
+            f"请核对“已安装的写入操作”清单，或{self.form_fallback_phrase()}。"
+        )
+
+
+def resolve_write_route_capability(source: object) -> WriteRouteCapability:
+    """Resolve optional WriteRouteCapability from a port or profile object."""
+    attr = getattr(source, "write_route_capability", None)
+    if callable(attr):
+        attr = attr()
+    return attr if isinstance(attr, WriteRouteCapability) else WriteRouteCapability()
 
 
 def normalize_changes_argument(args: dict) -> dict:
@@ -249,9 +317,11 @@ def _entry_provenance_ok(
     entry: Entry,
     scoped_cands: list[tuple[str, str]],
     texts: tuple[str, ...] | list[str],
+    *,
+    receipts: tuple[str, ...] = (),
 ) -> bool:
-    """Validate one field entry against user texts and earlier scoped candidate values."""
-    return verify_entry_provenance(entry, scoped_cands, texts)
+    """Validate one field entry against user texts, scoped candidates, and turn receipts."""
+    return verify_entry_provenance(entry, scoped_cands, texts, receipts=receipts)
 
 
 class ConventionWriteEffects:
@@ -292,17 +362,11 @@ class ConventionUpdateHandler:
         entity = str(args.get("entity") or "").strip().strip("/")
         specs = self.port.update_specs()
         spec = specs.get(entity)
+        cap = resolve_write_route_capability(self.port)
         if spec is None:
             dedicated_fn = getattr(self.port, "dedicated_tool_for", None)
             dedicated = dedicated_fn(entity, "update") if callable(dedicated_fn) else None
-            if dedicated:
-                raise BusinessToolRequestError(
-                    f"实体「{entity}」已有已安装的专用修改操作「{dedicated}」，请直接用 propose_operation(\"{dedicated}\", ...) 办理。"
-                )
-            raise BusinessToolRequestError(
-                f"实体「{entity}」不满足扁平对称约定更新条件（可能含明细行、非对称字段或无配对详情接口）；"
-                "请改用已安装的专用操作，或打开对应页面编辑表单配合 request_submit 办理。"
-            )
+            raise BusinessToolRequestError(cap.unsupported_entity_message(entity, dedicated=dedicated))
         raw_changes = args.get("changes") or ()
         if not raw_changes:
             raise BusinessToolRequestError("changes 不能为空，请提供用户明确要求修改的字段。")
@@ -327,9 +391,7 @@ class ConventionUpdateHandler:
                     f"{f.name}({f.label})" if f.label else f.name for f in spec.fields[:25]
                 )
                 raise BusinessToolRequestError(
-                    f"实体「{entity}」不支持通过约定更新修改字段「{raw_field}」"
-                    f"（支持字段：{supported}）。若是状态字段请改用 toggle_record_status 或专用状态操作；"
-                    "若是其它表单专属字段请改走页面表单 request_submit。"
+                    cap.unsupported_field_message(entity, raw_field, supported)
                 )
             if f_spec.name in seen_fields:
                 raise BusinessToolRequestError(f"字段「{f_spec.name}」在同一次修改中重复出现。")
@@ -394,7 +456,7 @@ class ConventionUpdateHandler:
                 )
             elif f_spec.required:
                 raise BusinessToolRequestError(
-                    f"目标记录当前缺少必填原字段「{f_spec.name}」，无法安全构造整条更新请求；请改走页面表单。"
+                    cap.missing_required_field_message(f_spec.name)
                 )
 
         snapshot = _non_volatile_snapshot(record, spec.volatile_fields)
@@ -467,8 +529,15 @@ class ConventionUpdateHandler:
         joined_words = "\n".join(texts)
 
         ledger = SourceLedger()
+        receipt_vals: tuple[str, ...] = ()
         if existing_values:
+            receipt_vals = tuple(
+                str(v).strip() for v in existing_values.get("__receipt__", ())
+                if isinstance(v, str) and v.strip()
+            )
             for binding, vals in existing_values.items():
+                if binding == "__receipt__":
+                    continue
                 for v in vals:
                     ledger.add_candidates([(binding, v)])
 
@@ -599,12 +668,12 @@ class ConventionUpdateHandler:
 
             # 6. Scaled integer fields (e.g. unit_scale=100 fen, unit_scale=10 zhe)
             if f_spec.unit_scale > 1 and raw_val is not None:
-                _verify_scaled_number_provenance(f_spec, raw_val, texts)
+                _verify_scaled_number_provenance(f_spec, raw_val, texts, receipts=receipt_vals)
                 continue
 
             # 7. Date / datetime string inputs (for both string dates and epoch-ms timestamps)
             if f_spec.date_kind and isinstance(raw_val, str) and raw_val:
-                if not _entry_provenance_ok(Entry(label, raw_val, kind="text"), scoped_cands, texts):
+                if not _entry_provenance_ok(Entry(label, raw_val, kind="text"), scoped_cands, texts, receipts=receipt_vals):
                     raise BusinessToolRequestError(
                         f"字段「{label}」的日期时间值「{raw_val}」未在用户原话或本轮时间换算中找到依据，请向用户确认。"
                     )
@@ -625,7 +694,7 @@ class ConventionUpdateHandler:
 
             # 9. Numbers / integers (unit_scale == 1)
             if f_spec.kind in {"integer", "number"} and raw_val is not None and not isinstance(raw_val, bool):
-                if not _entry_provenance_ok(Entry(label, scalar_text(raw_val), kind="text"), scoped_cands, texts):
+                if not _entry_provenance_ok(Entry(label, scalar_text(raw_val), kind="text"), scoped_cands, texts, receipts=receipt_vals):
                     raise BusinessToolRequestError(
                         f"字段「{label}」的数值「{raw_val}」未在用户原话或本轮计算中找到依据，请向用户确认。"
                     )
@@ -735,10 +804,17 @@ class ConventionUpdateHandler:
         )
 
 
-def _verify_scaled_number_provenance(f_spec: ConventionFieldSpec, raw_val, texts: tuple[str, ...]) -> None:
+def _verify_scaled_number_provenance(
+    f_spec: ConventionFieldSpec,
+    raw_val,
+    texts: tuple[str, ...],
+    *,
+    receipts: tuple[str, ...] = (),
+) -> None:
     joined = "\n".join(texts)
     label = f_spec.label or f_spec.name
     s_raw = str(raw_val).strip()
+    receipt_set = {str(r).strip() for r in receipts if isinstance(r, str) and r.strip()}
     if f_spec.unit_scale == 100:
         if s_raw in {"0", "0.0", "0.00", "0元", "0块", "0分"} and re.search(r"无门槛|不限|免费|零|(?<![\d.])0(?![\d.])", joined):
             return
@@ -751,6 +827,8 @@ def _verify_scaled_number_provenance(f_spec: ConventionFieldSpec, raw_val, texts
             if unit in ("元", "块"):
                 fen_str = scalar_text(int((dec * Decimal(100)).to_integral_value()))
                 yuan_clean = scalar_text(dec)
+                if yuan_clean in receipt_set or num_str in receipt_set or fen_str in receipt_set:
+                    return
                 if (re.search(r"(?<![\d.])" + re.escape(fen_str) + r"\s*分", joined)
                         or re.search(r"(?<![\d.])" + re.escape(num_str) + r"\s*(?:元|块)", joined)
                         or re.search(r"(?<![\d.])" + re.escape(yuan_clean) + r"\s*(?:元|块)", joined)):
@@ -762,6 +840,8 @@ def _verify_scaled_number_provenance(f_spec: ConventionFieldSpec, raw_val, texts
             # unit == "分"
             fen_clean = scalar_text(int(dec))
             yuan_clean = scalar_text(dec / Decimal(100))
+            if fen_clean in receipt_set or yuan_clean in receipt_set:
+                return
             if (re.search(r"(?<![\d.])" + re.escape(fen_clean) + r"\s*分", joined)
                     or re.search(r"(?<![\d.])" + re.escape(yuan_clean) + r"\s*(?:元|块)", joined)):
                 return
@@ -809,16 +889,11 @@ class ConventionStatusHandler:
         actor_id = self.port.verify_actor(context)
         entity = str(args.get("entity") or "").strip().strip("/")
         spec = self.port.status_specs().get(entity)
+        cap = resolve_write_route_capability(self.port)
         if spec is None:
             dedicated_fn = getattr(self.port, "dedicated_tool_for", None)
             dedicated = dedicated_fn(entity, "status") if callable(dedicated_fn) else None
-            if dedicated:
-                raise BusinessToolRequestError(
-                    f"实体「{entity}」已有已安装的专用状态操作「{dedicated}」，请直接用 propose_operation(\"{dedicated}\", ...) 办理。"
-                )
-            raise BusinessToolRequestError(
-                f"实体「{entity}」不属于通用两态互逆状态开关范围（多态业务流转请使用已安装的专用状态操作，或走页面行内按钮 request_submit）。"
-            )
+            raise BusinessToolRequestError(cap.unsupported_status_message(entity, dedicated=dedicated))
         resolved = spec.resolve_state(str(args.get("status") or ""))
         if resolved is None:
             allowed = " / ".join(label for label, _ in spec.states)
@@ -1096,6 +1171,8 @@ __all__ = [
     "ConventionWriteEffects",
     "ConventionWritePort",
     "TwoStateStatusSpec",
+    "WriteRouteCapability",
     "convention_tool_definitions",
     "normalize_changes_argument",
+    "resolve_write_route_capability",
 ]

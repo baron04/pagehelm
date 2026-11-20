@@ -5,7 +5,47 @@ from dataclasses import dataclass
 import re
 
 _ENUM_CONSTANT = re.compile(r'\b([A-Z][A-Z0-9_]+)\(\s*-?\d+\s*,\s*"([^"]+)"')
+_ENUM_CODE_VALUE = re.compile(r'\b[A-Z][A-Z0-9_]+\(\s*(-?\d+)\s*,\s*"([^"]+)"')
+_ENUM_STR_CODE_VALUE = re.compile(r'\b[A-Z][A-Z0-9_]+\(\s*"([^"]+)"\s*,\s*"([^"]+)"')
 _ENUM_NAME = re.compile(r"\b(\w+Enum)\.([A-Z][A-Z0-9_]+)\.getName\(\)")
+_DICT_CONST_DECL = re.compile(r'\bString\s+([A-Z][A-Z0-9_]+)\s*=\s*"([^"]+)"')
+_RESP_VO_FIELD = re.compile(
+    r"^[ \t]*private\s+(?!static\b|final\b)([\w<>?.,\[\]\s]+?)\s+(\w+)\s*(?:=[^;]*)?;",
+    re.M,
+)
+_DICT_FORMAT_ANN = re.compile(r'@DictFormat\(\s*(?:[\w.]+\.)?(?:([A-Z][A-Z0-9_]+)|"([^"]+)")\s*\)')
+_ENUM_LINK_HINT = re.compile(r"(?:\{@link\s+|参见\s*)(?:[\w.]+\.)?([A-Za-z0-9_]+Enum)\b(?!#)")
+_SCALAR_VO_TYPES = frozenset({"Integer", "Long", "Short", "Byte", "String", "Boolean", "int", "long", "boolean"})
+
+
+def parse_resp_vo_code_bindings(text: str, dict_consts: dict[str, str]) -> dict[str, tuple[str, str]]:
+    """Extract field -> ('dict', dict_type) | ('enum', enum_class) from a *RespVO.java file."""
+    bindings: dict[str, tuple[str, str]] = {}
+    for m in _RESP_VO_FIELD.finditer(text):
+        field_type = m.group(1).strip()
+        field = m.group(2)
+        if field_type not in _SCALAR_VO_TYPES:
+            continue
+        start = m.start()
+        sep_semi = text.rfind(";", 0, start)
+        sep_brace = text.rfind("{", 0, start)
+        sep = max(sep_semi, sep_brace)
+        nl = text.find("\n", sep) if sep >= 0 else -1
+        cut = (nl + 1) if 0 <= nl < start else max(sep + 1, 0)
+        line_end = text.find("\n", m.end())
+        same_line = text[m.end():line_end if line_end >= 0 else len(text)]
+        ctx = text[max(cut, start - 600):start] + "\n" + same_line
+        d = _DICT_FORMAT_ANN.search(ctx)
+        if d:
+            const_name, literal_type = d.group(1), d.group(2)
+            dtype = literal_type or dict_consts.get(const_name or "", "")
+            if dtype:
+                bindings[field] = ("dict", dtype)
+                continue
+        e = _ENUM_LINK_HINT.search(ctx)
+        if e:
+            bindings[field] = ("enum", e.group(1))
+    return bindings
 _ERROR_CODE = re.compile(r'ErrorCode\s+([A-Z0-9_]+)\s*=\s*new\s+ErrorCode\([^,]+,\s*"([^"]*)"')
 _CLASS_MAPPING = re.compile(r'@RequestMapping\(\s*(?:value\s*=\s*)?"([^"]+)"\s*\)\s*(?:@\w+(?:\([^)]*\))?\s*)*public\s+class')
 _METHOD_MAPPING = re.compile(r'@(Get|Post|Put|Delete)Mapping\(\s*(?:value\s*=\s*)?(?:\{\s*)?"([^"]+)"')

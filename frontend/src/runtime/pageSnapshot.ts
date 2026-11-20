@@ -277,7 +277,7 @@ function boundedPageQuery(
     if (pairs.length > browserContract.observation.max_query_parameters) return undefined
     const parameters: Record<string, string> = {}
     for (const [key, value] of pairs) {
-      if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(key) || key.length > browserContract.observation.max_query_key_chars ||
+      if (!/^[A-Za-z][A-Za-z0-9_]*(?:\[[0-9]{1,3}\])?$/.test(key) || key.length > browserContract.observation.max_query_key_chars ||
           redactor.isSensitiveName(key) || typeof value !== 'string' ||
           value.length > browserContract.observation.max_query_value_chars ||
           redactor.redactString(value) !== value) return undefined

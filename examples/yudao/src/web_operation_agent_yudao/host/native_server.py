@@ -767,6 +767,7 @@ class YudaoHost:
                                          time_zone=app.goal_data.time_zone(),
                                          codes=app.goal_data.code_names,
                                          columns=app.goal_data.column_names,
+                                         derived_columns=app.goal_data.derived_columns,
                                          query_choices=app.goal_data.query_choices,
                                          money_review=self.money_review,
                                          filter_semantics=self.filter_semantics),

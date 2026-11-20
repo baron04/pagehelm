@@ -34,6 +34,7 @@ import re
 from types import SimpleNamespace
 from urllib.parse import parse_qsl, urlsplit
 
+from web_operation_agent.business.convention_writes import resolve_write_route_capability
 from web_operation_agent.business.errors import (
     BusinessToolContractError,
     BusinessToolIdentityError,
@@ -90,6 +91,7 @@ from .page_prompts import (
     _tool,
     _unavailable_already_matches,
     _words,
+    apply_write_route_capability,
     conventions_text,
     page_scope_notice,
     page_text,
@@ -545,6 +547,8 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
         ctx.current_request = state.message.text
         self._active_model_state = state
         self.knowledge.turn_targets = {}
+        self.knowledge.probed_s3_edges = set()
+        self.knowledge.last_writing_get_allowed = False
         context = self.conversation_state.model_context() or {}
         ctx.earlier_requests = tuple(str(turn["user"]) for turn in context.get("prior_turns", ()))
         prior_draft = preceding_draft_handoff(context.get("prior_turns"))
@@ -1259,22 +1263,9 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
             self.native_submit = native_submit
             if hasattr(self.channel, "read_only_mode"):
                 self.channel.read_only_mode = False
-            updated_instructions = (
-                self.profile.instructions
-                .replace(
-                    "只有下面“已安装的 Skill”覆盖的操作能办：你提出写入提案，用户在批准卡片上确认后，程序执行一次并回读核对。\n"
-                    "   - 本轮提供了 Skill 写入工具且用户要求办理其覆盖的事时，先 load_skill，再用已安装操作提出提案；没有对应 Skill 时把表单填好交接。",
-                    "优先用下面“已安装的 Skill”覆盖的操作提出提案；Skill 未覆盖（或改走页面表单）的新增、修改，"
-                    "直接在用户页用原生表单填好并通过 then_highlight 标出提交按钮交由用户自己提交（完成预填交接即 finish(status=\"done\")，不对表单调用 request_submit，也不得因无对应 Skill 而拒绝）；行内启停、审核、关闭等无表单动作可配合 request_submit 经批准卡提交。\n"
-                    "   - 本轮提供了 Skill 写入工具且用户要求办理其覆盖的事时，先 load_skill，再用已安装操作提出提案（Skill 自身失败不会阻碍你改用页面表单完成预填交接）；走页面表单时填好字段并标出提交按钮即完成交接。",
-                    1,
-                )
-                .replace(
-                    "用户要的事里有 Skill 办不到的部分（参数里没有的字段、另一种业务动作）：先如实说明办不到的是哪部分（cannot），不要只办能办的那部分就说完成。",
-                    "用户要的事里若既有 Skill 参数没覆盖某个字段或动作，表单字段改走用户页表单预填交接（行内动作可配合 request_submit）；若应用页面本身也不支持，再如实说明办不到的是哪部分（cannot），不要只办能办的那部分就说完成。",
-                    1,
-                )
-                + NATIVE_SUBMIT_RULES
+            cap = resolve_write_route_capability(kwargs.get("goal_port"))
+            updated_instructions = apply_write_route_capability(
+                self.profile.instructions, cap, native_submit=True
             )
             self.profile = replace(self.profile, instructions=updated_instructions)
         instructions = self.profile.instructions.replace(
@@ -1290,7 +1281,7 @@ TableReadTurnExecutor = YudaoTurnExecutor
 
 
 _RECEIPT_PAREN = re.compile(
-    r"[（(][^（）()\n]{0,32}?(?:ev_[0-9a-f]{12}_\d+|(?:本轮)?行表\s*`?t\d{1,2}`?)[^（）()\n]{0,120}?[）)]"
+    r"[（(][^（）()\n]{0,32}?(?:ev_[0-9a-f]{12}_\d+|(?:本轮)?行表\s*`?t\d{1,2}(?:_sib\d*)?`?)[^（）()\n]{0,120}?[）)]"
 )
 _RECEIPT_INLINE = re.compile(
     r"(?:[，,；;、]\s*)?(?:依据|来源|引用|参考|见)?(?:本轮)?(?:读取|工具|页面状态)?回执"
@@ -1299,7 +1290,7 @@ _RECEIPT_INLINE = re.compile(
 _BARE_RECEIPT = re.compile(r"`?ev_[0-9a-f]{12}_\d+`?")
 _RECEIPT_STUB = re.compile(r"[（(]\s*(?:依据|来源|引用|参考|见)?(?:本轮)?(?:读取|工具)?回执[，,、\s]*(?:详见)?(?:本轮读取数据)?\s*[）)]")
 _EMPTY_PARENS = re.compile(r"[（(]\s*[）)]")
-_TABLE_TOKEN = re.compile(r"(?:(?:本轮)?行表|数据表|临时表|表)\s*`?t\d{1,2}`?|`t\d{1,2}`")
+_TABLE_TOKEN = re.compile(r"(?:(?:本轮)?行表|数据表|临时表|表)\s*`?t\d{1,2}(?:_sib\d*)?`?|`t\d{1,2}(?:_sib\d*)?`")
 _PAGE_OBLIGATION = re.compile(
     r"调出|(?:帮我|请)?(?:打开|进入|跳转到?|定位到?|切到|切换到)[^，。；！？?\n]{0,24}"
     r"(?:页面|列表页?|详情|台账|看板|页签|栏目|菜单|视图|界面)"

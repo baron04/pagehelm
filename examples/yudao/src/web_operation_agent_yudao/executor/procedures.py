@@ -73,6 +73,49 @@ from .page_prompts import (
 )
 
 _SCOPE = re.compile(r"(?:form|dialog|dialog_labelledby|dialog_describedby):")
+_FMS_DUAL_MONTH_TRIGGER = re.compile(
+    r"凭证|账套|会计期间?|科目余额|总账|明细账|资产负债表|利润表|现金流量表|结账|期初|损益|试算|fms"
+)
+
+
+def _attach_fms_dual_month_receipt(store, note: str, vals: tuple[str, ...], *, policy_turn=None) -> str:
+    bucket = getattr(store, "precomputed_date_values", None)
+    if bucket is None:
+        bucket = []
+        store.precomputed_date_values = bucket
+    for val in vals:
+        if val and val not in bucket:
+            bucket.append(val)
+        if policy_turn is not None and val:
+            note_receipt(policy_turn, "", val)
+    ref = store.issue_receipt()
+    return f"{note}（回执 {ref}）"
+
+
+def _note_sql_receipt_values(policy_turn, data: dict) -> None:
+    noted = 0
+    for row in (data.get("rows") or ())[:20]:
+        cells = (
+            list(row.values())[:12] if isinstance(row, dict)
+            else list(row)[:12] if isinstance(row, (list, tuple))
+            else ()
+        )
+        for val in cells:
+            if val is None or isinstance(val, (bool, dict, list)):
+                continue
+            if isinstance(val, (int, float)):
+                text_val = f"{val:g}" if isinstance(val, float) and val.is_integer() else str(val)
+            elif isinstance(val, str) and re.fullmatch(
+                r"-?\d+(?:\.\d+)?|\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?",
+                val.strip(),
+            ):
+                text_val = val.strip()
+            else:
+                continue
+            note_receipt(policy_turn, "", text_val)
+            noted += 1
+            if noted >= 40:
+                return
 
 
 def _business_scope(scope) -> bool:
@@ -552,6 +595,13 @@ class YudaoProceduresBase:
                     data = store.describe()
                 elif name == "sql":
                     data = store.query(args["query"])
+                    if policy_turn is not None and isinstance(data, dict):
+                        if re.search(
+                            r"\b(?:FROM|JOIN)\s+[\"'`]?(?:t\d+(?:_sib\d*)?|q\d+|q_prev)[\"'`]?\b",
+                            str(args.get("query") or ""),
+                            re.I,
+                        ):
+                            _note_sql_receipt_values(policy_turn, data)
                 else:
                     data = date_range(today=today, zone=zone, **args)
                     if policy_turn is not None:
@@ -627,9 +677,16 @@ class YudaoProceduresBase:
                                          **sink,
                                          row_offset=args.get("row_offset", 0),
                                          on_page=lambda page_no: self._publish_read_page(s, page_no),
+                                         allow_user_writing_gets=True,
+                                         allow_cluster_probe=True,
+                                         current_request=ctx.current_request,
                                          **({"summary": args["summary"]} if "summary" in args else {}),
                                          **({"actor_digest": s.operation.principal.actor_authority_digest}
                                             if "summary" in args else {}))
+                    if called_path.startswith("/admin-api/fms/"):
+                        fms_note = self._maybe_fms_dual_month_note(s, called_path, policy_turn=policy_turn)
+                        if fms_note:
+                            text += "\n" + fms_note
                 except TurnReadError as exc:
                     return LoopToolResult(str(exc), kind="read", state="unverified", error_code=exc.code)
                 except SummaryRefused as exc:
@@ -661,7 +718,9 @@ class YudaoProceduresBase:
                                                    if valid_key(key) and key in published_fields})[:12],
                                 read_count=know.last_read["count"],
                                 declared_total=know.last_read["declared_total"],
-                                complete=know.last_read["complete"])
+                                complete=know.last_read["complete"],
+                                **({"writing_get_allowed": True}
+                                   if getattr(know, "last_writing_get_allowed", False) else {}))
             review = getattr(self.goal_port, "review", None)
             if know.last_read and review and s.obs and s.obs.page_read is not None:
                 route = urlsplit(s.obs.url).path
@@ -1285,6 +1344,24 @@ class YudaoProceduresBase:
         for page in index.pages:
             if page.entity:
                 pages.setdefault(page.entity, page.breadcrumb or page.label)
+        if not hits and among and len(name.strip()) >= 2 and not re.fullmatch(r"(?:[A-Z]{2,10})?[0-9]{4,}", name.strip()):
+            if diagnostic:
+                global_hits, global_failures = diagnostic(name, context=context, entities=None)
+            else:
+                global_hits = self.goal_port.records_named(name, context=context, entities=None)
+                global_failures = ()
+            global_hits = global_hits[:4]
+            if global_hits:
+                hits = global_hits
+                scope_notes.extend(
+                    f"{entity} 的列表读取" + ("被应用明确拒绝" if denied else "未完成")
+                    for entity, denied, _read_failed in global_failures
+                )
+                global_fallback_kind = kind
+            else:
+                global_fallback_kind = ""
+        else:
+            global_fallback_kind = ""
         if not hits and among:
             if scope_notes:
                 return redacted("；".join(scope_notes) + "。不能凭负责范围列表的空结果判断详情权限或记录状态。",
@@ -1292,7 +1369,7 @@ class YudaoProceduresBase:
             where = "、".join(labels.get(e, e) for e in among)
             parts = "”“".join(_name_parts(name))
             looked = f"按名称“{name}”" + (f"和它的一部分（“{parts}”）" if parts else "")
-            told = [f"在名称里有“{kind}”的模块（{where}）里，{looked}查列表，都没有名称是或包含“{name}”的记录。"]
+            told = [f"在名称里有“{kind}”的模块（{where}）及全局模块里，{looked}查列表，都没有名称是或包含“{name}”的记录。"]
             if near:
                 names = sorted({display for _entity, records in near for _rid, display, _address in records})[:8]
                 told += ["按名称的一部分查到的记录，名称与用户说的不同，不是它：", fenced("、".join(names))]
@@ -1303,8 +1380,7 @@ class YudaoProceduresBase:
                             "不要因为没有同名旧记录而拒绝。现在打开对应页面的新增表单，填入用户给出的值并交接提交。")
             else:
                 told.append("以上只核对了名称，不证明原生ID或业务编号不存在；编号需用已发布接口的对应参数读取。"
-                            "用户给的是确切名称时，如实说明这些模块没有该名称（cannot），不要再换名字查；"
-                            "用户没说清是哪一类，它也可能在别的模块里，那样就不带 kind 再查一次。")
+                            "这些已查模块及全局索引模块均没有该名称（cannot），不要再缩短名称或换 kind 重查。")
             return redacted("\n".join(told), self.knowledge.handoffs)
         if not hits:
             if scope_notes:
@@ -1325,7 +1401,16 @@ class YudaoProceduresBase:
                                  for value in (rid, display) if value]
             page = pages.get(entity, "")
             path = self.knowledge.page_path(page) if page else ""
-            head = f"{labels.get(entity, entity)}（{entity}；页面：{page or '无'}{' ' + path if path else ''}）"
+            status_hint = ""
+            codes = self.knowledge._names(f"{entity.strip('/')}/page") or self.knowledge._names(f"{entity.strip('/')}/list")
+            for skey in ("status", "state", "auditStatus", "bizType", "type"):
+                smap = codes.get(skey)
+                if isinstance(smap, dict) and smap:
+                    labels_list = list(dict.fromkeys(str(v) for v in smap.values() if v))[:8]
+                    if labels_list:
+                        status_hint = f"；{skey}字典：{'/'.join(labels_list)}"
+                        break
+            head = f"{labels.get(entity, entity)}（{entity}；页面：{page or '无'}{' ' + path if path else ''}{status_hint}）"
             if len(records) == 1:
                 rid, display, address = records[0]
                 told.append(f"{head}：{display}（编号 {rid}）" + (f"；这条记录的详情页 {address}" if _record_page(address, rid, path) else ""))
@@ -1337,7 +1422,12 @@ class YudaoProceduresBase:
             api = self.knowledge.list_api(entity)
             if api and api not in lists:
                 lists.append(api)
-        out = ["找到的记录（模块；页面：记录名称）：", fenced(redacted("\n".join(told), self.knowledge.handoffs))]
+        intro = (
+            f"在名称包含“{global_fallback_kind}”的模块中未找到“{name}”，已自动扩大为全局检索并在以下模块命中（模块；页面：记录名称）："
+            if global_fallback_kind else
+            "找到的记录（模块；页面：记录名称）："
+        )
+        out = [intro, fenced(redacted("\n".join(told), self.knowledge.handoffs))]
         if several:
             out.append(
                 "同一个模块里有几条可能是它：用户要的是其中一条时，不要自己挑，用 need_input"
@@ -1404,14 +1494,48 @@ class YudaoProceduresBase:
                        "都不算完成交接；不得要求执行已被禁用的写入。")
         return [{"role": "system", "content": policy}, {"role": "user", "content": content}]
 
+    def _maybe_fms_dual_month_note(
+        self,
+        context,
+        trigger_text: str = "",
+        *,
+        policy_turn=None,
+    ) -> str:
+        table_ctx = self._ctx().turn_tables
+        if table_ctx is None:
+            return ""
+        store, today, _zone = table_ctx
+        if getattr(store, "fms_dual_month_done", False):
+            return ""
+        obs = getattr(context, "obs", None)
+        obs_path = urlsplit(getattr(obs, "url", "") or "").path if obs is not None else ""
+        if not (
+            obs_path.startswith("/fms")
+            or "/admin-api/fms/" in trigger_text
+            or _FMS_DUAL_MONTH_TRIGGER.search(trigger_text or "")
+        ):
+            return ""
+        store.fms_dual_month_done = True
+        note, vals = self.knowledge.fms_dual_month_context(today)
+        if not note:
+            return ""
+        return _attach_fms_dual_month_receipt(store, note, vals, policy_turn=policy_turn)
+
     def prepare(self, prompt, context):
         bound = self._bound_reads(self.goal_port.data, context.operation, context.page.checkpoint)
+        fms_note = ""
         with self.knowledge.client.read_window(bound._check):
             self.knowledge._load()
             suggested = self.knowledge.suggest(prompt)
+            fms_note = self._maybe_fms_dual_month_note(
+                context,
+                f"{prompt}\n{suggested}",
+                policy_turn=self._ctx().executor_turn,
+            )
         dates = _precomputed_dates(prompt, self._ctx().turn_tables)
-        if dates:
-            suggested = (suggested + "\n\n" + dates) if suggested else dates
+        for extra in (dates, fms_note):
+            if extra:
+                suggested = (suggested + "\n\n" + extra) if suggested else extra
         return suggested
 
     def execute(self, name, arguments, context):
@@ -1516,10 +1640,18 @@ class YudaoProceduresBase:
                     arguments.get("fields", ()),
                     use_row_sink=use_table_sink,
                     row_offset=arguments.get("row_offset", 0),
+                    allow_user_writing_gets=True,
+                    allow_cluster_probe=True,
+                    current_request=self._ctx().current_request,
                     **({"summary": arguments["summary"]} if "summary" in arguments else {}),
                     **({"actor_digest": actor_digest} if "summary" in arguments else {}),
                 )
-                return {"called_path": called_path, "params": params, "api": api_prepared}
+                fms_prepared = None
+                table_ctx = self._ctx().turn_tables
+                if (called_path.startswith("/admin-api/fms/") and table_ctx is not None
+                        and not getattr(table_ctx[0], "fms_dual_month_done", False)):
+                    fms_prepared = self.knowledge.fms_dual_month_context(table_ctx[1])
+                return {"called_path": called_path, "params": params, "api": api_prepared, "fms_prepared": fms_prepared}
         raise ValueError(f"unsupported concurrent read tool: {name}")
 
     def commit_read(self, name: str, prepared: dict, arguments: dict, context) -> LoopToolResult:
@@ -1570,6 +1702,14 @@ class YudaoProceduresBase:
             try:
                 sink = table_context[0].add if table_context is not None else None
                 text = know._commit_call_api(prepared["api"], row_sink=sink)
+                fms_pair = prepared.get("fms_prepared")
+                if fms_pair and table_context is not None and not getattr(table_context[0], "fms_dual_month_done", False):
+                    table_context[0].fms_dual_month_done = True
+                    fms_note_raw, fms_vals = fms_pair
+                    if fms_note_raw:
+                        text += "\n" + _attach_fms_dual_month_receipt(
+                            table_context[0], fms_note_raw, fms_vals, policy_turn=policy_turn
+                        )
             except TurnReadError as exc:
                 return LoopToolResult(str(exc), kind="read", state="unverified", error_code=exc.code)
             except SummaryRefused as exc:
@@ -1608,6 +1748,7 @@ class YudaoProceduresBase:
                     read_count=know.last_read["count"],
                     declared_total=know.last_read["declared_total"],
                     complete=know.last_read["complete"],
+                    **({"writing_get_allowed": True} if prepared["api"].get("writing_get_allowed") else {}),
                 )
             review = getattr(self.goal_port, "review", None)
             obs = context.obs
