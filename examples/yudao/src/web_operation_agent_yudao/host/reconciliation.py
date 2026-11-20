@@ -113,9 +113,21 @@ class YudaoMutationReconciler:
                 reason="no expected target fields are recorded for automated readback",
             )
 
-        read_path = f"{entity}/get"
+        read_path = str(
+            ev.get("read_path")
+            or bk.get("read_path")
+            or ("product/spu/get-detail" if entity == "product/spu" else f"{entity}/get")
+        ).strip("/")
+        composite_id = (
+            ev.get("composite_id")
+            if isinstance(ev.get("composite_id"), dict)
+            else (bk.get("composite_id") if isinstance(bk.get("composite_id"), dict) else {})
+        )
+        id_param = str(ev.get("id_param") or bk.get("id_param") or "id")
+        id_field = str(ev.get("id_field") or bk.get("id_field") or id_param)
+        is_create = name.endswith("_create") or name == "create_record"
         try:
-            record = self._fenced_get(read_path, id=record_id)
+            record = self._fenced_get(read_path, **{**composite_id, id_param: record_id})
         except YudaoReadRefused as exc:
             if exc.reason == "fenced_writing_get":
                 return MutationReconciliation(
@@ -126,7 +138,7 @@ class YudaoMutationReconciler:
             if exc.code in (401, 403):
                 raise PrincipalError("same-actor readback is not authorized") from exc
             if _MISSING_RECORD.search(exc.reason or str(exc)):
-                if name.endswith("_create"):
+                if is_create:
                     return MutationReconciliation(
                         outcome="failed",
                         requires_human=False,
@@ -150,7 +162,7 @@ class YudaoMutationReconciler:
             )
 
         if record is None:
-            if name.endswith("_create"):
+            if is_create:
                 return MutationReconciliation(
                     outcome="failed",
                     requires_human=False,
@@ -161,7 +173,29 @@ class YudaoMutationReconciler:
                 requires_human=True,
                 reason=f"target record {record_id} returned empty during readback",
             )
-        if not isinstance(record, dict) or str(record.get("id")) != str(record_id):
+        if name == "assign_record_relations" and isinstance(record, list):
+            if len(expected) == 1 and isinstance(next(iter(expected.values())), list):
+                wanted_list = next(iter(expected.values()))
+                if {str(x) for x in record} == {str(x) for x in wanted_list}:
+                    return MutationReconciliation(
+                        outcome="completed",
+                        requires_human=False,
+                        reason=f"same-actor GET {read_path} confirmed relation set",
+                    )
+                if isinstance(before, dict) and len(before) == 1 and isinstance(next(iter(before.values())), list):
+                    before_list = next(iter(before.values()))
+                    if {str(x) for x in record} == {str(x) for x in before_list}:
+                        return MutationReconciliation(
+                            outcome="failed",
+                            requires_human=False,
+                            reason=f"same-actor GET {read_path} confirmed pre-mutation relation set",
+                        )
+            return MutationReconciliation(
+                outcome="unknown",
+                requires_human=True,
+                reason=f"same-actor GET {read_path} did not confirm expected relation set",
+            )
+        if not isinstance(record, dict) or str(record.get(id_field)) != str(record_id):
             return MutationReconciliation(
                 outcome="unknown",
                 requires_human=True,
@@ -169,11 +203,10 @@ class YudaoMutationReconciler:
             )
         def _field_matches(key: str, wanted) -> bool:
             actual = record.get(key)
-            if key in {"contactIds", "businessIds"}:
-                return (
-                    isinstance(actual, list) and isinstance(wanted, list)
-                    and len(actual) == len(wanted) and set(actual) == set(wanted)
-                )
+            if isinstance(actual, list) and isinstance(wanted, list) and (
+                key in {"contactIds", "businessIds"} or name == "assign_record_relations"
+            ):
+                return len(actual) == len(wanted) and set(actual) == set(wanted)
             return actual == wanted
 
         if all(_field_matches(k, v) for k, v in expected.items()):

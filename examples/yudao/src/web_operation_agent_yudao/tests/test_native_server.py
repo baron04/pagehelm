@@ -415,7 +415,8 @@ class NativeHostTests(unittest.TestCase):
             "erp_document_status", "promotion_coupon_template_status", "promotion_seckill_activity_close",
             "system_dept_create", "system_dept_update", "product_brand_create", "product_brand_update", "product_category_create",
             "crm_customer_put_pool", "crm_customer_receive", "crm_customer_lock", "crm_customer_deal_status",
-            "crm_receivable_plan_create", "update_record", "toggle_record_status"}))
+            "crm_receivable_plan_create", "create_record", "update_record",
+            "toggle_record_status", "assign_record_relations"}))
         # Required dictionary choices are absent in this actor fixture: these
         # operations must not become malformed schemas or guessed numeric inputs.
         self.assertNotIn("system_notice_create", executor.application.business_tools.mutation_tool_names)

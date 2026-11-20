@@ -7,7 +7,7 @@ description: >-
 
 # 创建或修改系统部门
 
-**适用目标**：在组织结构中建立新的系统部门记录（`system_dept_create`），修改既有系统部门的名称、上级部门、负责人、排序、状态、电话与邮箱（`system_dept_update`），以及对满足扁平 1:1 对称更新约定的单条业务记录执行字段修改（`update_record`）或两态互逆开关切换（`toggle_record_status`）。
+**适用目标**：在组织结构中建立新的系统部门记录（`system_dept_create`），修改既有系统部门的名称、上级部门、负责人、排序、状态、电话与邮箱（`system_dept_update`），以及通过已编译通用操作完成扁平记录新建（`create_record`，页面合法初始默认值将标以`（页面默认值）`并公开上卡）、单表或 1–2 层嵌套明细单据修改（`update_record`）、两态互逆开关切换（`toggle_record_status`）及多对多关联集合维护（`assign_record_relations`）。
 
 **相邻目标**：容易混淆的目标是创建或修改系统岗位（见 `system-post-creation`）；角色与权限管理（本动作不变更权限）；CRM 联系人职位（资料文本）。区分见 references/org-records-identity.md。
 

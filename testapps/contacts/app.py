@@ -509,6 +509,24 @@ class MinimalContactsApplication:
             ws: {item["id"]: "enabled" for item in items}
             for ws, items in self.workspaces.items()
         }
+        #: Synthetic notes, master-detail dossiers, and group relations for neutral CompiledWrites tests.
+        self.contact_notes: dict[str, list[dict]] = {DEMO_WORKSPACE: [], OTHER_WORKSPACE: []}
+        self.contact_dossiers: dict[str, list[dict]] = {
+            DEMO_WORKSPACE: [
+                {
+                    "id": "dossier-1",
+                    "name": "Ada Dossier",
+                    "owner": "operator",
+                    "note": "Keep safe",
+                    "items": [
+                        {"id": "item-1", "label": "Primary Phone", "value": "+44-100"},
+                        {"id": "item-2", "label": "Office", "value": "London"},
+                    ],
+                }
+            ],
+            OTHER_WORKSPACE: [],
+        }
+        self.contact_groups: dict[str, dict[str, list[str]]] = {DEMO_WORKSPACE: {}, OTHER_WORKSPACE: {}}
         if not self.workspaces[DEMO_WORKSPACE]:
             raise ValueError("contacts must contain id, name, and email")
         #: The demo workspace's records, which is what a single-workspace reader expects.
@@ -851,6 +869,39 @@ class MinimalContactsApplication:
                         return
                     self._create_contact(actor, body=body, gate=gate, path=path)
                     return
+                if path == "/api/contact-notes":
+                    if resolved is None or resolved[1] != "delegated_api":
+                        self._refuse_write(401, "delegated_token_required")
+                        return
+                    actor = resolved[0]
+                    if "contacts:write" not in actor.permissions:
+                        self._refuse_write(403, "forbidden")
+                        return
+                    try:
+                        payload = json.loads(body or b"{}")
+                    except (ValueError, OSError):
+                        self._reply(400, _json_bytes({"error": "invalid_json"}), "application/json")
+                        return
+                    title = str(payload.get("title") or "").strip()
+                    note_owner = str(payload.get("owner") or "").strip()
+                    category = str(payload.get("category") or "").strip()
+                    if not title or not note_owner or category not in {"general", "billing", "vip"}:
+                        self._reply(400, _json_bytes({"error": "invalid_note"}), "application/json")
+                        return
+                    with owner._lock:
+                        notes = owner.contact_notes.setdefault(actor.workspace, [])
+                        nid = f"note-{len(notes) + 1}"
+                        rec = {
+                            "id": nid,
+                            "title": title,
+                            "owner": note_owner,
+                            "category": category,
+                        }
+                        if payload.get("body"):
+                            rec["body"] = str(payload["body"]).strip()
+                        notes.append(rec)
+                    self._reply(201, _json_bytes({"note": dict(rec)}), "application/json")
+                    return
                 if path != "/api/contacts":
                     self._refuse_write(404, "not_found")
                     return
@@ -883,7 +934,9 @@ class MinimalContactsApplication:
                     return
                 delegated_contact = re.fullmatch(r"/api/contacts/([a-z0-9-]+)", path)
                 delegated_sub = re.fullmatch(r"/api/contact-subscriptions/([a-z0-9-]+)", path)
-                if delegated_contact or delegated_sub:
+                delegated_dossier = re.fullmatch(r"/api/contact-dossiers/([a-z0-9-]+)", path)
+                delegated_group = re.fullmatch(r"/api/contact-groups/([a-z0-9-]+)", path)
+                if delegated_contact or delegated_sub or delegated_dossier or delegated_group:
                     with owner._lock:
                         owner.write_requests += 1
                     if resolved is None or resolved[1] != "delegated_api":
@@ -898,7 +951,42 @@ class MinimalContactsApplication:
                     except (ValueError, OSError):
                         self._reply(400, _json_bytes({"error": "invalid_json"}), "application/json")
                         return
-                    identifier = (delegated_contact or delegated_sub).group(1)
+                    identifier = (delegated_contact or delegated_sub or delegated_dossier or delegated_group).group(1)
+                    if delegated_dossier:
+                        with owner._lock:
+                            dossiers = owner.contact_dossiers.setdefault(actor.workspace, [])
+                            dossier = next((d for d in dossiers if d["id"] == identifier), None)
+                            if dossier is None:
+                                self._reply(404, _json_bytes({"error": "not_found"}), "application/json")
+                                return
+                            dossier["name"] = str(payload.get("name") or dossier["name"]).strip()
+                            dossier["owner"] = str(payload.get("owner") or dossier["owner"]).strip()
+                            dossier["note"] = str(payload.get("note") if "note" in payload else dossier["note"]).strip()
+                            if isinstance(payload.get("items"), list):
+                                new_items = []
+                                for idx, it in enumerate(payload["items"], 1):
+                                    new_items.append({
+                                        "id": str(it.get("id") or f"item-{idx}"),
+                                        "label": str(it.get("label") or "").strip(),
+                                        "value": str(it.get("value") or "").strip(),
+                                    })
+                                dossier["items"] = new_items
+                            updated = json.loads(json.dumps(dossier))
+                        self._reply(200, _json_bytes({"dossier": updated}), "application/json")
+                        return
+                    if delegated_group:
+                        groups = payload.get("groups")
+                        if not isinstance(groups, list) or any(not isinstance(g, str) for g in groups):
+                            self._reply(400, _json_bytes({"error": "invalid_groups"}), "application/json")
+                            return
+                        with owner._lock:
+                            store = owner.workspaces[actor.workspace]
+                            if not any(item["id"] == identifier for item in store):
+                                self._reply(404, _json_bytes({"error": "not_found"}), "application/json")
+                                return
+                            owner.contact_groups.setdefault(actor.workspace, {})[identifier] = [str(g) for g in groups]
+                        self._reply(200, _json_bytes({"id": identifier, "groups": list(groups)}), "application/json")
+                        return
                     if delegated_contact:
                         if not isinstance(payload, dict) or set(payload) != {"id", "name", "email"} or payload["id"] != identifier:
                             self._reply(400, _json_bytes({"error": "update_shape"}), "application/json")
@@ -1082,6 +1170,49 @@ class MinimalContactsApplication:
                         return
                     self._reply(200, _json_bytes({"subscription": {"id": identifier, "name": found["name"], "status": status}}),
                                 "application/json; charset=utf-8")
+                elif path == "/api/contact-dossiers":
+                    if resolved is None or "contacts:read" not in resolved[0].permissions:
+                        self._reply(403 if resolved else 401, _json_bytes({"error": "forbidden"}), "application/json")
+                        return
+                    with owner._lock:
+                        items = json.loads(json.dumps(owner.contact_dossiers.get(resolved[0].workspace, [])))
+                    self._reply(200, _json_bytes({"dossiers": items}), "application/json; charset=utf-8")
+                elif re.fullmatch(r"/api/contact-dossiers/([a-z0-9-]+)", path):
+                    if resolved is None or "contacts:read" not in resolved[0].permissions:
+                        self._reply(403 if resolved else 401, _json_bytes({"error": "forbidden"}), "application/json")
+                        return
+                    identifier = path.rsplit("/", 1)[-1]
+                    with owner._lock:
+                        found = next((json.loads(json.dumps(d)) for d in owner.contact_dossiers.get(resolved[0].workspace, [])
+                                      if d["id"] == identifier), None)
+                    if found is None:
+                        self._reply(404, _json_bytes({"error": "not_found"}), "application/json")
+                        return
+                    self._reply(200, _json_bytes({"dossier": found}), "application/json; charset=utf-8")
+                elif re.fullmatch(r"/api/contact-notes/([a-z0-9-]+)", path):
+                    if resolved is None or "contacts:read" not in resolved[0].permissions:
+                        self._reply(403 if resolved else 401, _json_bytes({"error": "forbidden"}), "application/json")
+                        return
+                    identifier = path.rsplit("/", 1)[-1]
+                    with owner._lock:
+                        found = next((dict(n) for n in owner.contact_notes.get(resolved[0].workspace, [])
+                                      if n["id"] == identifier), None)
+                    if found is None:
+                        self._reply(404, _json_bytes({"error": "not_found"}), "application/json")
+                        return
+                    self._reply(200, _json_bytes({"note": found}), "application/json; charset=utf-8")
+                elif re.fullmatch(r"/api/contact-groups/([a-z0-9-]+)", path):
+                    if resolved is None or "contacts:read" not in resolved[0].permissions:
+                        self._reply(403 if resolved else 401, _json_bytes({"error": "forbidden"}), "application/json")
+                        return
+                    identifier = path.rsplit("/", 1)[-1]
+                    with owner._lock:
+                        found = next((dict(item) for item in owner.workspaces[resolved[0].workspace] if item["id"] == identifier), None)
+                        groups = list(owner.contact_groups.get(resolved[0].workspace, {}).get(identifier, []))
+                    if found is None:
+                        self._reply(404, _json_bytes({"error": "not_found"}), "application/json")
+                        return
+                    self._reply(200, _json_bytes({"id": identifier, "groups": groups}), "application/json; charset=utf-8")
                 elif path == "/woa/page-controller.js":
                     # The application serves its own PageController from its own origin,
                     # which is what the SPI requires of any host. Read from the example's

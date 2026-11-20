@@ -27,7 +27,7 @@ GOAL_PACKAGES = {
     "erp-customer-maintenance": ("erp_customer_create", "erp_customer_update"),
     "erp-product-maintenance": ("erp_product_create", "erp_product_update", "erp_product_unit_create", "erp_product_unit_update"),
     "system-post-creation": ("system_post_create", "system_post_update"),
-    "system-dept-creation": ("system_dept_create", "system_dept_update", "update_record", "toggle_record_status"),
+    "system-dept-creation": ("system_dept_create", "system_dept_update", "create_record", "update_record", "toggle_record_status", "assign_record_relations"),
     "system-notice-maintenance": ("system_notice_create",),
     "member-tag-creation": ("member_tag_create",),
     "member-group-creation": ("member_group_create",),
@@ -50,14 +50,14 @@ class SkillGoalCoverage(unittest.TestCase):
             for operation in skill.write_operations:
                 self.assertNotIn(operation, covered, "operation is mapped by two goals")
                 covered[operation] = skill.name
-        self.assertEqual(len(covered), 41)
+        self.assertEqual(len(covered), 43)
         self.assertEqual(set(covered), set(RECORD_OPERATIONS) | {
             "crm_customer_put_pool", "crm_customer_receive", "crm_customer_lock",
             "crm_customer_deal_status", "crm_follow_up_create",
             "crm_receivable_plan_create", "oa_announcement_create",
             "erp_document_status", "promotion_coupon_template_status",
-            "promotion_seckill_activity_close", "update_record",
-            "toggle_record_status"})
+            "promotion_seckill_activity_close", "create_record", "update_record",
+            "toggle_record_status", "assign_record_relations"})
 
     def test_each_goal_declares_completion_conditions_and_adjacent_goals(self):
         for skill in packaged_skills().artifacts:

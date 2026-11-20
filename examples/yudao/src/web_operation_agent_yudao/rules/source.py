@@ -126,15 +126,16 @@ class YudaoSource:
 
     # -- citations ------------------------------------------------------------------------
     def _read(self, relative: str) -> str:
-        path = self.root / relative
-        if path.resolve() != path or not path.is_relative_to(self.root):
-            raise ValueError("source files must stay inside the supplied tree without links")
-        if self._server_snapshot is not None and relative not in self._server_snapshot:
-            self._ui_cache_complete = False
-        raw = (self._server_snapshot[relative] if self._server_snapshot is not None
-               and relative in self._server_snapshot else path.read_bytes())
-        self._lines[relative] = raw.splitlines(keepends=True)
-        return raw.decode("utf-8")
+        with self._instance_lock:
+            path = self.root / relative
+            if path.resolve() != path or not path.is_relative_to(self.root):
+                raise ValueError("source files must stay inside the supplied tree without links")
+            if self._server_snapshot is not None and relative not in self._server_snapshot:
+                self._ui_cache_complete = False
+            raw = (self._server_snapshot[relative] if self._server_snapshot is not None
+                   and relative in self._server_snapshot else path.read_bytes())
+            self._lines[relative] = raw.splitlines(keepends=True)
+            return raw.decode("utf-8")
 
     def _cite(self, relative: str, start: int, end: int) -> str:
         lines = self._lines[relative][start - 1:end]
@@ -152,14 +153,18 @@ class YudaoSource:
         return base / "src" / "main" / "java"
 
     def _java_files(self, suffix: str):
-        if self._server_snapshot is not None:
-            yield from (self.root / p for p in self._server_snapshot
-                        if p.startswith("server/") and p.endswith(suffix))
-            return
-        for module in self.modules:
-            base = self._module_base(module)
-            if base.is_dir():
-                yield from sorted(base.rglob(f"*{suffix}"))
+        with self._instance_lock:
+            if self._server_snapshot is not None:
+                return tuple(
+                    self.root / p for p in self._server_snapshot
+                    if p.startswith("server/") and p.endswith(suffix)
+                )
+            found: list[Path] = []
+            for module in self.modules:
+                base = self._module_base(module)
+                if base.is_dir():
+                    found.extend(sorted(base.rglob(f"*{suffix}")))
+            return tuple(found)
 
     def _messages(self) -> dict[str, str]:
         out: dict[str, str] = {}
@@ -182,7 +187,11 @@ class YudaoSource:
             if cached is not None:
                 return cached
             out: dict[str, dict[str, str]] = {}
-            for path in self._java_files("Enum.java"):
+            paths_to_scan = list(self._java_files("Enum.java"))
+            fw_dir = self.root / "server" / "yudao-framework"
+            if self._server_snapshot is None and fw_dir.is_dir():
+                paths_to_scan.extend(sorted(fw_dir.rglob("*Enum.java")))
+            for path in paths_to_scan:
                 text = self._read(self._relative(path))
                 items = _ENUM_CODE_VALUE.findall(text)
                 if not items and "ArrayValuable<String>" in text:

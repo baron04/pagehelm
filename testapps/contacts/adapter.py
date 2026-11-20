@@ -877,8 +877,10 @@ class MinimalContactsAdapter:
         base_scopes = ({tool: scope for tool, scope in SCOPES.items()
                         if allow_mutations or tool != CREATE_CONTACT})
         if convention_updates and allow_mutations:
+            base_scopes["create_record"] = "contacts:write"
             base_scopes["update_record"] = "contacts:write"
             base_scopes["toggle_record_status"] = "contacts:write"
+            base_scopes["assign_record_relations"] = "contacts:write"
         self.identity = _ContactsIdentityPort(
             origin, api_token=api_token,
             scopes=(frozenset(base_scopes.values()) | forms.required_scopes))
@@ -909,10 +911,9 @@ class MinimalContactsAdapter:
                 (CREATE_CONTACT, ("synthetic.contact", "business.identifier",
                                   "application.route", "business.mutation_result")))
             if convention_updates:
-                declarations.append(
-                    ("update_record", ("synthetic.contact", "business.identifier", "business.mutation_result")))
-                declarations.append(
-                    ("toggle_record_status", ("synthetic.contact", "business.identifier", "business.mutation_result")))
+                for conv_tool in ("create_record", "update_record", "toggle_record_status", "assign_record_relations"):
+                    declarations.append(
+                        (conv_tool, ("synthetic.contact", "business.identifier", "business.mutation_result")))
         data = DeclaredDataClassifier(tuple(sorted(declarations)))
         # A write that cannot say the application confirmed it is refused by the framework
         # before it can be reported as done. An empty tuple here is what a read-only
@@ -920,8 +921,10 @@ class MinimalContactsAdapter:
         post_rules = [((CREATE_CONTACT, ("content.readback_verified", "audit.readback_verified")))] if allow_mutations else []
         if allow_mutations and convention_updates:
             post_rules.extend((
+                ("create_record", ("content.verified", "audit.verified")),
                 ("update_record", ("content.verified", "audit.verified")),
                 ("toggle_record_status", ("content.verified", "audit.verified")),
+                ("assign_record_relations", ("content.verified", "audit.verified")),
             ))
         postconditions = ResultPostconditionVerifier(tuple(post_rules))
         routes = DeclaredRoutePort(
@@ -949,7 +952,10 @@ class MinimalContactsAdapter:
                     **{name: ToolOperation("contacts", "read") for name in SCOPES if name != CREATE_CONTACT},
                     **{d.name: d.operation for d in operations.tools.definitions},
                 })
-        extra_reconcile = frozenset({"update_record", "toggle_record_status"}) if convention_updates else frozenset()
+        extra_reconcile = (
+            frozenset({"create_record", "update_record", "toggle_record_status", "assign_record_relations"})
+            if convention_updates else frozenset()
+        )
         self.ports = ApplicationPorts(
             identity=self.identity,
             routes=routes,

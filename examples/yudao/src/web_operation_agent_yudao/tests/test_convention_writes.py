@@ -863,6 +863,1003 @@ class YudaoConventionWritesTests(unittest.TestCase):
                 existing_values={"description": ("原说明",), "usePrice": ("100",)},
             )
 
+    def test_step13_compiled_create_defaults_sentinels_jobnumber_and_password_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_synthetic_release(root)
+            java_base = root / "server" / "yudao-module-synth" / "src" / "main" / "java" / "pkg"
+            (java_base / "vo").mkdir(parents=True)
+            (java_base / "ctrl").mkdir(parents=True)
+            (java_base / "svc").mkdir(parents=True)
+            (java_base / "enums").mkdir(parents=True)
+            (java_base / "enums" / "HrmEmployeeIdTypeEnum.java").write_text(
+                'package pkg.enums;\npublic enum HrmEmployeeIdTypeEnum {\n  ID_CARD(1, "身份证");\n  private final Integer type; private final String name;\n'
+                '  HrmEmployeeIdTypeEnum(Integer type, String name) { this.type = type; this.name = name; }\n'
+                '  public Integer getType() { return type; } public String getName() { return name; }\n}\n',
+                encoding="utf-8",
+            )
+            (java_base / "vo" / "CrmReceivableSaveReqVO.java").write_text(
+                "package pkg.vo;\npublic class CrmReceivableSaveReqVO {\n"
+                "  @NotNull private Long contractId;\n"
+                "  @NotNull private Long ownerUserId;\n"
+                "  @NotNull private java.math.BigDecimal price;\n"
+                "  @NotNull private java.time.LocalDateTime returnTime;\n}\n",
+                encoding="utf-8",
+            )
+            (java_base / "ctrl" / "CrmReceivableController.java").write_text(
+                'package pkg.ctrl;\nimport pkg.vo.*;\n@RequestMapping("/crm/receivable")\npublic class CrmReceivableController {\n'
+                '  private CrmReceivableService receivableService;\n'
+                '  @PostMapping("/create") public CommonResult<Long> create(@RequestBody CrmReceivableSaveReqVO req) { return success(receivableService.createReceivable(req)); }\n}\n',
+                encoding="utf-8",
+            )
+            (java_base / "svc" / "CrmReceivableServiceImpl.java").write_text(
+                "package pkg.svc;\npublic class CrmReceivableServiceImpl implements CrmReceivableService {\n"
+                "  private CrmReceivablePlanService receivablePlanService;\n"
+                "  public Long createReceivable(CrmReceivableSaveReqVO req) { receivablePlanService.updateReceivablePlanReceivableId(1L, 2L); return 2L; }\n}\n",
+                encoding="utf-8",
+            )
+            (java_base / "vo" / "HrmEmployeeSaveReqVO.java").write_text(
+                "package pkg.vo;\npublic class HrmEmployeeSaveReqVO {\n"
+                "  @NotBlank private String name;\n"
+                "  private String jobNumber;\n"
+                "  private String country;\n"
+                "  @InEnum(HrmEmployeeIdTypeEnum.class) private Integer idType;\n"
+                "  @NotNull private Integer entryStatus;\n"
+                "  @NotNull private Integer type;\n"
+                "  @NotNull private Integer probation;\n"
+                "  @NotNull private Long deptId;\n}\n",
+                encoding="utf-8",
+            )
+            (java_base / "ctrl" / "HrmEmployeeController.java").write_text(
+                'package pkg.ctrl;\nimport pkg.vo.*;\n@RequestMapping("/hrm/employee")\npublic class HrmEmployeeController {\n'
+                '  private HrmEmployeeService employeeService;\n'
+                '  @PostMapping("/create") public CommonResult<Long> create(@RequestBody HrmEmployeeSaveReqVO req) { return success(employeeService.createEmployee(req)); }\n}\n',
+                encoding="utf-8",
+            )
+            (java_base / "svc" / "HrmEmployeeServiceImpl.java").write_text(
+                "package pkg.svc;\npublic class HrmEmployeeServiceImpl implements HrmEmployeeService {\n"
+                "  public Long createEmployee(HrmEmployeeSaveReqVO req) { sendEmployeeOpenedMessage(req); return 1L; }\n"
+                "  private void sendEmployeeOpenedMessage(Object e) { executeAfterCommit(() -> sendEmployeeMessage()); }\n"
+                "  private void executeAfterCommit(Runnable r) { r.run(); }\n"
+                "  private void sendEmployeeMessage() { notifyMessageSendApi.sendSingleMessageToAdmin(null); }\n}\n",
+                encoding="utf-8",
+            )
+            (java_base / "vo" / "UserSaveReqVO.java").write_text(
+                "package pkg.vo;\npublic class UserSaveReqVO {\n"
+                "  private Long id;\n  @NotBlank private String username;\n  @NotBlank private String nickname;\n  private String password;\n"
+                "  @AssertTrue public boolean isPasswordValid() { return id != null || password != null; }\n}\n",
+                encoding="utf-8",
+            )
+            (java_base / "ctrl" / "UserController.java").write_text(
+                'package pkg.ctrl;\nimport pkg.vo.*;\n@RequestMapping("/system/user")\npublic class UserController {\n'
+                '  private AdminUserService userService;\n'
+                '  @PostMapping("/create") public CommonResult<Long> create(@RequestBody UserSaveReqVO req) { return success(userService.createUser(req)); }\n'
+                '  @PutMapping("/update") public CommonResult<Boolean> update(@RequestBody UserSaveReqVO req) { userService.updateUser(req); return success(true); }\n}\n',
+                encoding="utf-8",
+            )
+            (java_base / "svc" / "AdminUserServiceImpl.java").write_text(
+                "package pkg.svc;\npublic class AdminUserServiceImpl implements AdminUserService {\n"
+                "  private AdminUserMapper userMapper;\n"
+                "  public Long createUser(UserSaveReqVO req) { return 1L; }\n"
+                "  public void updateUser(UserSaveReqVO req) { userMapper.updateById(null); }\n}\n",
+                encoding="utf-8",
+            )
+
+            ui_api = root / "ui" / "src" / "api"
+            (ui_api / "crm" / "receivable").mkdir(parents=True, exist_ok=True)
+            (ui_api / "crm" / "receivable" / "index.ts").write_text(
+                "export const getReceivable = async (id: number) => {\n  return await request.get({ url: '/crm/receivable/get?id=' + id })\n}\n"
+                "export const createReceivable = async (data: any) => {\n  return await request.post({ url: '/crm/receivable/create', data })\n}\n",
+                encoding="utf-8",
+            )
+            (ui_api / "hrm" / "employee").mkdir(parents=True, exist_ok=True)
+            (ui_api / "hrm" / "employee" / "index.ts").write_text(
+                "export const createEmployee = async (data: any) => { return await request.post<number>({ url: '/hrm/employee/create', data }) }\n",
+                encoding="utf-8",
+            )
+            ui_views = root / "ui" / "src" / "views"
+            (ui_views / "crm" / "receivable").mkdir(parents=True, exist_ok=True)
+            (ui_views / "crm" / "receivable" / "ReceivableForm.vue").write_text(
+                '<script setup>\nimport * as ReceivableApi from "@/api/crm/receivable"\n'
+                'const open = () => { formData.value.ownerUserId = getCurrentUserId() }\n'
+                'const submit = async () => { await ReceivableApi.createReceivable(formData.value) }\n</script>\n',
+                encoding="utf-8",
+            )
+            (ui_views / "hrm" / "employee").mkdir(parents=True, exist_ok=True)
+            (ui_views / "hrm" / "employee" / "EmployeeForm.vue").write_text(
+                '<script setup>\nimport * as EmployeeApi from "@/api/hrm/employee"\n'
+                'function createDefaultFormData() {\n  return {\n    name: "",\n    country: "中国",\n    idType: 1,\n    entryStatus: 1,\n    type: 1,\n    probation: 0,\n    deptId: 0\n  }\n}\n'
+                'const submit = async () => { await EmployeeApi.createEmployee(formData.value) }\n</script>\n',
+                encoding="utf-8",
+            )
+
+            docs = {
+                "paths": {
+                    "/admin-api/crm/contract/page": {"get": {"parameters": [], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/EmpPage"}}}}}}},
+                    "/admin-api/crm/receivable/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/RecvGet"}}}}}}},
+                    "/admin-api/crm/receivable/create": {"post": {"tags": ["管理后台 - CRM 回款"], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/RecvCreate"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}}}},
+                    "/admin-api/hrm/employee/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/HrmEmpGet"}}}}}}},
+                    "/admin-api/hrm/employee/create": {"post": {"tags": ["管理后台 - 员工档案"], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/HrmEmpCreate"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}}}},
+                    "/admin-api/system/user/page": {"get": {"parameters": [], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/EmpPage"}}}}}}},
+                    "/admin-api/system/user/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/UserGet"}}}}}}},
+                    "/admin-api/system/user/create": {"post": {"tags": ["管理后台 - 用户"], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/UserReq"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}}}},
+                    "/admin-api/system/user/update": {"put": {"tags": ["管理后台 - 用户"], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/UserReq"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}}}},
+                },
+                "components": {"schemas": {
+                    "CommonResultLong": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "integer"}}},
+                    "CommonResultBoolean": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "boolean"}}},
+                    "EmpPage": {"type": "object", "properties": {"data": {"type": "object", "properties": {"list": {"type": "array", "items": {"type": "object"}}}}}},
+                    "RecvCreate": {"type": "object", "required": ["contractId", "ownerUserId", "price", "returnTime"], "properties": {
+                        "contractId": {"type": "integer", "description": "合同"}, "ownerUserId": {"type": "integer", "description": "负责人"},
+                        "price": {"type": "number", "description": "回款金额"}, "returnTime": {"type": "string", "format": "date-time", "description": "回款日期"},
+                    }},
+                    "RecvGet": {"type": "object", "properties": {"data": {"type": "object", "properties": {
+                        "id": {"type": "integer"}, "no": {"type": "string"}, "customerId": {"type": "integer"},
+                        "contractId": {"type": "integer"}, "ownerUserId": {"type": "integer"}, "price": {"type": "number"}, "returnTime": {"type": "integer"},
+                    }}}},
+                    "HrmEmpCreate": {"type": "object", "required": ["name", "entryStatus", "type", "probation"], "properties": {
+                        "name": {"type": "string", "description": "姓名"}, "jobNumber": {"type": "string", "description": "工号"},
+                        "country": {"type": "string", "description": "国家"}, "idType": {"type": "integer", "description": "证件类型"},
+                        "entryStatus": {"type": "integer", "description": "入职状态"}, "type": {"type": "integer", "description": "聘用形式"},
+                        "probation": {"type": "integer", "description": "试用期"}, "deptId": {"type": "integer", "description": "部门"},
+                    }},
+                    "HrmEmpGet": {"type": "object", "properties": {"data": {"type": "object", "properties": {
+                        "id": {"type": "integer"}, "name": {"type": "string"}, "jobNumber": {"type": "string"},
+                        "country": {"type": "string"}, "idType": {"type": "integer"}, "entryStatus": {"type": "integer"},
+                        "type": {"type": "integer"}, "probation": {"type": "integer"}, "deptId": {"type": "integer"}, "status": {"type": "integer"},
+                    }}}},
+                    "UserReq": {"type": "object", "required": ["username", "nickname"], "properties": {
+                        "id": {"type": "integer"}, "username": {"type": "string", "description": "用户名"},
+                        "nickname": {"type": "string", "description": "昵称"}, "password": {"type": "string", "description": "密码"},
+                    }},
+                    "UserGet": {"type": "object", "properties": {"data": {"type": "object", "properties": {
+                        "id": {"type": "integer"}, "username": {"type": "string"}, "nickname": {"type": "string"},
+                    }}}},
+                }},
+            }
+
+            class Client(FakeYudaoClient):
+                def __init__(self):
+                    super().__init__()
+                    self.next_id = 500
+                    self.records[("crm/contract", 30)] = {"id": 30, "name": "战略合同A", "customerId": 88}
+                    self.records[("system/user", 40)] = {"id": 40, "username": "u40", "nickname": "原昵称"}
+
+                def get(self, path: str, **params):
+                    if path == "crm/contract/page":
+                        return {"total": 1, "list": [copy.deepcopy(self.records[("crm/contract", 30)])]}
+                    if path == "crm/permission/list":
+                        return [{"userId": 9, "level": 1}]
+                    return super().get(path, **params)
+
+                def write_once(self, method: str, path: str, *, body: dict, params=None, operation: str = "", expect_result: str = ""):
+                    if path.endswith("/create"):
+                        ent = path[:-len("/create")]
+                        self.next_id += 1
+                        rec = {"id": self.next_id, **copy.deepcopy(body)}
+                        if ent == "crm/receivable":
+                            rec["customerId"] = 88
+                            rec["no"] = f"HK-{self.next_id}"
+                        if ent == "hrm/employee":
+                            rec["status"] = 1
+                        self.records[(ent, self.next_id)] = rec
+                        return self.next_id
+                    return super().write_once(method, path, body=body, params=params, operation=operation)
+
+            source = YudaoSource(root, release="v-step13-create")
+            client = Client()
+            tools = native_tools(client, FakeGoalData(docs, source=source))
+            create_def = tools.get("create_record")
+            update_def = tools.get("update_record")
+            port = create_def.handler.port
+
+            # Password create excluded; password update stripped
+            self.assertNotIn("system/user", port.create_specs())
+            self.assertIn("必填密码", port.excluded_create_reason("system/user"))
+            self.assertIsNone(port.update_specs()["system/user"].resolve_field("password"))
+            with self.assertRaises(BusinessToolRequestError):
+                tools.prepare_mutation("create_record", {"entity": "system/user", "fields": [{"field": "username", "value": "u1"}]}, context=_ctx())
+
+            # D1 actor default on crm/receivable + cross-record copy block
+            recv_in = {
+                "entity": "crm/receivable",
+                "fields": [
+                    {"field": "contractId", "value": "战略合同A"},
+                    {"field": "price", "value": 5000},
+                    {"field": "returnTime", "value": "2026-11-20 10:00:00"},
+                ],
+            }
+            spec_recv = tools.prepare_mutation("create_record", recv_in, context=_ctx())
+            self.assertTrue(any("管理员（ID=9）（页面默认值）" in (getattr(d, "value", "") or str(d)) for d in spec_recv.details))
+            with self.assertRaises(BusinessToolRequestError):
+                create_def.handler.validate_provenance(
+                    recv_in, ("按参考合同创建回款",), NS(effect_projection=spec_recv.effect_projection), existing_values={"price": ("5000",)},
+                )
+            res_recv = tools.execute_mutation("create_record", spec_recv.args, context=_ctx())
+            self.assertTrue(res_recv.content["verified"])
+            self.assertEqual(client.records[("crm/receivable", 501)]["ownerUserId"], 9)
+
+            # D2/D3 sentinel deptId=0 refused + conditional jobNumber required when entryStatus==1
+            with self.assertRaises(BusinessToolRequestError):
+                tools.prepare_mutation("create_record", {"entity": "hrm/employee", "fields": [{"field": "name", "value": "新员工"}]}, context=_ctx())
+            emp_spec = tools.prepare_mutation(
+                "create_record",
+                {"entity": "hrm/employee", "fields": [{"field": "name", "value": "新员工"}, {"field": "jobNumber", "value": "E-100"}, {"field": "deptId", "value": "人事部"}]},
+                context=_ctx(),
+            )
+            emp_res = tools.execute_mutation("create_record", emp_spec.args, context=_ctx())
+            self.assertTrue(emp_res.content["verified"])
+            self.assertEqual(client.records[("hrm/employee", 502)]["country"], "中国")
+            self.assertEqual(client.records[("hrm/employee", 502)]["idType"], 1)
+
+            # User update strips optional password & succeeds
+            u_spec = tools.prepare_mutation(
+                "update_record",
+                {"entity": "system/user", "target": "u40", "changes": [{"field": "nickname", "value": "新昵称"}]},
+                context=_ctx(),
+            )
+            u_res = tools.execute_mutation("update_record", u_spec.args, context=_ctx())
+            self.assertTrue(u_res.content["verified"])
+            self.assertNotIn("password", u_spec.args["payload"])
+
+    def test_step13_update_for_edit_aggregates_composite_salary_statuses_and_relations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_synthetic_release(root)
+            java_base = root / "server" / "yudao-module-agg" / "src" / "main" / "java" / "pkg"
+            for sub in ("vo", "ctrl", "svc"):
+                (java_base / sub).mkdir(parents=True, exist_ok=True)
+            (java_base / "vo" / "CandidateVO.java").write_text("package pkg.vo;\npublic class CandidateSaveReqVO { private Long id; private String name; private Integer education; }\n", encoding="utf-8")
+            (java_base / "ctrl" / "CandidateController.java").write_text(
+                'package pkg.ctrl;\nimport pkg.vo.*;\n@RequestMapping("/hrm/recruit/candidate")\npublic class CandidateController {\n'
+                '  private HrmRecruitCandidateService candService;\n'
+                '  @PutMapping("/update") public CommonResult<Boolean> upd(@RequestBody CandidateSaveReqVO req) { candService.updateCandidate(req); return success(true); }\n}\n',
+                encoding="utf-8",
+            )
+            (java_base / "svc" / "HrmRecruitCandidateServiceImpl.java").write_text(
+                "package pkg.svc;\npublic class HrmRecruitCandidateServiceImpl implements HrmRecruitCandidateService {\n"
+                "  private CandidateMapper candidateMapper;\n"
+                "  public void updateCandidate(CandidateSaveReqVO req) { candidateMapper.updateForEdit(req); }\n}\n",
+                encoding="utf-8",
+            )
+            (java_base / "vo" / "ErpPOVO.java").write_text(
+                "package pkg.vo;\npublic class ErpPurchaseOrderSaveReqVO {\n  private Long id; private Long accountId; private java.util.List<Item> items;\n"
+                "  public static class Item { private Long id; private Long productId; private java.math.BigDecimal count; private String remark; }\n}\n"
+                "public class ErpPurchaseOrderRespVO {\n  private Long id; private Long accountId; private java.util.List<Item> items;\n"
+                "  public static class Item { private Long id; private Long productId; private java.math.BigDecimal count; private String remark; }\n}\n",
+                encoding="utf-8",
+            )
+            (java_base / "ctrl" / "ErpPOController.java").write_text(
+                'package pkg.ctrl;\nimport pkg.vo.*;\n@RequestMapping("/erp/purchase-order")\npublic class ErpPOController {\n'
+                '  private ErpPurchaseOrderService poService;\n'
+                '  @GetMapping("/get") public CommonResult<ErpPurchaseOrderRespVO> get(Long id) { return null; }\n'
+                '  @PutMapping("/update") public CommonResult<Boolean> upd(@RequestBody ErpPurchaseOrderSaveReqVO req) { poService.updatePurchaseOrder(req); return success(true); }\n}\n',
+                encoding="utf-8",
+            )
+            (java_base / "svc" / "ErpPurchaseOrderServiceImpl.java").write_text(
+                "package pkg.svc;\npublic class ErpPurchaseOrderServiceImpl implements ErpPurchaseOrderService {\n"
+                "  private PoItemMapper poItemMapper;\n"
+                "  public void updatePurchaseOrder(ErpPurchaseOrderSaveReqVO req) { poItemMapper.updateBatch(null); }\n}\n",
+                encoding="utf-8",
+            )
+
+            docs = {
+                "paths": {
+                    "/admin-api/hrm/recruit/candidate/page": {"get": {"parameters": [], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/ListPage"}}}}}}},
+                    "/admin-api/hrm/recruit/candidate/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CandGet"}}}}}}},
+                    "/admin-api/hrm/recruit/candidate/update": {"put": {"tags": ["管理后台 - 候选人"], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/CandReq"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}}}},
+                    "/admin-api/erp/purchase-order/page": {"get": {"parameters": [], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/ListPage"}}}}}}},
+                    "/admin-api/erp/purchase-order/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/POGet"}}}}}}},
+                    "/admin-api/erp/purchase-order/update": {"put": {"tags": ["管理后台 - 采购订单"], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/POReq"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}}}},
+                    "/admin-api/fms/config/account-set/simple-list": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/ListPage"}}}}}}},
+                    "/admin-api/fms/voucher/page": {"get": {"parameters": [{"name": "accountSetId", "in": "query", "required": True, "schema": {"type": "integer"}}], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/ListPage"}}}}}}},
+                    "/admin-api/fms/voucher/get": {"get": {"parameters": [{"name": "accountSetId", "in": "query", "required": True, "schema": {"type": "integer"}}, {"name": "id", "in": "query", "required": True, "schema": {"type": "integer"}}], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/VoucherGet"}}}}}}},
+                    "/admin-api/fms/voucher/update": {"put": {"tags": ["管理后台 - 会计凭证"], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/VoucherReq"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}}}},
+                    "/admin-api/hrm/salary/employee-info/page": {"get": {"parameters": [], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/ListPage"}}}}}}},
+                    "/admin-api/hrm/salary/employee-info/get": {"get": {"parameters": [{"name": "employeeId", "in": "query", "required": True, "schema": {"type": "integer"}}], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/SalGet"}}}}}}},
+                    "/admin-api/hrm/salary/employee-info/update": {"put": {"tags": ["管理后台 - 员工薪资"], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/SalReq"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}}}},
+                    "/admin-api/mes/dv/check-plan/page": {"get": {"parameters": [], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/ListPage"}}}}}}},
+                    "/admin-api/mes/dv/check-plan/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/PlanGet"}}}}}}},
+                    "/admin-api/mes/dv/check-plan/enable": {"put": {"tags": ["管理后台 - 点检计划"], "parameters": [{"name": "id", "in": "query", "required": True, "schema": {"type": "integer"}}], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}}}},
+                    "/admin-api/mes/dv/check-plan/disable": {"put": {"tags": ["管理后台 - 点检计划"], "parameters": [{"name": "id", "in": "query", "required": True, "schema": {"type": "integer"}}], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}}}},
+                    "/admin-api/erp/account/page": {"get": {"parameters": [], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/ListPage"}}}}}}},
+                    "/admin-api/erp/account/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/AcctGet"}}}}}}},
+                    "/admin-api/erp/account/update-default-status": {"put": {"tags": ["管理后台 - 结算账户"], "parameters": [{"name": "id", "in": "query", "required": True, "schema": {"type": "integer"}}, {"name": "defaultStatus", "in": "query", "required": True, "schema": {"type": "boolean"}}], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}}}},
+                    "/admin-api/system/user/page": {"get": {"parameters": [], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/ListPage"}}}}}}},
+                    "/admin-api/system/user/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CandGet"}}}}}}},
+                    "/admin-api/system/role/simple-list": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/ListPage"}}}}}}},
+                    "/admin-api/system/permission/assign-user-role": {"post": {"tags": ["管理后台 - 权限"], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/AssignRoleReq"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}}}},
+                    "/admin-api/system/permission/list-user-roles": {"get": {"parameters": [{"name": "userId", "in": "query", "required": True, "schema": {"type": "integer"}}], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/SetLong"}}}}}}},
+                },
+                "components": {"schemas": {
+                    "CommonResultBoolean": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "boolean"}}},
+                    "CommonResultLong": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "integer"}}},
+                    "ListPage": {"type": "object", "properties": {"data": {"type": "object", "properties": {"list": {"type": "array", "items": {"type": "object"}}}}}},
+                    "SetLong": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "array", "items": {"type": "integer"}}}},
+                    "CandReq": {"type": "object", "required": ["id", "name"], "properties": {"id": {"type": "integer"}, "name": {"type": "string"}, "education": {"type": "integer"}}},
+                    "CandGet": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}, "nickname": {"type": "string"}, "education": {"type": "integer"}}}}},
+                    "POItem": {"type": "object", "properties": {"id": {"type": "integer"}, "productId": {"type": "integer"}, "count": {"type": "number"}, "remark": {"type": "string"}}},
+                    "POReq": {"type": "object", "required": ["id"], "properties": {"id": {"type": "integer"}, "accountId": {"type": "integer"}, "items": {"type": "array", "items": {"$ref": "#/components/schemas/POItem"}}}},
+                    "POGet": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "no": {"type": "string"}, "accountId": {"type": "integer"}, "totalPrice": {"type": "number"}, "items": {"type": "array", "items": {"$ref": "#/components/schemas/POItem"}}}}}},
+                    "Aux": {"type": "object", "properties": {"id": {"type": "integer"}, "typeId": {"type": "integer"}, "itemId": {"type": "integer"}}},
+                    "VEntry": {"type": "object", "properties": {"id": {"type": "integer"}, "digest": {"type": "string"}, "debitAmount": {"type": "number"}, "auxiliaries": {"type": "array", "items": {"$ref": "#/components/schemas/Aux"}}}},
+                    "VoucherReq": {"type": "object", "required": ["id", "accountSetId"], "properties": {"id": {"type": "integer"}, "accountSetId": {"type": "integer"}, "entries": {"type": "array", "items": {"$ref": "#/components/schemas/VEntry"}}}},
+                    "VoucherGet": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "accountSetId": {"type": "integer"}, "voucherWordName": {"type": "string"}, "voucherNumber": {"type": "integer"}, "entries": {"type": "array", "items": {"$ref": "#/components/schemas/VEntry"}}}}}},
+                    "OptItem": {"type": "object", "properties": {"code": {"type": "integer"}, "name": {"type": "string"}, "value": {"type": "number"}}},
+                    "SalReq": {"type": "object", "required": ["employeeId", "recordType", "changeReason"], "properties": {"employeeId": {"type": "integer"}, "recordType": {"type": "integer"}, "changeReason": {"type": "integer"}, "salaryOptions": {"type": "array", "items": {"$ref": "#/components/schemas/OptItem"}}}},
+                    "SalGet": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "employeeId": {"type": "integer"}, "employeeName": {"type": "string"}, "changeReason": {"type": "integer"}, "regularSalary": {"type": "number"}, "salaryOptions": {"type": "array", "items": {"$ref": "#/components/schemas/OptItem"}}}}}},
+                    "PlanGet": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}, "status": {"type": "integer"}}}}},
+                    "AcctGet": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}, "defaultStatus": {"type": "boolean"}}}}},
+                    "AssignRoleReq": {"type": "object", "properties": {"userId": {"type": "integer"}, "roleIds": {"type": "array", "items": {"type": "integer"}}}},
+                }},
+            }
+
+            class AggClient(FakeYudaoClient):
+                def fenced_read_only(self, _writing_gets=()):
+                    from contextlib import nullcontext
+                    return nullcontext()
+
+                def __init__(self):
+                    super().__init__()
+                    self.user_roles = {80: [1]}
+                    self.change_records = {}
+                    self.records[("hrm/recruit/candidate", 60)] = {"id": 60, "name": "常予宸", "education": 2}
+                    self.records[("erp/purchase-order", 61)] = {
+                        "id": 61, "no": "PO-61", "accountId": 99, "totalPrice": 300,
+                        "items": [{"id": 1, "productId": 10, "count": 2, "remark": "A"}, {"id": 2, "productId": 20, "count": 1, "remark": "B"}],
+                    }
+                    self.records[("fms/voucher", 62)] = {
+                        "id": 62, "accountSetId": 5, "voucherWordName": "记", "voucherNumber": 1,
+                        "entries": [
+                            {"id": 11, "digest": "差旅", "debitAmount": 100, "auxiliaries": [{"id": 101, "typeId": 1, "itemId": 7}]},
+                            {"id": 12, "digest": "银行", "debitAmount": 0, "auxiliaries": []},
+                        ],
+                    }
+                    self.records[("hrm/salary/employee-info", 63)] = {
+                        "id": 900, "employeeId": 63, "employeeName": "于振宁", "changeReason": 2, "regularSalary": 8000,
+                        "salaryOptions": [{"code": 10101, "name": "基本工资", "value": 8000}],
+                    }
+                    self.records[("mes/dv/check-plan", 64)] = {"id": 64, "name": "月度点检", "status": 1}
+                    self.records[("erp/account", 65)] = {"id": 65, "name": "工行主账户", "defaultStatus": False}
+                    self.records[("system/user", 80)] = {"id": 80, "name": "李明", "nickname": "李明"}
+
+                def get(self, path: str, **params):
+                    if path == "fms/config/account-set/simple-list":
+                        return [{"id": 5, "name": "主账套"}]
+                    if path == "fms/voucher/get":
+                        assert params.get("accountSetId") == 5
+                        return copy.deepcopy(self.records[("fms/voucher", int(params["id"]))])
+                    if path == "hrm/salary/employee-info/get":
+                        return copy.deepcopy(self.records[("hrm/salary/employee-info", int(params["employeeId"]))])
+                    if path == "hrm/salary/change-record/get":
+                        return copy.deepcopy(self.change_records[int(params["id"])])
+                    if path == "system/role/simple-list":
+                        return [{"id": 1, "name": "普通员工"}, {"id": 2, "name": "财务主管"}]
+                    if path == "system/permission/list-user-roles":
+                        return list(self.user_roles[int(params["userId"])])
+                    return super().get(path, **params)
+
+                def write_once(self, method: str, path: str, *, body: dict, params=None, operation: str = "", expect_result: str = ""):
+                    if path == "hrm/salary/employee-info/update":
+                        self.writes.append((method, path, copy.deepcopy(body), params, operation))
+                        self.change_records[701] = {"id": 701, "employeeId": body["employeeId"], "salaryOptions": copy.deepcopy(body["salaryOptions"])}
+                        return 701
+                    if path == "mes/dv/check-plan/disable":
+                        self.records[("mes/dv/check-plan", int(params["id"]))]["status"] = 0
+                        return True
+                    if path == "erp/account/update-default-status":
+                        self.records[("erp/account", int(params["id"]))]["defaultStatus"] = params["defaultStatus"]
+                        return True
+                    if path == "system/permission/assign-user-role":
+                        self.user_roles[int(body["userId"])] = list(body["roleIds"])
+                        return True
+                    if path == "erp/purchase-order/update":
+                        rec = self.records[("erp/purchase-order", body["id"])]
+                        rec.update(copy.deepcopy(body))
+                        rec["totalPrice"] = sum(float(i["count"]) * 100 for i in rec["items"])
+                        return True
+                    if path == "fms/voucher/update":
+                        assert body.get("accountSetId") == 5
+                        self.records[("fms/voucher", body["id"])].update(copy.deepcopy(body))
+                        return True
+                    return super().write_once(method, path, body=body, params=params, operation=operation)
+
+            source = YudaoSource(root, release="v-step13-agg")
+            client = AggClient()
+            tools = native_tools(client, FakeGoalData(docs, source=source))
+
+            # Cat 2 updateForEdit candidate
+            c_spec = tools.prepare_mutation("update_record", {"entity": "hrm/recruit/candidate", "target": "常予宸", "changes": [{"field": "education", "value": 4}]}, context=_ctx())
+            self.assertTrue(tools.execute_mutation("update_record", c_spec.args, context=_ctx()).content["verified"])
+            self.assertEqual(client.records[("hrm/recruit/candidate", 60)]["education"], 4)
+
+            # Cat 3 ERP PO child item update preserving untouched accountId & line #2
+            po_spec = tools.prepare_mutation(
+                "update_record",
+                {"entity": "erp/purchase-order", "target": "PO-61", "line_changes": [{"collection": "items", "match": "#1", "changes": [{"field": "count", "value": 5}]}]},
+                context=_ctx(),
+            )
+            self.assertTrue(tools.execute_mutation("update_record", po_spec.args, context=_ctx()).content["verified"])
+            self.assertEqual(client.records[("erp/purchase-order", 61)]["accountId"], 99)
+            self.assertEqual(client.records[("erp/purchase-order", 61)]["items"][1]["remark"], "B")
+
+            # Cat 3 FMS voucher composite (accountSetId, id) + 2-level auxiliaries preserved
+            fv_spec = tools.prepare_mutation(
+                "update_record",
+                {"entity": "fms/voucher", "target": "记-1", "line_changes": [{"collection": "entries", "match": "差旅", "changes": [{"field": "debitAmount", "value": 250}]}]},
+                context=_ctx(),
+            )
+            self.assertTrue(tools.execute_mutation("update_record", fv_spec.args, context=_ctx()).content["verified"])
+            self.assertEqual(client.records[("fms/voucher", 62)]["entries"][0]["auxiliaries"][0]["itemId"], 7)
+
+            # Cat 3 Salary change-record readback
+            sal_spec = tools.prepare_mutation(
+                "update_record",
+                {"entity": "hrm/salary/employee-info", "target": "于振宁", "line_changes": [{"collection": "salaryOptions", "match": "基本工资", "changes": [{"field": "value", "value": 9500}]}]},
+                context=_ctx(),
+            )
+            sal_res = tools.execute_mutation("update_record", sal_spec.args, context=_ctx())
+            self.assertTrue(sal_res.content["verified"])
+            self.assertEqual(client.change_records[701]["salaryOptions"][0]["value"], 9500)
+
+            # Cat 4 split disable, boolean query toggle, and ERP status redirect
+            dis_spec = tools.prepare_mutation("toggle_record_status", {"entity": "mes/dv/check-plan", "target": "月度点检", "status": "关闭"}, context=_ctx())
+            self.assertTrue(tools.execute_mutation("toggle_record_status", dis_spec.args, context=_ctx()).content["verified"])
+            self.assertEqual(client.records[("mes/dv/check-plan", 64)]["status"], 0)
+            acc_spec = tools.prepare_mutation("toggle_record_status", {"entity": "erp/account", "target": "工行主账户", "status": "开启"}, context=_ctx())
+            self.assertTrue(tools.execute_mutation("toggle_record_status", acc_spec.args, context=_ctx()).content["verified"])
+            self.assertTrue(client.records[("erp/account", 65)]["defaultStatus"])
+            with self.assertRaises(BusinessToolRequestError) as erp_exc:
+                tools.prepare_mutation("toggle_record_status", {"entity": "erp/purchase-order", "target": "PO-61", "status": "关闭"}, context=_ctx())
+            self.assertIn("erp_document_status", str(erp_exc.exception))
+
+            # Cat 4b relation assignment + reconciler checks
+            rel_spec = tools.prepare_mutation(
+                "assign_record_relations",
+                {"entity": "system/user", "target": "李明", "relation": "roleIds", "items": ["财务主管"]},
+                context=_ctx(),
+            )
+            self.assertTrue(tools.execute_mutation("assign_record_relations", rel_spec.args, context=_ctx()).content["verified"])
+            self.assertEqual(client.user_roles[80], [2])
+
+            from web_operation_agent_yudao.host.reconciliation import YudaoMutationReconciler
+            reconciler = YudaoMutationReconciler(
+                client,
+                NS(validate=lambda *a, **kw: None),
+                supported_tools=frozenset({"create_record", "assign_record_relations"}),
+            )
+            self.assertEqual(
+                reconciler.reconcile(
+                    "assign_record_relations",
+                    {"entity": "system/user", "id": 80, "read_path": "system/permission/list-user-roles", "id_param": "userId", "expected": {"roleIds": [2]}},
+                    evidence={},
+                    principal=_ctx().principal,
+                ).outcome,
+                "completed",
+            )
+            self.assertEqual(
+                reconciler.reconcile(
+                    "create_record",
+                    {"entity": "hrm/recruit/candidate", "id": 9999, "expected": {"name": "不存在"}},
+                    evidence={},
+                    principal=_ctx().principal,
+                ).outcome,
+                "failed",
+            )
+
+    def test_concurrent_warm_never_corrupts_compiled_write_ast(self):
+        import threading
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_synthetic_release(root)
+            docs = {
+                "paths": {
+                    "/admin-api/crm/receivable/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/RGet"}}}}}}},
+                    "/admin-api/crm/receivable/create": {"post": {"tags": ["管理后台 - 回款"], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/RCreate"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}}}},
+                },
+                "components": {"schemas": {
+                    "CommonResultLong": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "integer"}}},
+                    "RCreate": {"type": "object", "required": ["price"], "properties": {"price": {"type": "number", "description": "金额"}}},
+                    "RGet": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "price": {"type": "number"}}}}},
+                }},
+            }
+            source = YudaoSource(root, release="v-warm-race-1")
+            ui_root = root / "ui" / "src"
+            (ui_root / "views" / "crm" / "receivable").mkdir(parents=True, exist_ok=True)
+            t = threading.Thread(target=source.warm)
+            t.start()
+            port = YudaoConventionWritePort(FakeYudaoClient(), FakeGoalData(docs, source=source))
+            creates = port.create_specs()
+            t.join(timeout=10)
+            self.assertIn("crm/receivable", creates)
+
+    def test_framework_enum_versioned_update_do_drop_and_relation_required_filters(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_synthetic_release(root)
+            fw = root / "server" / "yudao-framework" / "yudao-common" / "src" / "main" / "java" / "pkg"
+            fw.mkdir(parents=True, exist_ok=True)
+            (fw / "CommonStatusEnum.java").write_text(
+                'package pkg;\npublic enum CommonStatusEnum implements ArrayValuable<Integer> {\n'
+                '  ENABLE(0, "开启"), DISABLE(1, "关闭");\n}\n',
+                encoding="utf-8",
+            )
+            mod = root / "server" / "yudao-module-agg" / "src" / "main" / "java" / "pkg"
+            for sub in ("dal/dataobject", "controller/vo", "controller", "service"):
+                (mod / sub).mkdir(parents=True, exist_ok=True)
+            (mod / "dal" / "dataobject" / "ProdCatDO.java").write_text(
+                "package pkg;\npublic class ProdCatDO extends BaseDO { private Long id; private String name; }\n",
+                encoding="utf-8",
+            )
+            (mod / "controller" / "vo" / "CatSaveReqVO.java").write_text(
+                "package pkg;\npublic class CatSaveReqVO { private Long id; private String name; private String description; }\n",
+                encoding="utf-8",
+            )
+            (mod / "controller" / "CatController.java").write_text(
+                'package pkg;\n@RequestMapping("/product/category")\npublic class CatController {\n'
+                '  private ProdCatService prodCatService;\n'
+                '  @PutMapping("/update") public CommonResult<Boolean> u(@RequestBody CatSaveReqVO req) { prodCatService.updateCat(req); return success(true); }\n}\n',
+                encoding="utf-8",
+            )
+            (mod / "service" / "ProdCatServiceImpl.java").write_text(
+                "package pkg;\npublic class ProdCatServiceImpl implements ProdCatService {\n"
+                "  private ProdCatMapper catMapper;\n"
+                "  public void updateCat(CatSaveReqVO req) { ProdCatDO d = BeanUtils.toBean(req, ProdCatDO.class); catMapper.updateById(d); }\n}\n",
+                encoding="utf-8",
+            )
+            (mod / "controller" / "vo" / "TmplReqVO.java").write_text(
+                "package pkg;\npublic class TmplReqVO { private Long id; private String name; private java.util.List<Item> items;\n"
+                "  public static class Item { private String name; }\n}\n",
+                encoding="utf-8",
+            )
+            (mod / "controller" / "TmplController.java").write_text(
+                'package pkg;\n@RequestMapping("/hrm/performance/assessment-template")\npublic class TmplController {\n'
+                '  private TmplService tmplService;\n'
+                '  @PutMapping("/update") public CommonResult<Boolean> u(@RequestBody TmplReqVO req) { tmplService.updateTmpl(req); return success(true); }\n}\n',
+                encoding="utf-8",
+            )
+            (mod / "service" / "TmplServiceImpl.java").write_text(
+                "package pkg;\npublic class TmplServiceImpl implements TmplService {\n"
+                "  private TmplMapper tmplMapper;\n"
+                "  public void updateTmpl(TmplReqVO req) { TmplDO d = BeanUtils.toBean(req, TmplDO.class).setId(null); tmplMapper.insert(d); }\n}\n",
+                encoding="utf-8",
+            )
+
+            source = YudaoSource(root, release="v-step14-filters")
+            self.assertEqual(source.enum_value_labels().get("CommonStatusEnum"), {"0": "开启", "1": "关闭"})
+            docs = {
+                "paths": {
+                    "/admin-api/product/category/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CatGet"}}}}}}},
+                    "/admin-api/product/category/update": {"put": {"tags": ["分类"], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/CatReq"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}}}},
+                    "/admin-api/hrm/performance/assessment-template/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/TmplGet"}}}}}}},
+                    "/admin-api/hrm/performance/assessment-template/update": {"put": {"tags": ["考核"], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/TmplSchema"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}}}},
+                    "/admin-api/member/user/update-level": {"put": {"tags": ["会员"], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/LvlReq"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}}}},
+                },
+                "components": {"schemas": {
+                    "CommonResultBoolean": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "boolean"}}},
+                    "CatReq": {"type": "object", "required": ["id", "name"], "properties": {"id": {"type": "integer"}, "name": {"type": "string"}, "description": {"type": "string"}}},
+                    "CatGet": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}, "description": {"type": "string"}}}}},
+                    "TmplItem": {"type": "object", "properties": {"name": {"type": "string"}}},
+                    "TmplSchema": {"type": "object", "required": ["id", "name"], "properties": {"id": {"type": "integer"}, "name": {"type": "string"}, "items": {"type": "array", "items": {"$ref": "#/components/schemas/TmplItem"}}}},
+                    "TmplGet": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}, "items": {"type": "array", "items": {"$ref": "#/components/schemas/TmplItem"}}}}}},
+                    "LvlReq": {"type": "object", "required": ["id", "reason"], "properties": {"id": {"type": "integer"}, "levelId": {"type": "integer"}, "reason": {"type": "string"}}},
+                }},
+            }
+            port = YudaoConventionWritePort(FakeYudaoClient(), FakeGoalData(docs, source=source))
+            cat_spec = port.update_specs()["product/category"]
+            self.assertIsNotNone(cat_spec.resolve_field("name"))
+            self.assertIsNone(cat_spec.resolve_field("description"))
+            self.assertNotIn("hrm/performance/assessment-template", port.aggregate_update_specs())
+            self.assertNotIn("member/user", port.relation_specs())
+
+    def test_fms_composite_readback_oa_file_node_pms_search_and_kb_group_refusal(self):
+        class ExtraClient:
+            tenant = "1"
+
+            def __init__(self):
+                self.calls = []
+                self.aux = {10: {"id": 10, "name": "差旅项目", "accountSetId": 7, "auxiliaryTypeId": 3, "status": 0}}
+                self.doc_shares = {88: {"id": 5, "documentId": 88, "shareUserIds": [1]}}
+
+            def get(self, path: str, **params):
+                self.calls.append((path, dict(params)))
+                if path == "system/auth/get-permission-info":
+                    return {"user": {"id": 1, "nickname": "管理员"}, "roles": []}
+                if path == "fms/config/account-set/simple-list":
+                    return [{"id": 7, "name": "主账套"}]
+                if path == "fms/config/auxiliary-type/simple-list":
+                    assert params.get("accountSetId") == 7
+                    return [{"id": 3, "name": "项目"}]
+                if path == "fms/config/auxiliary-item/page":
+                    assert params.get("accountSetId") == 7 and params.get("auxiliaryTypeId") == 3
+                    return {"list": [dict(self.aux[10])]}
+                if path == "fms/config/auxiliary-item/get":
+                    assert params.get("accountSetId") == 7 and int(params["id"]) == 10
+                    return dict(self.aux[10])
+                if path == "oa/file-node/page":
+                    assert params.get("scope") == "my"
+                    return {"list": [{"id": 31, "name": "研发目录", "parentId": 0}]}
+                if path == "oa/file-node/get":
+                    return {"id": 31, "name": "研发目录", "parentId": 0}
+                if path == "oa/file-node/directory-list":
+                    return [{"id": 30, "name": "根目录", "parentId": 0}, {"id": 31, "name": "研发目录", "parentId": 0}]
+                if path == "pms/kb/document/search-page":
+                    return {"list": [{"id": 88, "title": "交付规范"}]}
+                if path == "pms/kb/document-share/get":
+                    return dict(self.doc_shares[int(params["documentId"])])
+                raise AssertionError(f"unexpected GET {path} {params}")
+
+        docs = {
+            "paths": {
+                "/admin-api/fms/config/account-set/simple-list": {"get": {}},
+                "/admin-api/fms/config/auxiliary-type/simple-list": {"get": {}},
+                "/admin-api/fms/config/auxiliary-item/page": {
+                    "get": {
+                        "parameters": [
+                            {"name": "accountSetId", "in": "query", "required": True},
+                            {"name": "auxiliaryTypeId", "in": "query", "required": True},
+                            {"name": "pageNo", "in": "query", "required": True},
+                            {"name": "pageSize", "in": "query", "required": True},
+                        ]
+                    }
+                },
+                "/admin-api/fms/config/auxiliary-item/get": {
+                    "get": {
+                        "parameters": [
+                            {"name": "accountSetId", "in": "query", "required": True},
+                            {"name": "id", "in": "query", "required": True},
+                        ],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/AuxGet"}}}}},
+                    }
+                },
+                "/admin-api/fms/config/auxiliary-item/create": {
+                    "post": {
+                        "tags": ["辅助核算"],
+                        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/AuxCreate"}}}},
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                    }
+                },
+                "/admin-api/oa/file-node/page": {
+                    "get": {
+                        "parameters": [
+                            {"name": "scope", "in": "query", "required": True},
+                            {"name": "pageNo", "in": "query", "required": True},
+                            {"name": "pageSize", "in": "query", "required": True},
+                        ]
+                    }
+                },
+                "/admin-api/oa/file-node/get": {"get": {}},
+                "/admin-api/oa/file-node/directory-list": {"get": {}},
+                "/admin-api/oa/file-node/update-parent": {
+                    "put": {
+                        "requestBody": {"content": {"application/json": {"schema": {"properties": {"id": {"type": "integer"}, "parentId": {"type": "integer"}}}}}}
+                    }
+                },
+                "/admin-api/pms/kb/document/search-page": {"get": {}},
+                "/admin-api/pms/kb/document-share/get": {"get": {}},
+                "/admin-api/pms/kb/document-share/update-member-list": {
+                    "put": {
+                        "requestBody": {"content": {"application/json": {"schema": {"properties": {"documentId": {"type": "integer"}, "shareUserIds": {"type": "array", "items": {"type": "integer"}}}}}}}
+                    }
+                },
+            },
+            "components": {"schemas": {
+                "CommonResultLong": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "integer"}}},
+                "AuxCreate": {"type": "object", "properties": {"accountSetId": {"type": "integer"}, "auxiliaryTypeId": {"type": "integer"}, "name": {"type": "string"}}},
+                "AuxGet": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "accountSetId": {"type": "integer"}, "auxiliaryTypeId": {"type": "integer"}, "name": {"type": "string"}}}}},
+            }},
+        }
+        client = ExtraClient()
+        port = YudaoConventionWritePort(client, FakeGoalData(docs))
+        aux_create = port.create_specs()["fms/config/auxiliary-item"]
+        # 1. resolve_target via accountSetId + auxiliaryTypeId, then bare read_record hits cached composite_hint
+        resolved_aux = port.resolve_target("fms/config/auxiliary-item", "差旅项目（ID=10）", spec=aux_create)
+        self.assertEqual(resolved_aux["accountSetId"], 7)
+        reread_aux = port.read_record("fms/config/auxiliary-item", 10)
+        self.assertEqual(reread_aux["name"], "差旅项目")
+        created_aux = port.read_created_record(aux_create, 10, {"accountSetId": 7, "name": "差旅项目"})
+        self.assertEqual(created_aux["accountSetId"], 7)
+
+        # 2. oa/file-node resolve_target (scope="my") & ref list (directory-list)
+        file_rel = port.relation_specs()["oa/file-node"][0]
+        resolved_node = port.resolve_target("oa/file-node", "研发目录（ID=31）", spec=file_rel)
+        self.assertEqual(resolved_node["id"], 31)
+        lp, _nk, dir_rows, _qp = port._list_ref_rows("oa/file-node")
+        self.assertEqual(lp, "oa/file-node/directory-list")
+        self.assertEqual([r["id"] for r in dir_rows], [30, 31])
+
+        # 3. pms/kb/document-share resolve_target via search-page
+        share_rel = port.relation_specs()["pms/kb/document-share"][0]
+        resolved_doc = port.resolve_target("pms/kb/document-share", "交付规范（ID=88）", spec=share_rel)
+        self.assertEqual(resolved_doc["documentId"], 88)
+
+        # 4. pms/kb/group refuses both type=1 (ALL) and type=2 (UNGROUPED), allows type=3 (CUSTOM)
+        with self.assertRaises(BusinessToolRequestError):
+            port.check_record_updatable("pms/kb/group", {"id": 1, "type": 1})
+        with self.assertRaises(BusinessToolRequestError):
+            port.check_record_updatable("pms/kb/group", {"id": 2, "type": 2})
+        port.check_record_updatable("pms/kb/group", {"id": 3, "type": 3})
+
+    def test_step14_compiler_volatiles_workflow_guards_uuid_and_list_read_fallback(self):
+        class RegClient:
+            tenant = "1"
+
+            def get(self, path: str, **params):
+                if path == "hrm/salary/option/list":
+                    return [{"id": 99, "name": "岗位补贴", "enabled": True}]
+                if path == "bpm/model/list":
+                    return [{"id": "3342b203-ce3a-11f1-b09f-2a95d9691e80", "name": "离职审批", "deploymentState": 1}]
+                if path == "bpm/model/get":
+                    return {"id": "3342b203-ce3a-11f1-b09f-2a95d9691e80", "name": "离职审批", "deploymentState": 1}
+                if path == "product/spu/get-detail":
+                    return {"id": 23, "name": "便携扩展坞", "price": 1000, "skus": [{"id": 23, "name": None, "price": 1000}]}
+                if path == "ai/knowledge/document/page":
+                    return {"list": [{"id": 77, "name": "研发手册"}]}
+                if path == "ai/knowledge/segment/page" and params.get("documentId") == 77:
+                    return {"list": [{"id": 701, "documentId": 77, "content": "分段A", "status": 0}]}
+                if path == "ai/knowledge/segment/get" and str(params.get("id")) == "701":
+                    return {"id": 701, "documentId": 77, "content": "分段A", "status": 0}
+                raise AssertionError(f"unexpected GET {path} {params}")
+
+        def _ok_resp(ref_name):
+            return {"200": {"content": {"*/*": {"schema": {"properties": {"data": {"$ref": f"#/components/schemas/{ref_name}"}}}}}}}
+
+        def _bool_resp():
+            return {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}}
+
+        def _long_resp():
+            return {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}}
+
+        def _json_req(props, req=()):
+            return {"content": {"application/json": {"schema": {"properties": props, **({"required": list(req)} if req else {})}}}}
+
+        docs = {
+            "paths": {
+                "/admin-api/hrm/salary/option/list": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"properties": {"data": {"type": "array", "items": {"$ref": "#/components/schemas/SalaryOpt"}}}}}}}}}},
+                "/admin-api/hrm/salary/option/update-enabled": {"put": {"tags": ["薪资项"], "requestBody": _json_req({"id": {"type": "integer"}, "enabled": {"type": "boolean"}}, ("id", "enabled")), "responses": _bool_resp()}},
+                "/admin-api/bpm/model/list": {"get": {}},
+                "/admin-api/bpm/model/get": {"get": {"responses": _ok_resp("BpmModel")}},
+                "/admin-api/bpm/model/update-state": {"put": {"tags": ["流程模型"], "requestBody": _json_req({"id": {"type": "string"}, "state": {"type": "integer"}}, ("id", "state")), "responses": _bool_resp()}},
+                "/admin-api/trade/brokerage-user/get": {"get": {"responses": _ok_resp("BrokerageUser")}},
+                "/admin-api/trade/brokerage-user/update-brokerage-enable": {"put": {"tags": ["分销用户"], "requestBody": _json_req({"id": {"type": "integer"}, "brokerageEnabled": {"type": "boolean"}}, ("id", "brokerageEnabled")), "responses": _bool_resp()}},
+                "/admin-api/mes/md/item/get": {"get": {"responses": _ok_resp("MdItem")}},
+                "/admin-api/mes/md/item/update": {"put": {"tags": ["物料"], "requestBody": _json_req({"id": {"type": "integer"}, "remark": {"type": "string"}, "minStock": {"type": "number"}, "maxStock": {"type": "number"}}), "responses": _bool_resp()}},
+                "/admin-api/hrm/salary/change-template/get": {"get": {"responses": _ok_resp("ChangeTpl")}},
+                "/admin-api/hrm/salary/change-template/update": {"put": {"tags": ["调薪模板"], "requestBody": _json_req({"id": {"type": "integer"}, "name": {"type": "string"}, "options": {"type": "array", "items": {"$ref": "#/components/schemas/ChangeOpt"}}}), "responses": _bool_resp()}},
+                "/admin-api/product/spu/get-detail": {"get": {"responses": _ok_resp("SpuDetail")}},
+                "/admin-api/product/spu/update": {"put": {"tags": ["商品"], "requestBody": _json_req({"id": {"type": "integer"}, "name": {"type": "string"}, "price": {"type": "integer"}, "marketPrice": {"type": "integer"}, "costPrice": {"type": "integer"}, "stock": {"type": "integer"}, "skus": {"type": "array", "items": {"$ref": "#/components/schemas/SkuItem"}}}), "responses": _bool_resp()}},
+                "/admin-api/mes/dv/check-plan/get": {"get": {"responses": _ok_resp("DvPlan")}},
+                "/admin-api/mes/dv/check-plan/create": {"post": {"tags": ["点检"], "requestBody": _json_req({"name": {"type": "string"}, "status": {"type": "integer"}}), "responses": _long_resp()}},
+                "/admin-api/mes/wm/stocktaking-plan/get": {"get": {"responses": _ok_resp("WmPlan")}},
+                "/admin-api/mes/wm/stocktaking-plan/create": {"post": {"tags": ["盘点"], "requestBody": _json_req({"name": {"type": "string"}, "status": {"type": "integer"}, "startTime": {"type": "string"}, "endTime": {"type": "string"}}), "responses": _long_resp()}},
+                "/admin-api/ai/knowledge/get": {"get": {"responses": _ok_resp("AiKb")}},
+                "/admin-api/ai/knowledge/create": {"post": {"tags": ["知识库"], "requestBody": _json_req({"name": {"type": "string"}, "embeddingModel": {"type": "string"}}), "responses": _long_resp()}},
+                "/admin-api/wms/check-order/get": {"get": {"responses": _ok_resp("WmsCheck")}},
+                "/admin-api/wms/check-order/update": {"put": {"tags": ["盘库"], "requestBody": _json_req({"id": {"type": "integer"}, "totalQuantity": {"type": "number"}, "totalPrice": {"type": "number"}, "details": {"type": "array", "items": {"$ref": "#/components/schemas/WmsDetail"}}}), "responses": _bool_resp()}},
+                "/admin-api/oa/travel-reimbursement/get": {"get": {"responses": _ok_resp("OaTravelReimb")}},
+                "/admin-api/oa/travel-reimbursement/update": {"put": {"tags": ["出差报销"], "requestBody": _json_req({"id": {"type": "integer"}, "days": {"type": "integer"}, "totalPrice": {"type": "number"}, "items": {"type": "array", "items": {"$ref": "#/components/schemas/ReimbItem"}}}), "responses": _bool_resp()}},
+                "/admin-api/crm/contract/get": {"get": {"responses": _ok_resp("CrmContract")}},
+                "/admin-api/crm/contract/update": {"put": {"tags": ["CRM合同"], "requestBody": _json_req({"id": {"type": "integer"}, "totalPrice": {"type": "number"}, "totalProductPrice": {"type": "number"}, "products": {"type": "array", "items": {"$ref": "#/components/schemas/CrmProd"}}}), "responses": _bool_resp()}},
+                "/admin-api/ai/knowledge/document/page": {"get": {}},
+                "/admin-api/ai/knowledge/segment/page": {"get": {"parameters": [{"name": "documentId", "in": "query", "required": True}]}},
+                "/admin-api/ai/knowledge/segment/get": {"get": {"responses": _ok_resp("AiSeg")}},
+                "/admin-api/ai/knowledge/segment/update-status": {"put": {"tags": ["知识分段"], "requestBody": _json_req({"id": {"type": "integer"}, "status": {"type": "integer"}}, ("id", "status")), "responses": _bool_resp()}},
+                "/admin-api/system/menu/list-all-simple": {"get": {}},
+            },
+            "components": {"schemas": {
+                "CommonResultBoolean": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "boolean"}}},
+                "CommonResultLong": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "integer"}}},
+                "SalaryOpt": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}, "enabled": {"type": "boolean"}}},
+                "BpmModel": {"type": "object", "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "deploymentState": {"type": "integer"}}},
+                "BrokerageUser": {"type": "object", "properties": {"id": {"type": "integer"}, "nickname": {"type": "string"}, "brokerageEnabled": {"type": "boolean"}, "brokerageTime": {"type": "string"}}},
+                "MdItem": {"type": "object", "properties": {"id": {"type": "integer"}, "remark": {"type": "string"}, "minStock": {"type": "number"}, "maxStock": {"type": "number"}}},
+                "ChangeOpt": {"type": "object", "properties": {"code": {"type": "integer"}, "name": {"type": "string"}}},
+                "ChangeTpl": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}, "options": {"type": "array", "items": {"$ref": "#/components/schemas/ChangeOpt"}}}},
+                "SkuItem": {"type": "object", "properties": {"name": {"type": "string"}, "price": {"type": "integer"}}},
+                "SpuDetail": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}, "price": {"type": "integer"}, "marketPrice": {"type": "integer"}, "costPrice": {"type": "integer"}, "stock": {"type": "integer"}, "skus": {"type": "array", "items": {"$ref": "#/components/schemas/SkuItem"}}}},
+                "DvPlan": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}, "status": {"type": "integer"}}},
+                "WmPlan": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}, "status": {"type": "integer"}, "startTime": {"type": "string"}, "endTime": {"type": "string"}}},
+                "AiKb": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}, "embeddingModel": {"type": "string"}}},
+                "WmsDetail": {"type": "object", "properties": {"quantity": {"type": "number"}}},
+                "WmsCheck": {"type": "object", "properties": {"id": {"type": "integer"}, "totalQuantity": {"type": "number"}, "totalPrice": {"type": "number"}, "details": {"type": "array", "items": {"$ref": "#/components/schemas/WmsDetail"}}}},
+                "ReimbItem": {"type": "object", "properties": {"price": {"type": "number"}}},
+                "OaTravelReimb": {"type": "object", "properties": {"id": {"type": "integer"}, "days": {"type": "integer"}, "totalPrice": {"type": "number"}, "items": {"type": "array", "items": {"$ref": "#/components/schemas/ReimbItem"}}}},
+                "CrmProd": {"type": "object", "properties": {"productId": {"type": "integer"}}},
+                "CrmContract": {"type": "object", "properties": {"id": {"type": "integer"}, "totalPrice": {"type": "number"}, "totalProductPrice": {"type": "number"}, "products": {"type": "array", "items": {"$ref": "#/components/schemas/CrmProd"}}}},
+                "AiSeg": {"type": "object", "properties": {"id": {"type": "integer"}, "content": {"type": "string"}, "status": {"type": "integer"}}},
+            }},
+        }
+        port = YudaoConventionWritePort(RegClient(), NS(_documents=docs, _source=None, _ui=None))
+
+        # 1. Bare read_record(spec=None) resolves list-backed status spec
+        opt = port.read_record("hrm/salary/option", 99)
+        self.assertEqual(opt["name"], "岗位补贴")
+
+        # 2. UUID candidate suffix resolves bpm/model
+        bpm_res = port.resolve_target("bpm/model", "离职审批（ID=3342b203-ce3a-11f1-b09f-2a95d9691e80）", spec=port.status_specs()["bpm/model"])
+        self.assertEqual(bpm_res["id"], "3342b203-ce3a-11f1-b09f-2a95d9691e80")
+
+        # 3. Workflow updatable refusals for erp/*, mes/dv/check-plan, mes/wm/stocktaking-plan
+        with self.assertRaises(BusinessToolRequestError):
+            port.check_record_updatable("erp/sale-order", {"id": 1, "status": 20})
+        port.check_record_updatable("erp/sale-order", {"id": 2, "status": 10})
+        with self.assertRaises(BusinessToolRequestError):
+            port.check_record_updatable("mes/dv/check-plan", {"id": 1, "status": 1})
+        port.check_record_updatable("mes/dv/check-plan", {"id": 1, "status": 0})
+        with self.assertRaises(BusinessToolRequestError):
+            port.check_record_updatable("mes/wm/stocktaking-plan", {"id": 1, "status": 0})
+        port.check_record_updatable("mes/wm/stocktaking-plan", {"id": 1, "status": 1})
+
+        # 4. system/menu ref endpoint typo fix & volatile / computed sets
+        self.assertEqual(port._ref_endpoint_for("system/menu")[0], "system/menu/list-all-simple")
+        self.assertIn("brokerageTime", port.status_specs()["trade/brokerage-user"].volatile_fields)
+        self.assertEqual(port.update_specs()["mes/md/item"].volatile_fields & {"minStock", "maxStock"}, {"minStock", "maxStock"})
+        self.assertIn("name", port.aggregate_update_specs()["hrm/salary/change-template"].collections[0].server_computed_fields)
+        spu_agg = port.aggregate_update_specs()["product/spu"]
+        self.assertEqual(spu_agg.server_computed_fields & {"price", "marketPrice", "costPrice", "stock"}, {"price", "marketPrice", "costPrice", "stock"})
+        spu_rec = port.read_record("product/spu", 23, spec=spu_agg)
+        self.assertEqual(spu_rec["skus"][0]["name"], "便携扩展坞")
+        self.assertIn("status", port.create_specs()["mes/dv/check-plan"].server_computed_fields)
+        self.assertTrue({"status", "startTime", "endTime"} <= port.create_specs()["mes/wm/stocktaking-plan"].server_computed_fields)
+        self.assertIn("embeddingModel", port.create_specs()["ai/knowledge"].server_computed_fields)
+        self.assertTrue({"totalQuantity", "totalPrice", "totalAmount"} <= port.aggregate_update_specs()["wms/check-order"].server_computed_fields)
+        self.assertTrue({"days", "totalPrice", "invoiceCount"} <= port.aggregate_update_specs()["oa/travel-reimbursement"].server_computed_fields)
+        self.assertTrue({"totalPrice", "totalProductPrice"} <= port.aggregate_update_specs()["crm/contract"].server_computed_fields)
+        with self.assertRaises(BusinessToolRequestError):
+            port.check_record_updatable("wms/receipt-order", {"id": 1, "status": 4})
+        port.check_record_updatable("wms/receipt-order", {"id": 2, "status": 0})
+        port.check_record_updatable("wms/item", {"id": 3, "status": 4})
+        seg_rec = port.resolve_target("ai/knowledge/segment", "分段A（ID=701）", spec=port.status_specs()["ai/knowledge/segment"])
+        self.assertEqual(seg_rec["id"], 701)
+
+        # 5. Type-use annotated List<@NotNull(...) Item>, DO$Item inner class, and /controller/app/ ignore
+        with tempfile.TemporaryDirectory() as tmp:
+            troot = Path(tmp)
+            oa_vo = troot / "server/yudao-module-oa/src/main/java/cn/iocoder/yudao/module/oa/controller/admin/reimbursement/vo"
+            oa_do = troot / "server/yudao-module-oa/src/main/java/cn/iocoder/yudao/module/oa/dal/dataobject/reimbursement"
+            oa_svc = troot / "server/yudao-module-oa/src/main/java/cn/iocoder/yudao/module/oa/service/reimbursement"
+            oa_ctrl = oa_vo.parent
+            spu_admin = troot / "server/yudao-module-mall/src/main/java/cn/iocoder/yudao/module/product/controller/admin/spu/vo"
+            spu_app = troot / "server/yudao-module-mall/src/main/java/cn/iocoder/yudao/module/product/controller/app/spu/vo"
+            spu_svc = troot / "server/yudao-module-mall/src/main/java/cn/iocoder/yudao/module/product/service/spu"
+            for d in (oa_vo, oa_do, oa_svc, oa_ctrl, spu_admin, spu_app, spu_svc, spu_admin.parent, spu_app.parent):
+                d.mkdir(parents=True, exist_ok=True)
+            (oa_do / "OaReimbursementDO.java").write_text(
+                "package cn.iocoder.yudao.module.oa.dal.dataobject.reimbursement;\n"
+                "import java.math.BigDecimal; import java.util.List;\n"
+                "public class OaReimbursementDO {\n"
+                "  private Long id;\n"
+                "  private List<Item> items;\n"
+                "  public static class Item {\n"
+                "    private Integer sort;\n"
+                "    private BigDecimal price;\n"
+                "  }\n"
+                "}\n", encoding="utf-8",
+            )
+            (oa_vo / "OaReimbursementSaveReqVO.java").write_text(
+                "package cn.iocoder.yudao.module.oa.controller.admin.reimbursement.vo;\n"
+                "import java.math.BigDecimal; import java.util.List;\n"
+                "public class OaReimbursementSaveReqVO {\n"
+                "  private Long id;\n"
+                "  private List<@NotNull(message = \"报销明细不能为空\") Item> items;\n"
+                "  public static class Item {\n"
+                "    private Integer sort;\n"
+                "    private BigDecimal price;\n"
+                "  }\n"
+                "}\n", encoding="utf-8",
+            )
+            (oa_vo / "OaReimbursementRespVO.java").write_text(
+                "package cn.iocoder.yudao.module.oa.controller.admin.reimbursement.vo;\n"
+                "import cn.iocoder.yudao.module.oa.dal.dataobject.reimbursement.OaReimbursementDO;\n"
+                "import java.util.List;\n"
+                "public class OaReimbursementRespVO {\n"
+                "  private Long id;\n"
+                "  private List<OaReimbursementDO.Item> items;\n"
+                "}\n", encoding="utf-8",
+            )
+            (oa_ctrl / "OaReimbursementController.java").write_text(
+                "package cn.iocoder.yudao.module.oa.controller.admin.reimbursement;\n"
+                "import cn.iocoder.yudao.module.oa.controller.admin.reimbursement.vo.*;\n"
+                "@RequestMapping(\"/oa/reimbursement\")\n"
+                "public class OaReimbursementController {\n"
+                "  private OaReimbursementService reimbursementService;\n"
+                "  @GetMapping(\"/get\") public CommonResult<OaReimbursementRespVO> get(@RequestParam(\"id\") Long id) { return reimbursementService.get(id); }\n"
+                "  @PutMapping(\"/update\") public CommonResult<Boolean> update(@RequestBody OaReimbursementSaveReqVO reqVO) { return reimbursementService.update(reqVO); }\n"
+                "}\n", encoding="utf-8",
+            )
+            (oa_svc / "OaReimbursementServiceImpl.java").write_text(
+                "package cn.iocoder.yudao.module.oa.service.reimbursement;\n"
+                "public class OaReimbursementServiceImpl {\n"
+                "  public void update(OaReimbursementSaveReqVO reqVO) { mapper.updateById(reqVO); }\n"
+                "}\n", encoding="utf-8",
+            )
+            spu_do = troot / "server/yudao-module-mall/src/main/java/cn/iocoder/yudao/module/product/dal/dataobject/spu"
+            spu_do.mkdir(parents=True, exist_ok=True)
+            (spu_do / "ProductSpuDO.java").write_text(
+                "package cn.iocoder.yudao.module.product.dal.dataobject.spu;\n"
+                "public class ProductSpuDO {\n  private Long id;\n  private String name;\n}\n", encoding="utf-8",
+            )
+            (spu_admin / "ProductSkuSaveReqVO.java").write_text(
+                "package cn.iocoder.yudao.module.product.controller.admin.spu.vo;\n"
+                "public class ProductSkuSaveReqVO {\n  private String name;\n  private Integer price;\n}\n", encoding="utf-8",
+            )
+            (spu_admin / "ProductSpuSaveReqVO.java").write_text(
+                "package cn.iocoder.yudao.module.product.controller.admin.spu.vo;\n"
+                "import java.util.List;\n"
+                "public class ProductSpuSaveReqVO {\n  private Long id;\n  private String name;\n  private List<ProductSkuSaveReqVO> skus;\n}\n", encoding="utf-8",
+            )
+            (spu_admin / "ProductSkuRespVO.java").write_text(
+                "package cn.iocoder.yudao.module.product.controller.admin.spu.vo;\n"
+                "public class ProductSkuRespVO {\n  private Long id;\n  private String name;\n  private Integer price;\n}\n", encoding="utf-8",
+            )
+            (spu_admin / "ProductSpuRespVO.java").write_text(
+                "package cn.iocoder.yudao.module.product.controller.admin.spu.vo;\n"
+                "import java.util.List;\n"
+                "public class ProductSpuRespVO {\n  private Long id;\n  private String name;\n  private List<ProductSkuRespVO> skus;\n}\n", encoding="utf-8",
+            )
+            (spu_app / "AppProductSpuDetailRespVO.java").write_text(
+                "package cn.iocoder.yudao.module.product.controller.app.spu.vo;\n"
+                "import java.util.List;\n"
+                "public class AppProductSpuDetailRespVO {\n"
+                "  private Long id;\n  private List<Sku> skus;\n"
+                "  public static class Sku {\n    private Long id;\n    private Integer price;\n  }\n"
+                "}\n", encoding="utf-8",
+            )
+            (spu_admin.parent / "ProductSpuController.java").write_text(
+                "package cn.iocoder.yudao.module.product.controller.admin.spu;\n"
+                "import cn.iocoder.yudao.module.product.controller.admin.spu.vo.*;\n"
+                "@RequestMapping(\"/product/spu\")\n"
+                "public class ProductSpuController {\n"
+                "  private ProductSpuService spuService;\n"
+                "  @GetMapping(\"/get-detail\") public CommonResult<ProductSpuRespVO> getDetail(@RequestParam(\"id\") Long id) { return spuService.get(id); }\n"
+                "  @PutMapping(\"/update\") public CommonResult<Boolean> update(@RequestBody ProductSpuSaveReqVO reqVO) { return spuService.update(reqVO); }\n"
+                "}\n", encoding="utf-8",
+            )
+            (spu_app.parent / "AppProductSpuController.java").write_text(
+                "package cn.iocoder.yudao.module.product.controller.app.spu;\n"
+                "import cn.iocoder.yudao.module.product.controller.app.spu.vo.*;\n"
+                "@RequestMapping(\"/product/spu\")\n"
+                "public class AppProductSpuController {\n"
+                "  private ProductSpuService spuService;\n"
+                "  @GetMapping(\"/get-detail\") public CommonResult<AppProductSpuDetailRespVO> getDetail(@RequestParam(\"id\") Long id) { return spuService.appGet(id); }\n"
+                "}\n", encoding="utf-8",
+            )
+            (spu_svc / "ProductSpuServiceImpl.java").write_text(
+                "package cn.iocoder.yudao.module.product.service.spu;\n"
+                "public class ProductSpuServiceImpl {\n"
+                "  public void update(ProductSpuSaveReqVO reqVO) { mapper.updateById(reqVO); }\n"
+                "}\n", encoding="utf-8",
+            )
+            (spu_app.parent / "AppProductSpuController.java").write_text(
+                "package cn.iocoder.yudao.module.product.controller.app.spu;\n"
+                "import cn.iocoder.yudao.module.product.controller.app.spu.vo.*;\n"
+                "@RequestMapping(\"/product/spu\")\n"
+                "public class AppProductSpuController {\n"
+                "  @GetMapping(\"/get-detail\") public CommonResult<AppProductSpuDetailRespVO> getDetail(@RequestParam(\"id\") Long id) { return svc.appGet(id); }\n"
+                "}\n", encoding="utf-8",
+            )
+            ast_docs = {
+                "paths": {
+                    "/admin-api/oa/reimbursement/get": {"get": {"responses": _ok_resp("OaReimb")}},
+                    "/admin-api/oa/reimbursement/update": {"put": {"tags": ["费用报销"], "requestBody": _json_req({"id": {"type": "integer"}, "items": {"type": "array", "items": {"$ref": "#/components/schemas/Item"}}}), "responses": _bool_resp()}},
+                    "/admin-api/product/spu/get-detail": {"get": {"responses": _ok_resp("SpuDetail")}},
+                    "/admin-api/product/spu/update": {"put": {"tags": ["商品"], "requestBody": _json_req({"id": {"type": "integer"}, "name": {"type": "string"}, "skus": {"type": "array", "items": {"$ref": "#/components/schemas/SkuItem"}}}), "responses": _bool_resp()}},
+                },
+                "components": {"schemas": {
+                    "CommonResultBoolean": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "boolean"}}},
+                    "Item": {"type": "object", "properties": {"id": {"type": "integer"}, "sort": {"type": "integer"}}},
+                    "OaReimb": {"type": "object", "properties": {"id": {"type": "integer"}, "items": {"type": "array", "items": {"$ref": "#/components/schemas/Item"}}}},
+                    "SkuItem": {"type": "object", "properties": {"name": {"type": "string"}, "price": {"type": "integer"}}},
+                    "SpuDetail": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}, "skus": {"type": "array", "items": {"$ref": "#/components/schemas/SkuItem"}}}},
+                }},
+            }
+            ast_port = YudaoConventionWritePort(RegClient(), NS(_documents=ast_docs, _source=YudaoSource(troot, release="v-step14-ast"), _ui=None))
+            reimb_agg = ast_port.aggregate_update_specs()["oa/reimbursement"]
+            self.assertIn("price", [f.name for f in reimb_agg.collections[0].fields])
+            spu_ast_agg = ast_port.aggregate_update_specs()["product/spu"]
+            self.assertIn("name", [f.name for f in spu_ast_agg.collections[0].fields])
+            self.assertIn("name", spu_ast_agg.collections[0].server_computed_fields)
+
 
 if __name__ == "__main__":
     unittest.main()

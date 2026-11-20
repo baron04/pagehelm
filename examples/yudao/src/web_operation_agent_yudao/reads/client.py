@@ -141,7 +141,16 @@ class YudaoClient:
             return self._data(path, code, body)
         raise DataRefused(f"{path}: not authorised")
 
-    def write_once(self, method: str, path: str, *, body: dict, params=None, operation: str = ""):
+    def write_once(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: dict,
+        params=None,
+        operation: str = "",
+        expect_result: str = "",
+    ):
         """One approved native dispatch; never retry, relogin, or follow redirects.
 
         Business errors after native dispatch may have partial effects. Only an
@@ -221,7 +230,13 @@ class YudaoClient:
                 raise BusinessMutationIndeterminate("native operation may have partially completed",
                     phase="dispatch", reconciliation=result_evidence)
             value = payload.get("data")
-            acknowledged = (value is True if method == "PUT" else type(value) is int and value > 0)
+            wanted = expect_result or ("bool" if method == "PUT" else "id")
+            if wanted == "bool":
+                acknowledged = value is True
+            elif wanted == "id":
+                acknowledged = type(value) is int and value > 0
+            else:
+                acknowledged = value is True or (type(value) is int and value > 0)
             if not acknowledged:
                 raise BusinessMutationIndeterminate("native operation returned no effect acknowledgement", phase="acknowledgement")
             transport.applied()

@@ -1271,7 +1271,7 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
         instructions = self.profile.instructions.replace(
             "先 load_skill，再用已安装操作提出提案",
             "直接用 propose_operation(operation, inputs) 提出提案（程序自动加载对应 Skill，需要查完整领域规则时仍可调 load_skill；"
-            "扁平单表记录字段修改优先用 update_record，两态启停/上下架优先用 toggle_record_status，专用新建或状态变更用对应操作）",
+            "已安装的专用操作优先，其余扁平新建用 create_record，单表或 1–2 层嵌套明细单据修改用 update_record，两态启停/上下架用 toggle_record_status，角色/关联集合分配用 assign_record_relations）",
         )
         self.profile = replace(self.profile, instructions=instructions + PAGE_DELIVERY_RULES)
 

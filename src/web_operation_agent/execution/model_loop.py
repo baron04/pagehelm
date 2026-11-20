@@ -22,7 +22,19 @@ from ..state.ledger import SessionLedger
 from ..business.tools.registry import validate_input
 from ..composition.binding import BoundApplication
 from ..goal.skill_writes import SkillWrites
-from ..business.convention_writes import normalize_changes_argument, resolve_write_route_capability
+from ..business.convention_writes import (
+    normalize_changes_argument,
+    normalize_create_arguments,
+    resolve_write_route_capability,
+)
+
+
+def _normalize_compiled_inputs(op_name: str, raw: object) -> object:
+    if op_name == "update_record":
+        return normalize_changes_argument(raw)
+    if op_name == "create_record":
+        return normalize_create_arguments(raw)
+    return raw
 from ..goal.ports import capabilities_of
 from ..goal.data import DataRefused
 from ..modeling.chat import require_chat_port
@@ -585,16 +597,29 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             instructions += SOURCE_INSTRUCTIONS
         if catalog:
             if self.direct_skill_operations:
+                route_cap = resolve_write_route_capability(self.goal_port)
                 has_updates = "updates" in capabilities_of(self.goal_port)
-                conv_hint = (
-                    "；对于扁平单表记录字段修改优先用 update_record，"
-                    "两态启停/上下架优先用 toggle_record_status，专用状态或新建优先用对应专用操作"
-                    if has_updates else ""
-                )
+                if has_updates and route_cap.compiled_api_writes:
+                    conv_hint = (
+                        "；已安装的专用操作优先，其余扁平新建优先用 create_record，"
+                        "单表或 1–2 层嵌套明细修改优先用 update_record，"
+                        "两态启停/上下架优先用 toggle_record_status，"
+                        "角色/关联集合分配优先用 assign_record_relations"
+                    )
+                    fallback_desc = "以上操作均不适用时，页面表单可按" + route_cap.form_fallback_phrase() + "办理；表格行内按钮动作可用 request_submit 提出批准。"
+                elif has_updates:
+                    conv_hint = (
+                        "；对于扁平单表记录字段修改优先用 update_record，"
+                        "两态启停/上下架优先用 toggle_record_status，专用状态或新建优先用对应专用操作"
+                    )
+                    fallback_desc = "以上操作均不适用（如新建无专用操作、含嵌套明细行修改等）时，页面表单可只用填表并标出提交按钮完成预填交接（由用户自己点击提交）；表格行内按钮动作可用 request_submit 提出批准。"
+                else:
+                    conv_hint = ""
+                    fallback_desc = "以上操作均不适用（如新建无专用操作、含嵌套明细行修改等）时，页面表单可只用填表并标出提交按钮完成预填交接（由用户自己点击提交）；表格行内按钮动作可用 request_submit 提出批准。"
                 write_lead = (
                     "\n有已安装的写入操作覆盖时，优先直接用 propose_operation(operation, inputs) 提出提案"
                     f"（程序会自动加载对应 Skill；需要查看某个 Skill 的完整规则或参考资料时仍可调用 load_skill{conv_hint}）；"
-                    "以上操作均不适用（如新建无专用操作、含嵌套明细行修改等）时，页面表单可只用填表并标出提交按钮完成预填交接（由用户自己点击提交）；表格行内按钮动作可用 request_submit 提出批准。"
+                    + fallback_desc
                     if getattr(self, "native_submit", None) is not None else
                     "\n只有已安装的写入操作可提出写入；可直接用 propose_operation(operation, inputs) 提出提案（程序自动加载对应 Skill；需查完整规则时仍可调用 load_skill）。"
                 )
@@ -777,11 +802,11 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             if name == "propose_operation" and self.direct_skill_operations:
                 op_name = str(args.get("operation") or "").strip()
                 raw_inputs = args.get("inputs")
-                op_inputs = normalize_changes_argument(raw_inputs) if op_name == "update_record" else raw_inputs
+                op_inputs = _normalize_compiled_inputs(op_name, raw_inputs)
                 self._note(s, stage="tool", tool=op_name, mutation=True)
                 return self._propose(s, writes, op_name, op_inputs, turn)
             if any(d.name == name for d in writes.definitions()):
-                op_inputs = normalize_changes_argument(args) if name == "update_record" else args
+                op_inputs = _normalize_compiled_inputs(name, args)
                 self._note(s, stage="tool", tool=name, mutation=True)
                 return self._propose(s, writes, name, op_inputs, turn)
         procedure = next((p for p in self.profile.procedures if p.schema["function"]["name"] == name), None)
@@ -1037,7 +1062,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             if skill.skill_id not in writes.loaded_ids:
                 writes.load(skill.skill_id, step=s.step)
                 turn["skills"].add(skill.skill_id)
-            op_inputs = normalize_changes_argument(op_inputs) if op_name == "update_record" else op_inputs
+            op_inputs = _normalize_compiled_inputs(op_name, op_inputs)
             op_schema = definition.schema["function"]["parameters"]
             try:
                 validate_input(op_schema, op_inputs)
@@ -1064,8 +1089,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                 else:
                     return LoopToolResult("当前应用没有提供这个工具。", state="unavailable",
                                           error_code="tool_unavailable")
-            if name == "update_record":
-                args = normalize_changes_argument(args)
+            args = _normalize_compiled_inputs(name, args)
             try:
                 validate_input(schema, args)
             except BusinessToolRequestError as exc:

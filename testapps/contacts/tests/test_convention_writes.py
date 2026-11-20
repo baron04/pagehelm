@@ -494,6 +494,139 @@ class ContactsConventionWriteTests(unittest.TestCase):
         fen_field = ConventionFieldSpec("amount", "integer", label="金额", unit_scale=100)
         _verify_scaled_number_provenance(fen_field, "95元", ("请根据8000加上1500调整金额",), receipts=("95",))
 
+    def test_compiled_create_d1_d2_defaults_and_d3_and_password_exclusion(self):
+        from web_operation_agent.business.errors import BusinessToolRequestError
+
+        approvals_seen = []
+        executor, channel, chat, goal_port, audit_path = self._executor(
+            [
+                _tool_reply((
+                    "propose_operation",
+                    {
+                        "operation": "create_record",
+                        "inputs": {
+                            "entity": "contact-notes",
+                            "fields": {"title": "Onboarding follow-up"},
+                        },
+                    },
+                )),
+                _tool_reply(("finish", {"status": "done", "answer": "Created contact note."})),
+            ],
+            on_approval=approvals_seen.append,
+        )
+        with patch("web_operation_agent.goal.executor.RemoteBrowserClient", _RemoteBrowser):
+            result = executor.execute({
+                "message_id": "m_create",
+                "text": "Create a contact note titled Onboarding follow-up.",
+                "page_url": self.app.origin + "/contacts",
+            })
+        self.assertEqual(result.terminal_reason, "agent_finished", result.user_answer)
+        first_sys = chat.calls[0][0][0]["content"]
+        self.assertIn("create_record(", first_sys)
+        self.assertIn("assign_record_relations(", first_sys)
+        self.assertEqual(len(approvals_seen), 1)
+        detail_texts = [f"{d.label}:{d.text}" for d in approvals_seen[0].details]
+        joined = "\n".join(detail_texts)
+        self.assertIn("（页面默认值）", joined)
+        self.assertIn("general（页面默认值）", joined)
+        self.assertNotIn("priority", joined)
+        notes = self.app.contact_notes[DEMO_WORKSPACE]
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(notes[0]["title"], "Onboarding follow-up")
+        self.assertEqual(notes[0]["category"], "general")
+        self.assertEqual(notes[0]["owner"], DEMO_ACTORS[0].actor)
+
+        # Excluded credential-required create endpoint fails closed before any card via real loop
+        ex_acc, ch_acc, _ca, _gpa, _aa = self._executor([
+            _tool_reply((
+                "propose_operation",
+                {
+                    "operation": "create_record",
+                    "inputs": {"entity": "accounts", "fields": {"username": "u1"}},
+                },
+            )),
+            _tool_reply(("finish", {"status": "need_input", "answer": "Password-protected accounts cannot be created here."})),
+        ])
+        with patch("web_operation_agent.goal.executor.RemoteBrowserClient", _RemoteBrowser):
+            res_acc = ex_acc.execute({
+                "message_id": "m_acc",
+                "text": "Create account u1.",
+                "page_url": self.app.origin + "/contacts",
+            })
+        self.assertEqual(res_acc.terminal_reason, "needs_clarification")
+        self.assertEqual(len(ch_acc.approvals), 0)
+        tools = executor.application.ports.operations.tools
+        handler = tools.get("create_record").handler
+        self.assertIn("密码", handler.port.excluded_create_reason("accounts"))
+
+    def test_compiled_create_blocks_cross_record_scalar_copy_and_runs_aggregate_and_relations(self):
+        # 1. Cross-record provenance blocking on create_record
+        executor1, channel1, _c1, _gp1, _a1 = self._executor([
+            _tool_reply((
+                "propose_operation",
+                {
+                    "operation": "create_record",
+                    "inputs": {
+                        "entity": "contact-notes",
+                        "fields": {"title": "Ada Lovelace"},
+                    },
+                },
+            )),
+            _tool_reply(("finish", {"status": "need_input", "answer": "What title?"})),
+        ])
+        with patch("web_operation_agent.goal.executor.RemoteBrowserClient", _RemoteBrowser):
+            res1 = executor1.execute({
+                "message_id": "m_cross",
+                "text": "Create a contact note with the same title.",
+                "page_url": self.app.origin + "/contacts",
+            })
+        self.assertEqual(res1.terminal_reason, "needs_clarification")
+        self.assertEqual(len(channel1.approvals), 0)
+        self.assertEqual(self.app.contact_notes[DEMO_WORKSPACE], [])
+
+        # 2. Aggregate-root update_record preserves parent fields and sibling child lines
+        executor2, channel2, _c2, _gp2, _a2 = self._executor([
+            _tool_reply((
+                "propose_operation",
+                {
+                    "operation": "update_record",
+                    "inputs": {
+                        "entity": "contact-dossiers",
+                        "target": "Ada Dossier",
+                        "line_changes": [
+                            {"match": "Primary Phone", "changes": [{"field": "value", "value": "+44-200"}]}
+                        ],
+                    },
+                },
+            )),
+            _tool_reply((
+                "propose_operation",
+                {
+                    "operation": "assign_record_relations",
+                    "inputs": {
+                        "entity": "contacts",
+                        "target": "Ada Lovelace",
+                        "relation": "groups",
+                        "items": ["Engineering", "VIP"],
+                    },
+                },
+            )),
+            _tool_reply(("finish", {"status": "done", "answer": "Updated dossier and groups."})),
+        ])
+        with patch("web_operation_agent.goal.executor.RemoteBrowserClient", _RemoteBrowser):
+            res2 = executor2.execute({
+                "message_id": "m_agg_rel",
+                "text": "Update Ada Dossier Primary Phone to +44-200 and assign Ada Lovelace to Engineering and VIP groups.",
+                "page_url": self.app.origin + "/contacts",
+            })
+        self.assertEqual(res2.terminal_reason, "agent_finished", res2.user_answer)
+        self.assertEqual(len(channel2.approvals), 2)
+        dossier = self.app.contact_dossiers[DEMO_WORKSPACE][0]
+        self.assertEqual(dossier["note"], "Keep safe")
+        self.assertEqual(dossier["items"][0]["value"], "+44-200")
+        self.assertEqual(dossier["items"][1], {"id": "item-2", "label": "Office", "value": "London"})
+        self.assertEqual(self.app.contact_groups[DEMO_WORKSPACE]["ada-lovelace"], ["Engineering", "VIP"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -116,6 +116,36 @@ class WriteRouteCapability:
             f"请核对“已安装的写入操作”清单，或{self.form_fallback_phrase()}。"
         )
 
+    def unsupported_create_message(
+        self,
+        entity: str,
+        *,
+        dedicated: str | None = None,
+        excluded_reason: str = "",
+    ) -> str:
+        if dedicated:
+            return (
+                f"实体「{entity}」已有已安装的专用新建操作「{dedicated}」，"
+                f"请直接用 propose_operation(\"{dedicated}\", ...) 办理。"
+            )
+        if excluded_reason:
+            return f"实体「{entity}」不可通过通用 API 新建（{excluded_reason}）；请{self.form_fallback_phrase()}。"
+        return f"实体「{entity}」暂未纳入通用编译新建契约；请改用已安装的专用操作，或{self.form_fallback_phrase()}。"
+
+    def unsupported_relation_message(
+        self,
+        entity: str,
+        relation: str = "",
+        *,
+        supported_relations: str = "",
+    ) -> str:
+        if supported_relations:
+            return (
+                f"实体「{entity}」不支持关联关系「{relation}」（当前支持：{supported_relations}）；"
+                f"请确认关系名称，或{self.form_fallback_phrase()}。"
+            )
+        return f"实体「{entity}」暂未编译支持关联集合维护；请{self.form_fallback_phrase()}。"
+
 
 def resolve_write_route_capability(source: object) -> WriteRouteCapability:
     """Resolve optional WriteRouteCapability from a port or profile object."""
@@ -125,19 +155,55 @@ def resolve_write_route_capability(source: object) -> WriteRouteCapability:
     return attr if isinstance(attr, WriteRouteCapability) else WriteRouteCapability()
 
 
-def normalize_changes_argument(args: dict) -> dict:
-    """Allow models to pass ``changes`` either as ``[{field, value}]`` or ``{field: value}``."""
-    if not isinstance(args, dict) or not isinstance(args.get("changes"), dict):
-        return args
-    raw = args["changes"]
+def normalize_field_items(raw: object) -> object:
+    """Coerce either ``{field: value}`` or ``[{field, value}]`` into a normalized item list."""
+    if not isinstance(raw, dict):
+        return raw
     if not raw:
-        return {**args, "changes": []}
+        return []
     converted = []
     for k, v in raw.items():
         if isinstance(v, list):
             v = [str(item) for item in v]
         converted.append({"field": str(k), "value": v})
-    return {**args, "changes": converted}
+    return converted
+
+
+def normalize_create_arguments(args: dict) -> dict:
+    """Allow models to pass ``fields`` either as ``[{field, value}]`` or ``{field: value}``."""
+    if not isinstance(args, dict):
+        return args
+    out = dict(args)
+    if "fields" in out and isinstance(out.get("fields"), dict):
+        out["fields"] = normalize_field_items(out["fields"])
+    return out
+
+
+def normalize_update_arguments(args: dict) -> dict:
+    """Normalize ``changes`` and optional nested ``line_changes[*].changes`` dicts to item lists."""
+    if not isinstance(args, dict):
+        return args
+    out = dict(args)
+    if isinstance(out.get("changes"), dict):
+        out["changes"] = normalize_field_items(out["changes"])
+    line_changes = out.get("line_changes")
+    if isinstance(line_changes, list):
+        norm_lines = []
+        changed_lines = False
+        for item in line_changes:
+            if isinstance(item, dict) and isinstance(item.get("changes"), dict):
+                norm_lines.append({**item, "changes": normalize_field_items(item["changes"])})
+                changed_lines = True
+            else:
+                norm_lines.append(item)
+        if changed_lines:
+            out["line_changes"] = norm_lines
+    return out
+
+
+def normalize_changes_argument(args: dict) -> dict:
+    """Allow models to pass ``changes`` either as ``[{field, value}]`` or ``{field: value}``."""
+    return normalize_update_arguments(args)
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,10 +282,19 @@ class TwoStateStatusSpec:
     status_field: str = "status"
     volatile_fields: frozenset[str] = frozenset()
     synonyms: tuple[tuple[str, str], ...] = ()
+    action_path: str = ""
+    second_action_path: str = ""
+    param_mode: str = "body"
+    id_param: str = "id"
+    status_param: str = "status"
+    read_path: str = ""
+    read_list_path: str = ""
 
     def __post_init__(self) -> None:
         if not self.entity or len(self.states) != 2:
             raise ValueError("two-state status spec requires entity and exactly 2 states")
+        if self.param_mode not in {"body", "query"}:
+            raise ValueError(f"unsupported status param_mode: {self.param_mode!r}")
         (l1, c1), (l2, c2) = self.states
         if not l1 or not l2 or l1 == l2 or (type(c1) is type(c2) and c1 == c2):
             raise ValueError(f"two-state status spec states must be distinct: {self.entity}")
@@ -322,6 +397,197 @@ def _entry_provenance_ok(
 ) -> bool:
     """Validate one field entry against user texts, scoped candidates, and turn receipts."""
     return verify_entry_provenance(entry, scoped_cands, texts, receipts=receipts)
+
+
+def collect_provenance_context(
+    existing_values: dict[str, tuple[str, ...]] | None,
+) -> tuple[SourceLedger, tuple[str, ...]]:
+    """Populate a ``SourceLedger`` and receipt strings from ``existing_values``."""
+    ledger = SourceLedger()
+    receipt_vals: tuple[str, ...] = ()
+    if existing_values:
+        receipt_vals = tuple(
+            str(v).strip() for v in existing_values.get("__receipt__", ())
+            if isinstance(v, str) and v.strip()
+        )
+        for binding, vals in existing_values.items():
+            if binding == "__receipt__":
+                continue
+            for v in vals:
+                ledger.add_candidates([(binding, v)])
+    return ledger, receipt_vals
+
+
+def validate_single_field_provenance(
+    f_spec: ConventionFieldSpec,
+    raw_val: object,
+    *,
+    old_val: object = None,
+    texts: tuple[str, ...],
+    prompt: str,
+    joined_words: str,
+    ledger: SourceLedger,
+    receipt_vals: tuple[str, ...],
+    existing_values: dict[str, tuple[str, ...]] | None,
+    allow_append: bool = True,
+    allow_existing_candidates: bool = True,
+) -> None:
+    """Validate provenance for one field input against user texts, scoped candidates, and receipts."""
+    label = f_spec.label or f_spec.name
+
+    # 1. Check append overwrite protection on strings (including clearing to None)
+    if allow_append and (isinstance(raw_val, str) or raw_val is None):
+        val_for_append = raw_val if isinstance(raw_val, str) else ""
+        require_append_preservation(
+            prompt,
+            (((label, f_spec.name), old_val, val_for_append),),
+            error_factory=lambda _overwritten, _lbl=label: BusinessToolRequestError(
+                f"用户要求在「{_lbl}」中追加或补充内容，当前修改覆盖或清空了原有内容；"
+                "请先读取并保留目标记录该字段原值，再在其后追加本次内容。"
+            ),
+        )
+
+    field_cands = (
+        {
+            *existing_values.get(label, ()),
+            *existing_values.get(f_spec.name, ()),
+        }
+        if allow_existing_candidates and existing_values else set()
+    )
+    scoped_cands = [
+        (cand.binding, cand.value) for cand in ledger.candidates
+        if (
+            (allow_existing_candidates and cand.binding in {label, f_spec.name})
+            or (f_spec.reference_entity and cand.binding == f_spec.reference_entity)
+            or (allow_existing_candidates and cand.binding and cand.binding.endswith("." + f_spec.name))
+        )
+    ]
+
+    # 2. Boolean fields
+    if f_spec.kind == "boolean":
+        if raw_val is not None:
+            if str(raw_val) in field_cands:
+                return
+            bool_intent = (
+                raw_val if isinstance(raw_val, bool)
+                else (
+                    True if str(raw_val).strip().lower() in {"true", "是", "开启", "启用", "打开", "允许", "设为默认"}
+                    else (
+                        False if str(raw_val).strip().lower() in {"false", "否", "关闭", "停用", "禁用", "取消", "不启用", "不允许"}
+                        else None
+                    )
+                )
+            )
+            if bool_intent is not None:
+                neg_prefix = re.compile(r"(?:不允许|不可|不能|不要|不得|不用|不准|不予|禁止|严禁|拒绝|取消|别|勿|非|不$)")
+                pos_pat = re.compile(
+                    r"(?<![A-Za-z0-9_])true(?![A-Za-z0-9_])|开启|启用|打开|允许|设为默认|"
+                    r"(?:设为|改为|置为|变成|选为|[：:=]\s*)是(?=$|[\s）)])",
+                    re.I,
+                )
+                neg_pat = re.compile(
+                    r"(?<![A-Za-z0-9_])false(?![A-Za-z0-9_])|关闭|停用|禁用|取消默认|取消启用|"
+                    r"(?:设为|改为|置为|变成|选为|[：:=]\s*)否(?=$|[\s）)])",
+                    re.I,
+                )
+                positive_bool = False
+                negative_bool = False
+                for clause in re.split(r"[，,。；;！!\n]+", joined_words):
+                    for m in pos_pat.finditer(clause):
+                        if neg_prefix.search(clause[:m.start()]):
+                            negative_bool = True
+                        else:
+                            positive_bool = True
+                    for m in neg_pat.finditer(clause):
+                        if not neg_prefix.search(clause[:m.start()]):
+                            negative_bool = True
+                if (bool_intent is True and positive_bool) or (bool_intent is False and negative_bool):
+                    return
+            raise BusinessToolRequestError(
+                f"布尔字段「{label}」的值「{raw_val}」未在用户原话中找到依据。"
+            )
+        return
+
+    # 3. Reference fields (single FK or ID array)
+    if f_spec.reference_entity and raw_val is not None:
+        tokens = raw_val if isinstance(raw_val, list) else [raw_val]
+        for tok in tokens:
+            s_tok = str(tok).strip()
+            leaf = s_tok.rsplit("/", 1)[-1].strip()
+            if s_tok == "根节点" and re.search(r"根|顶层|顶级|一级", joined_words):
+                continue
+            if (literal_supplied(s_tok, texts)
+                    or (leaf and literal_supplied(leaf, texts))
+                    or any(c_val in {s_tok, leaf} for _, c_val in scoped_cands)):
+                continue
+            raise BusinessToolRequestError(
+                f"关联字段「{label}」的目标「{s_tok[:60]}」未在用户原话或已读候选中找到依据。"
+            )
+        return
+
+    # 4. Non-reference ID arrays
+    if f_spec.kind == "id_array" and raw_val is not None:
+        if not isinstance(raw_val, list):
+            raise BusinessToolRequestError(f"数组字段「{label}」须传数组。")
+        for elem in raw_val:
+            s_elem = scalar_text(elem).strip()
+            if not s_elem:
+                continue
+            if literal_supplied(s_elem, texts):
+                continue
+            if not _entry_provenance_ok(Entry(label, s_elem, kind="text"), scoped_cands, texts):
+                raise BusinessToolRequestError(
+                    f"字段「{label}」的元素「{s_elem[:60]}」未在用户原话或已读候选中找到依据。"
+                )
+        return
+
+    # 5. Dictionary enum fields
+    if f_spec.enum_type and raw_val is not None:
+        s_tok = str(raw_val).strip()
+        synonyms = {
+            "开启": ("开启", "启用", "正常", "有效"),
+            "关闭": ("关闭", "停用", "禁用"),
+        }
+        accepted = synonyms.get(s_tok, (s_tok,))
+        if any(literal_supplied(w, texts) for w in accepted) or s_tok in field_cands:
+            return
+        raise BusinessToolRequestError(
+            f"枚举字段「{label}」的选项「{s_tok[:60]}」未在用户原话中找到依据。"
+        )
+
+    # 6. Scaled integer fields (e.g. unit_scale=100 fen, unit_scale=10 zhe)
+    if f_spec.unit_scale > 1 and raw_val is not None:
+        _verify_scaled_number_provenance(f_spec, raw_val, texts, receipts=receipt_vals)
+        return
+
+    # 7. Date / datetime string inputs (for both string dates and epoch-ms timestamps)
+    if f_spec.date_kind and isinstance(raw_val, str) and raw_val:
+        if not _entry_provenance_ok(Entry(label, raw_val, kind="text"), scoped_cands, texts, receipts=receipt_vals):
+            raise BusinessToolRequestError(
+                f"字段「{label}」的日期时间值「{raw_val}」未在用户原话或本轮时间换算中找到依据，请向用户确认。"
+            )
+        return
+
+    # 8. Plain strings: literal in user text, safe append over old_val, or scoped candidate
+    if f_spec.kind == "string" and isinstance(raw_val, str) and raw_val:
+        if literal_supplied(raw_val, texts):
+            return
+        if allow_append:
+            allowed_old = (old_val,) if isinstance(old_val, str) and old_val else ()
+            if _existing_append_supplied(raw_val, texts, allowed_old):
+                return
+        if allow_existing_candidates and raw_val in field_cands and re.search(r"同上|一样|相同|沿用|复制|照旧", joined_words):
+            return
+        raise BusinessToolRequestError(
+            f"字段「{label}」的值「{raw_val[:60]}」不是用户原话提供的内容（若为追加请保留原值前缀），不能自行编造或改写。"
+        )
+
+    # 9. Numbers / integers (unit_scale == 1)
+    if f_spec.kind in {"integer", "number"} and raw_val is not None and not isinstance(raw_val, bool):
+        if not _entry_provenance_ok(Entry(label, scalar_text(raw_val), kind="text"), scoped_cands, texts, receipts=receipt_vals):
+            raise BusinessToolRequestError(
+                f"字段「{label}」的数值「{raw_val}」未在用户原话或本轮计算中找到依据，请向用户确认。"
+            )
 
 
 class ConventionWriteEffects:
@@ -527,19 +793,7 @@ class ConventionUpdateHandler:
             return
         prompt = texts[-1] if texts else ""
         joined_words = "\n".join(texts)
-
-        ledger = SourceLedger()
-        receipt_vals: tuple[str, ...] = ()
-        if existing_values:
-            receipt_vals = tuple(
-                str(v).strip() for v in existing_values.get("__receipt__", ())
-                if isinstance(v, str) and v.strip()
-            )
-            for binding, vals in existing_values.items():
-                if binding == "__receipt__":
-                    continue
-                for v in vals:
-                    ledger.add_candidates([(binding, v)])
+        ledger, receipt_vals = collect_provenance_context(existing_values)
 
         for item in inputs.get("changes") or ():
             f_spec = spec.resolve_field(str(item.get("field") or "").strip())
@@ -547,157 +801,19 @@ class ConventionUpdateHandler:
                 continue
             raw_val = item.get("value")
             old_val = before_map.get(f_spec.name)
-            label = f_spec.label or f_spec.name
-
-            # 1. Check append overwrite protection on strings (including clearing to None)
-            if isinstance(raw_val, str) or raw_val is None:
-                val_for_append = raw_val if isinstance(raw_val, str) else ""
-                require_append_preservation(
-                    prompt,
-                    (((label, f_spec.name), old_val, val_for_append),),
-                    error_factory=lambda _overwritten, _lbl=label: BusinessToolRequestError(
-                        f"用户要求在「{_lbl}」中追加或补充内容，当前修改覆盖或清空了原有内容；"
-                        "请先读取并保留目标记录该字段原值，再在其后追加本次内容。"
-                    ),
-                )
-
-            field_cands = (
-                {
-                    *existing_values.get(label, ()),
-                    *existing_values.get(f_spec.name, ()),
-                }
-                if existing_values else set()
+            validate_single_field_provenance(
+                f_spec,
+                raw_val,
+                old_val=old_val,
+                texts=texts,
+                prompt=prompt,
+                joined_words=joined_words,
+                ledger=ledger,
+                receipt_vals=receipt_vals,
+                existing_values=existing_values,
+                allow_append=True,
+                allow_existing_candidates=True,
             )
-            scoped_cands = [
-                (cand.binding, cand.value) for cand in ledger.candidates
-                if cand.binding in {label, f_spec.name, f_spec.reference_entity}
-                or (cand.binding and cand.binding.endswith("." + f_spec.name))
-            ]
-
-            # 2. Boolean fields
-            if f_spec.kind == "boolean":
-                if raw_val is not None:
-                    if str(raw_val) in field_cands:
-                        continue
-                    bool_intent = (
-                        raw_val if isinstance(raw_val, bool)
-                        else (
-                            True if str(raw_val).strip().lower() in {"true", "是", "开启", "启用", "打开", "允许", "设为默认"}
-                            else (
-                                False if str(raw_val).strip().lower() in {"false", "否", "关闭", "停用", "禁用", "取消", "不启用", "不允许"}
-                                else None
-                            )
-                        )
-                    )
-                    if bool_intent is not None:
-                        neg_prefix = re.compile(r"(?:不允许|不可|不能|不要|不得|不用|不准|不予|禁止|严禁|拒绝|取消|别|勿|非|不$)")
-                        pos_pat = re.compile(
-                            r"(?<![A-Za-z0-9_])true(?![A-Za-z0-9_])|开启|启用|打开|允许|设为默认|"
-                            r"(?:设为|改为|置为|变成|选为|[：:=]\s*)是(?=$|[\s）)])",
-                            re.I,
-                        )
-                        neg_pat = re.compile(
-                            r"(?<![A-Za-z0-9_])false(?![A-Za-z0-9_])|关闭|停用|禁用|取消默认|取消启用|"
-                            r"(?:设为|改为|置为|变成|选为|[：:=]\s*)否(?=$|[\s）)])",
-                            re.I,
-                        )
-                        positive_bool = False
-                        negative_bool = False
-                        for clause in re.split(r"[，,。；;！!\n]+", joined_words):
-                            for m in pos_pat.finditer(clause):
-                                if neg_prefix.search(clause[:m.start()]):
-                                    negative_bool = True
-                                else:
-                                    positive_bool = True
-                            for m in neg_pat.finditer(clause):
-                                if not neg_prefix.search(clause[:m.start()]):
-                                    negative_bool = True
-                        if (bool_intent is True and positive_bool) or (bool_intent is False and negative_bool):
-                            continue
-                    raise BusinessToolRequestError(
-                        f"布尔字段「{label}」的值「{raw_val}」未在用户原话中找到依据。"
-                    )
-                continue
-
-            # 3. Reference fields (single FK or ID array)
-            if f_spec.reference_entity and raw_val is not None:
-                tokens = raw_val if isinstance(raw_val, list) else [raw_val]
-                for tok in tokens:
-                    s_tok = str(tok).strip()
-                    leaf = s_tok.rsplit("/", 1)[-1].strip()
-                    if s_tok == "根节点" and re.search(r"根|顶层|顶级|一级", joined_words):
-                        continue
-                    if (literal_supplied(s_tok, texts)
-                            or (leaf and literal_supplied(leaf, texts))
-                            or any(c_val in {s_tok, leaf} for _, c_val in scoped_cands)):
-                        continue
-                    raise BusinessToolRequestError(
-                        f"关联字段「{label}」的目标「{s_tok[:60]}」未在用户原话或已读候选中找到依据。"
-                    )
-                continue
-
-            # 4. Non-reference ID arrays
-            if f_spec.kind == "id_array" and raw_val is not None:
-                if not isinstance(raw_value := raw_val, list):
-                    raise BusinessToolRequestError(f"数组字段「{label}」须传数组。")
-                for elem in raw_value:
-                    s_elem = scalar_text(elem).strip()
-                    if not s_elem:
-                        continue
-                    if literal_supplied(s_elem, texts):
-                        continue
-                    if not _entry_provenance_ok(Entry(label, s_elem, kind="text"), scoped_cands, texts):
-                        raise BusinessToolRequestError(
-                            f"字段「{label}」的元素「{s_elem[:60]}」未在用户原话或已读候选中找到依据。"
-                        )
-                continue
-
-            # 5. Dictionary enum fields
-            if f_spec.enum_type and raw_val is not None:
-                s_tok = str(raw_val).strip()
-                synonyms = {
-                    "开启": ("开启", "启用", "正常", "有效"),
-                    "关闭": ("关闭", "停用", "禁用"),
-                }
-                accepted = synonyms.get(s_tok, (s_tok,))
-                if any(literal_supplied(w, texts) for w in accepted) or s_tok in field_cands:
-                    continue
-                raise BusinessToolRequestError(
-                    f"枚举字段「{label}」的选项「{s_tok[:60]}」未在用户原话中找到依据。"
-                )
-
-            # 6. Scaled integer fields (e.g. unit_scale=100 fen, unit_scale=10 zhe)
-            if f_spec.unit_scale > 1 and raw_val is not None:
-                _verify_scaled_number_provenance(f_spec, raw_val, texts, receipts=receipt_vals)
-                continue
-
-            # 7. Date / datetime string inputs (for both string dates and epoch-ms timestamps)
-            if f_spec.date_kind and isinstance(raw_val, str) and raw_val:
-                if not _entry_provenance_ok(Entry(label, raw_val, kind="text"), scoped_cands, texts, receipts=receipt_vals):
-                    raise BusinessToolRequestError(
-                        f"字段「{label}」的日期时间值「{raw_val}」未在用户原话或本轮时间换算中找到依据，请向用户确认。"
-                    )
-                continue
-
-            # 8. Plain strings: literal in user text, safe append over old_val, or scoped candidate
-            if f_spec.kind == "string" and isinstance(raw_val, str) and raw_val:
-                if literal_supplied(raw_val, texts):
-                    continue
-                allowed_old = (old_val,) if isinstance(old_val, str) and old_val else ()
-                if _existing_append_supplied(raw_val, texts, allowed_old):
-                    continue
-                if raw_val in field_cands and re.search(r"同上|一样|相同|沿用|复制|照旧", joined_words):
-                    continue
-                raise BusinessToolRequestError(
-                    f"字段「{label}」的值「{raw_val[:60]}」不是用户原话提供的内容（若为追加请保留原值前缀），不能自行编造或改写。"
-                )
-
-            # 9. Numbers / integers (unit_scale == 1)
-            if f_spec.kind in {"integer", "number"} and raw_val is not None and not isinstance(raw_val, bool):
-                if not _entry_provenance_ok(Entry(label, scalar_text(raw_val), kind="text"), scoped_cands, texts, receipts=receipt_vals):
-                    raise BusinessToolRequestError(
-                        f"字段「{label}」的数值「{raw_val}」未在用户原话或本轮计算中找到依据，请向用户确认。"
-                    )
 
     def dispatch(self, args: dict, *, context=None) -> BusinessToolResult:
         entity = args["entity"]
@@ -893,6 +1009,12 @@ class ConventionStatusHandler:
         if spec is None:
             dedicated_fn = getattr(self.port, "dedicated_tool_for", None)
             dedicated = dedicated_fn(entity, "status") if callable(dedicated_fn) else None
+            if not dedicated:
+                update_spec = self.port.update_specs().get(entity)
+                if update_spec is not None and update_spec.resolve_field("status") is not None:
+                    raise BusinessToolRequestError(
+                        f"实体「{entity}」无独立两态状态接口，但其 status 字段可通过 propose_operation(\"update_record\", ...) 直接修改。"
+                    )
             raise BusinessToolRequestError(cap.unsupported_status_message(entity, dedicated=dedicated))
         resolved = spec.resolve_state(str(args.get("status") or ""))
         if resolved is None:
@@ -1172,7 +1294,12 @@ __all__ = [
     "ConventionWritePort",
     "TwoStateStatusSpec",
     "WriteRouteCapability",
+    "collect_provenance_context",
     "convention_tool_definitions",
     "normalize_changes_argument",
+    "normalize_create_arguments",
+    "normalize_field_items",
+    "normalize_update_arguments",
     "resolve_write_route_capability",
+    "validate_single_field_provenance",
 ]
