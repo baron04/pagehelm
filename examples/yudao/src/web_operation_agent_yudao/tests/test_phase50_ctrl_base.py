@@ -308,6 +308,81 @@ class Phase50CtrlBaseTests(unittest.TestCase):
         self.assertIn("全局模块里", miss)
         self.assertNotIn("确切名称时，如实说明这些模块没有该名称", miss)
 
+    def test_host_forget_closed_and_bootstrap_eviction(self):
+        import threading
+        from unittest.mock import patch
+        from web_operation_agent_yudao.host.native_server import YudaoHost, _Active
+
+        host = YudaoHost.__new__(YudaoHost)
+        host._lock = threading.RLock()
+        host._draining = False
+        host._sessions = {}
+        host.config = SimpleNamespace(
+            api_base="http://localhost:48080",
+            native_writes=False,
+            native_write_preparation=False,
+            principal_lifetime_s=600,
+        )
+
+        def dead_channel():
+            def _fail():
+                raise RuntimeError("closed")
+
+            return SimpleNamespace(validate_live=_fail)
+
+        live_channel = SimpleNamespace(validate_live=lambda: None)
+        host._sessions[("1", "u1", "dead-tab")] = _Active(
+            session=SimpleNamespace(channel=dead_channel()),
+            client=SimpleNamespace(renew=lambda _t: None),
+            delegation_id="d1",
+        )
+        renewed_principals = []
+        renewed_tokens = []
+        live_session = SimpleNamespace(
+            channel=live_channel,
+            renew_principal=lambda p: renewed_principals.append(p),
+        )
+        host._sessions[("1", "u1", "live-tab")] = _Active(
+            session=live_session,
+            client=SimpleNamespace(renew=lambda tok: renewed_tokens.append(tok)),
+            delegation_id="d-live",
+        )
+        self.assertEqual(host.forget_closed(), 1)
+        self.assertEqual(list(host._sessions.keys()), [("1", "u1", "live-tab")])
+
+        app_calls = []
+        open_calls = []
+        host._application = lambda *a, **k: (
+            app_calls.append(1)
+            or SimpleNamespace(
+                ports=SimpleNamespace(
+                    identity=SimpleNamespace(bind=lambda page, delegation_id, lifetime_s: SimpleNamespace(delegation_id=delegation_id))
+                )
+            )
+        )
+        host._open = lambda app, principal, key, page_window: (open_calls.append(key) or SimpleNamespace(channel=live_channel))
+        host._browser_bootstrap = lambda session: {"ok": True, "session": id(session)}
+
+        fake_client = SimpleNamespace(_login=lambda: "u1", tenant="1", renew=lambda _t: None)
+        fake_page = SimpleNamespace(actor_id="u1")
+        with (
+            patch("web_operation_agent_yudao.host.native_server.YudaoClient.for_token", return_value=fake_client),
+            patch("web_operation_agent_yudao.host.native_server.YudaoIdentityPort") as id_cls,
+        ):
+            id_inst = id_cls.return_value
+            id_inst.page_identity.return_value = fake_page
+            id_inst.bind.side_effect = lambda page, delegation_id, lifetime_s: SimpleNamespace(delegation_id=delegation_id)
+            res_live = host.bootstrap("tok-new", "1", "live-tab")
+            self.assertTrue(res_live["ok"])
+            self.assertEqual(renewed_tokens, ["tok-new"])
+            self.assertEqual(app_calls, [])
+            live_channel.validate_live = lambda: (_ for _ in ()).throw(RuntimeError("evicted"))
+            res_new = host.bootstrap("tok-next", "1", "fresh-tab")
+            self.assertTrue(res_new["ok"])
+            self.assertEqual(len(app_calls), 1)
+            self.assertEqual(open_calls, [("1", "u1", "fresh-tab")])
+            self.assertEqual(list(host._sessions.keys()), [("1", "u1", "fresh-tab")])
+
 
 if __name__ == "__main__":
     unittest.main()

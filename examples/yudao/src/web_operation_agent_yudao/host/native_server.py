@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import gc
 import hashlib
 import json
 import math
@@ -459,13 +460,14 @@ class YudaoHost:
         try:
             # Verify the browser token before assembling optional write tools: their
             # dictionary choices are read from yudao during application construction.
-            page = YudaoIdentityPort(self.config.api_base, client).page_identity(token)
+            native_writes = self.config.native_writes or self.config.native_write_preparation
+            identity_port = YudaoIdentityPort(self.config.api_base, client, native_writes=native_writes)
+            page = identity_port.page_identity(token)
             key = (tenant, page.actor_id, instance)
-            page_window = _PageWindow(instance)
-            app = self._application(client, window=page_window)
             with self._lock:
                 if self._draining:
                     raise BootstrapRefused(503, "server_draining")
+                self.forget_closed()
                 active = self._sessions.get(key)
                 if active is not None:
                     try:
@@ -473,11 +475,14 @@ class YudaoHost:
                     except Exception:  # noqa: BLE001 -- a session that ended is replaced
                         active.session.close("bootstrap_replaced")
                         self._sessions.pop(key, None)
+                        gc.collect()
                     else:
                         # The same person, the page's newer token: the session goes on reading
                         # as them, under this page's own lease.
                         active.client.renew(token)
-                        principal = app.ports.identity.bind(
+                        principal = YudaoIdentityPort(
+                            self.config.api_base, active.client, native_writes=native_writes
+                        ).bind(
                             page, delegation_id=active.delegation_id,
                             lifetime_s=self.config.principal_lifetime_s)
                         try:
@@ -486,10 +491,13 @@ class YudaoHost:
                             if not str(getattr(exc, "code", "")).startswith("session_busy_"):
                                 raise
                         return self._browser_bootstrap(active.session)
+                page_window = _PageWindow(instance)
+                app = self._application(client, window=page_window)
                 principal = app.ports.identity.bind(
                     page, delegation_id="yudao-" + uuid.uuid4().hex,
                     lifetime_s=self.config.principal_lifetime_s)
                 session = self._open(app, principal, key, page_window)
+                self.forget_closed()
                 self._sessions[key] = _Active(session=session, client=client,
                                               delegation_id=principal.delegation_id)
                 return self._browser_bootstrap(session)
@@ -868,13 +876,18 @@ class YudaoHost:
                     page_write_guard=session.page_write_guard,
                     sensitive_query_keys=session.sensitive_query_keys)}
 
-    def forget_closed(self) -> None:
+    def forget_closed(self) -> int:
+        removed = 0
         with self._lock:
             for key, active in list(self._sessions.items()):
                 try:
                     active.session.channel.validate_live()
                 except Exception:  # noqa: BLE001 -- closed or expired
-                    self._sessions.pop(key, None)
+                    if self._sessions.pop(key, None) is not None:
+                        removed += 1
+        if removed:
+            gc.collect()
+        return removed
 
     def close(self) -> None:
         self._model_connection_pool.close_all()
