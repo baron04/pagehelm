@@ -207,13 +207,16 @@ BACKEND_WRITE_ATOMICITY = _import_attr(
 )
 
 # Contacts second-application imports
-from testapps.contacts.adapter import MinimalContactsAdapter
+from testapps.contacts.adapter import (
+    ContactsModelGoalPort,
+    MinimalContactsAdapter,
+    contacts_profile,
+)
 from testapps.contacts.app import (
     DEMO_ACTORS,
     DEMO_SESSION_COOKIE,
     MinimalContactsApplication,
 )
-from testapps.contacts.model_loop import ContactsModelGoalPort, contacts_profile
 
 
 ORIGIN = "https://synthetic.test"
@@ -627,6 +630,7 @@ class _YudaoBrowserDouble:
         timeout_s: float = 10.0,
         turn_id: str = "",
         form_state: dict[str, Any] | None = None,
+        row_state: dict[str, Any] | None = None,
         on_submit_click: Callable[[dict[str, Any]], None] | None = None,
         open_dialog_elements: Callable[[int], list[ElementRef]] | None = None,
         customer_select_elements: Callable[[int], list[ElementRef]] | None = None,
@@ -638,6 +642,7 @@ class _YudaoBrowserDouble:
         self.closed = False
         self.seq = 0
         self.form_state = form_state
+        self.row_state = row_state
         self.on_submit_click = on_submit_click
         self.open_dialog_elements = open_dialog_elements
         self.customer_select_elements = customer_select_elements
@@ -728,7 +733,15 @@ class _YudaoBrowserDouble:
                 )
         elif action == "form_model":
             kind = args.get("kind")
-            if self.form_state is None:
+            if kind == "row":
+                form_data = (
+                    copy.deepcopy(self.row_state)
+                    if self.row_state is not None
+                    else {"record_id": "", "name": "", "source": "", "check": ""}
+                )
+            elif kind == "confirm":
+                form_data = {"open": False, "text": "", "buttons": []}
+            elif self.form_state is None:
                 form_data = {"model": {}, "mode": "create", "record_id": "", "items": [], "withheld": [], "invalid": []}
             elif kind == "form":
                 model = copy.deepcopy(self.form_state["model"])
@@ -755,8 +768,6 @@ class _YudaoBrowserDouble:
                     "invalid": [],
                     "validation": True,
                 }
-            elif kind == "confirm":
-                form_data = {"open": False, "text": "", "buttons": []}
         elif action == "form_submit":
             if self.on_submit_click is not None:
                 self.on_submit_click(args)
@@ -899,6 +910,7 @@ def _synthetic_yudao_docs() -> dict[str, Any]:
                     "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}},
                 }
             },
+            "/admin-api/promotion/coupon-template/update-status": {"put": {}},
             "/admin-api/system/auth/get-permission-info": {"get": {}},
             "/admin-api/system/dict-data/simple-list": {"get": {}},
             "/admin-api/system/dept/simple-list": {"get": {}},
@@ -1048,6 +1060,8 @@ class _SyntheticYudaoClient(YudaoClient):
                 {"id": 2, "name": "客户管理", "path": "customer", "parentId": 1, "type": 2, "visible": True},
                 {"id": 3, "name": "联系人", "path": "contact", "parentId": 1, "type": 2, "visible": True},
                 {"id": 4, "name": "销售订单", "path": "/orders", "parentId": 0, "type": 2, "visible": True},
+                {"id": 5, "name": "优惠券模板", "path": "/promotion", "parentId": 0, "type": 1, "visible": True},
+                {"id": 6, "name": "优惠券模板", "path": "coupon-template", "parentId": 5, "type": 2, "visible": True},
             ]}
         if path == "crm/permission/list":
             return 0, {"code": 0, "data": [{"userId": 9, "level": 1}]}
@@ -1180,6 +1194,7 @@ def _run_yudao_scenario(
     use_read_only_window: bool = False,
     enable_prefill: bool = False,
     form_state: dict[str, Any] | None = None,
+    row_state: dict[str, Any] | None = None,
     open_dialog_elements: Callable[[int], list[ElementRef]] | None = None,
     customer_select_elements: Callable[[int], list[ElementRef]] | None = None,
     early_exit_multi_read: bool = False,
@@ -1240,7 +1255,10 @@ def _run_yudao_scenario(
         mutation_prefill = YudaoMutationPrefill(client, forms, page_review) if enable_prefill else None
         submit_port = YudaoSubmitPort(client, proxy, lambda: docs, window="tab-1")
         if native_submit_enabled:
-            guard.note_read(actor, "/admin-api/crm/contact/get?id=10")
+            if row_state is not None:
+                guard.note_read(actor, str(row_state.get("source") or "/admin-api/promotion/coupon-template/page"))
+            else:
+                guard.note_read(actor, "/admin-api/crm/contact/get?id=10")
 
         turn_config = yudao_turn_config(
             tmp_path,
@@ -1303,14 +1321,21 @@ def _run_yudao_scenario(
         def on_submit_click(_args: dict[str, Any]) -> None:
             actor_state = guard._actor(actor)
             permit = actor_state.permit_pending or actor_state.permit
-            body = copy.deepcopy(form_state["model"])
-            decision = permit.admit("PUT", "/admin-api/crm/contact/update", "", json.dumps(body).encode()) if permit else None
+            if _args.get("kind") == "row" and row_state is not None:
+                body = {"id": int(row_state["record_id"]), "status": 1}
+                path = "/admin-api/promotion/coupon-template/update-status"
+                entity = "promotion/coupon-template"
+            else:
+                body = copy.deepcopy(form_state["model"])
+                path = "/admin-api/crm/contact/update"
+                entity = "crm/contact"
+            decision = permit.admit("PUT", path, "", json.dumps(body).encode()) if permit else None
             if decision is not None and decision.allowed:
                 permit.settle(decision.sequence, 200, b'{"code":0,"data":true}')
-                client.records[("crm/contact", int(body["id"]))].update(body)
+                client.records[(entity, int(body["id"]))].update(body)
                 client.dispatched_writes.append({
                     "method": "PUT",
-                    "path": "/admin-api/crm/contact/update",
+                    "path": path,
                     "body": copy.deepcopy(body),
                     "params": None,
                     "operation": "native_submit",
@@ -1319,6 +1344,7 @@ def _run_yudao_scenario(
         browser = _YudaoBrowserDouble(
             channel,
             form_state=form_state,
+            row_state=row_state,
             on_submit_click=on_submit_click if native_submit_enabled else None,
             open_dialog_elements=open_dialog_elements,
             customer_select_elements=customer_select_elements,
@@ -1592,57 +1618,91 @@ def run_all_scenarios() -> list[dict[str, Any]]:
     ))
 
     # Family 4: YudaoSubmitPort (native_submit): approved, prefill handoff, denied, reread drift refusal
-    def _contact_form_state() -> dict[str, Any]:
+    def _coupon_row_state() -> dict[str, Any]:
         return {
-            "mode": "update",
-            "record_id": "10",
-            "source": "/admin-api/crm/contact/get",
-            "model": {
-                "id": 10, "name": "林舟", "customerId": 20, "ownerUserId": 9,
-                "mobile": "13800000001", "email": "lin@example.test", "remark": "保留备注",
-            },
-            "items": [
-                {"prop": "name", "label": "姓名"},
-                {"prop": "mobile", "label": "手机"},
-                {"prop": "remark", "label": "备注"},
-            ],
+            "record_id": "7",
+            "name": "合成满减券",
+            "source": "/admin-api/promotion/coupon-template/page",
+            "check": "row-coupon-7-v1",
         }
 
-    def _contact_edit_obs(epoch: int = 1) -> PageObservation:
+    def _coupon_row_obs(epoch: int = 1) -> PageObservation:
         return _make_yudao_obs(
             epoch,
-            url=ORIGIN + "/crm/contact",
-            title="CRM 联系人",
-            page_route="/crm/contact",
+            url=ORIGIN + "/promotion/coupon-template",
+            title="优惠券模板",
+            page_route="/promotion/coupon-template",
             elements=[
-                ElementRef("e1", "textbox", "手机", "input", epoch, {
-                    "form_scope": "dialog:edit-contact", "form_instance": "i1",
-                    "field_label": "手机", "value": "13800000001", "prop": "mobile",
-                }),
-                ElementRef("e2", "button", "保存", "button", epoch, {
-                    "form_scope": "dialog:edit-contact", "form_instance": "i1", "native_submit": "true",
+                ElementRef("e1", "button", "停用", "button", epoch, {
+                    "row_id": "7", "native_submit": "true",
                 }),
             ],
         )
 
     scenarios.append(_run_yudao_scenario(
         scenario="yudao_native_submit_approved",
-        prompt="把联系人林舟的手机改成13800000002并保存",
-        initial_obs=_contact_edit_obs(1),
+        prompt="把优惠券模板合成满减券停用",
+        page_url=ORIGIN + "/promotion/coupon-template",
+        initial_obs=_coupon_row_obs(1),
         native_writes=True,
         native_submit_enabled=True,
         use_read_only_window=True,
         confirm_page_operations=True,
-        form_state=_contact_form_state(),
+        row_state=_coupon_row_state(),
+        steps=[
+            _tool_reply(("request_submit", {"index": 1})),
+            lambda msgs, _tools: _tool_reply(("finish", {
+                "status": "done",
+                "answer": "已停用优惠券模板合成满减券。",
+                "items": [{
+                    "item": "停用优惠券模板合成满减券",
+                    "kind": "write",
+                    "status": "delivered",
+                    "receipts": [_extract_receipt(msgs)],
+                }],
+            })),
+        ],
+    ))
+
+    scenarios.append(_run_yudao_scenario(
+        scenario="yudao_native_submit_form_handoff",
+        prompt="把林舟的手机号预填为 13800000002 并交给用户自己保存，不要提交",
+        page_url=ORIGIN + "/crm/contact",
+        initial_obs=_make_yudao_obs(
+            1,
+            url=ORIGIN + "/crm/contact",
+            title="CRM 联系人",
+            page_route="/crm/contact",
+            elements=[
+                ElementRef("e1", "textbox", "手机", "input", 1, {
+                    "form_scope": "dialog:edit-contact", "form_instance": "i1",
+                    "field_label": "手机", "value": "13800000001",
+                }),
+                ElementRef("e2", "button", "保存", "button", 1, {
+                    "form_scope": "dialog:edit-contact", "form_instance": "i1",
+                }),
+            ],
+        ),
+        native_writes=True,
+        native_submit_enabled=True,
+        use_read_only_window=True,
+        confirm_page_operations=True,
+        form_state={
+            "mode": "update",
+            "record_id": "10",
+            "source": "/admin-api/crm/contact/get?id=10",
+            "items": [],
+            "model": {"id": 10, "name": "林舟", "mobile": "13800000001", "customerId": 1, "ownerUserId": 9},
+        },
         steps=[
             _tool_reply(("input", {"index": 1, "text": "13800000002"})),
             _tool_reply(("request_submit", {"index": 2})),
             lambda msgs, _tools: _tool_reply(("finish", {
                 "status": "done",
-                "answer": "已保存林舟的手机号为 13800000002。",
+                "answer": "已将联系人林舟的手机号预填为 13800000002，尚未提交。",
                 "items": [{
-                    "item": "保存林舟手机号为 13800000002",
-                    "kind": "write",
+                    "item": "预填林舟手机号为 13800000002 并标出保存",
+                    "kind": "page",
                     "status": "delivered",
                     "receipts": [_extract_receipt(msgs)],
                 }],
@@ -1706,39 +1766,39 @@ def run_all_scenarios() -> list[dict[str, Any]]:
 
     scenarios.append(_run_yudao_scenario(
         scenario="yudao_native_submit_denied",
-        prompt="把联系人林舟的手机改成13800000002并保存",
-        initial_obs=_contact_edit_obs(1),
+        prompt="把优惠券模板合成满减券停用",
+        page_url=ORIGIN + "/promotion/coupon-template",
+        initial_obs=_coupon_row_obs(1),
         native_writes=True,
         native_submit_enabled=True,
         use_read_only_window=True,
         confirm_page_operations=False,
         approval_decision="denied",
-        form_state=_contact_form_state(),
+        row_state=_coupon_row_state(),
         steps=[
-            _tool_reply(("input", {"index": 1, "text": "13800000002"})),
-            _tool_reply(("request_submit", {"index": 2})),
+            _tool_reply(("request_submit", {"index": 1})),
         ],
     ))
 
-    def _drift_contact_record(request, drift_client: _SyntheticYudaoClient) -> None:
+    def _drift_coupon_record(request, drift_client: _SyntheticYudaoClient) -> None:
         if request.kind == "write":
             # Mutate the underlying record after approval card is shown but before pre-submit reread
-            drift_client.records[("crm/contact", 10)]["remark"] = "并发修改后的备注"
+            drift_client.records[("promotion/coupon-template", 7)]["description"] = "并发修改后的说明"
 
     scenarios.append(_run_yudao_scenario(
         scenario="yudao_native_submit_reread_drift",
-        prompt="把联系人林舟的手机改成13800000002并保存",
-        initial_obs=_contact_edit_obs(1),
+        prompt="把优惠券模板合成满减券停用",
+        page_url=ORIGIN + "/promotion/coupon-template",
+        initial_obs=_coupon_row_obs(1),
         native_writes=True,
         native_submit_enabled=True,
         use_read_only_window=True,
         confirm_page_operations=False,
         approval_decision="approved",
-        on_approval=_drift_contact_record,
-        form_state=_contact_form_state(),
+        on_approval=_drift_coupon_record,
+        row_state=_coupon_row_state(),
         steps=[
-            _tool_reply(("input", {"index": 1, "text": "13800000002"})),
-            _tool_reply(("request_submit", {"index": 2})),
+            _tool_reply(("request_submit", {"index": 1})),
         ],
     ))
 

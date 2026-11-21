@@ -31,7 +31,7 @@
 - **同账号服务端读取 + 确定性计算**：通过 `ApplicationPorts` 与当前登录人身份绑定执行只读接口查询；支持并发预取与主线程按序提交、`Decimal` 精确汇总（`read_summary`）、单轮进程内只读 SQLite（`TurnTables`，`SELECT`/`WITH` 白名单）以及零转抄交互式 `<DataTable>` 渲染。
 - **真实标签页 DOM 操作与交接**：`PageController` 提供有界快照（单帧最多 200 个交互元素、弹窗优先采集）与去噪稳定监测（`PageSettleWatch`）；表单预填返回精确的已填/原值/跳过/受限字段回执，支持面板内一键撤销（`undoFormFill`）与视觉引导人工提交。
 - **六阶段 `WritePipeline` 写安全治理**：统一收口类型化写入 Skill、对称平铺约定更新（`ConventionWritePort`）与原生表单提交（`SubmitPort`）——依次完成提案差异校验、防遮挡可见审批（覆盖率 `>= 0.9`、连续露出 `>= 400ms`、`event.isTrusted`）、单飞并发锁、派发前漂移复读、至多派发一次与同账号回读核验。
-- **业务口径消歧与渐进式接入（L0–L3）**：通过 `domain_playbooks/*.md` 澄清跨模块业务术语，命中多条同名记录时弹出可点选消歧胶囊（`need_input`）；支持从单 `<script>` 标签挂载（L0）平滑升级到只读端口（L1）、口径消歧（L2）和核验写入（L3）。
+- **声明式接入底座与业务口径消歧**：通过服务端 `IdentityResolver`、OpenAPI（`entities_from_openapi`）或 `EntitySpec` / `PageSpec` / `FormSpec`、前端组件 Preset 与 `DeclarativeSessionHost` 快速接入；支持 `domain_playbooks/*.md` 口径消歧与可点选 `need_input` 胶囊。
 - **生产级隔离、预算与可观测**：Web Locks 解决“复制标签页”会话串线；URL 与出站请求执行多层递归解码脱敏（`AuditedChat`）；提供单轮 / 按日 / 全局三层预算护栏、SQLite WAL 在线一致性备份与 `INDETERMINATE` 人工对账工具，以及无正文泄露的 OTLP 遥测与 `TurnTrace` 回放。
 
 ---
@@ -90,22 +90,22 @@ cp pagehelm.example.toml pagehelm.toml
 
 日常改动检查可通过 `.venv/bin/python scripts/check.py --plan && .venv/bin/python scripts/check.py` 执行（不调用付费模型）。
 
-### 2. 接入自己的 Web 应用（L0–L3）
+### 2. 接入自己的 Web 应用（声明式接入原型）
 
-如果你要将 PageHelm 接入自有后台，无需准备 `yudao` 示例缓存，按投入逐级接入即可：
+核心层 `web_operation_agent` 提供应用无关的端口契约（`ApplicationPorts`、`WritePipeline`、`CompiledWrites`）与内置 `TurnTables` SQL 引擎（`execution/turn_tables.py`）；`testapps/contacts/declarative/` 展示了面向 REST/HTML 后台的三项声明式输入装配方式（按双应用验证原则暂置于 `testapps/contacts/` 下，待第二个异构适配器验证后再上浮核心）：
 
-| 等级 | 宿主侧工作 | 获得能力 | 仓内参考 |
+| 层次 | 宿主输入 | 解锁能力 | 仓内参考 |
 | --- | --- | --- | --- |
-| **L0** | 挂载 `/v1/runtime/assistant.js` 与 `/bootstrap` | Shadow DOM 面板、有界页面操作、Element Plus 公共适配层 | `frontend/src/integrations/element-plus/` |
-| **L1** | 实现身份、路由与只读数据端口 | 同账号查询、`TurnTables` 内存 SQL 与 `<DataTable>` 输出 | [`testapps/contacts`](testapps/contacts/adapter.py) |
-| **L2** | 补充领域口径手册与 `entity_rules` | 跨模块术语消歧、拒绝条件说明与可点选 `need_input` 胶囊 | [L0–L3 接入指南](docs/zh-cn/integration/levels.md) |
-| **L3** | 接入写入账本、后置核验与 Skill / `SubmitPort` | 类型化写入、对称 `update_record`、原生提交与撤销预填 | [写入安全与隐私边界](docs/zh-cn/security/verified-writes.md) |
+| **服务端身份** | `IdentityResolver` / `HttpWhoamiIdentityPort` | 可信 Cookie/Token 反查 `ResolvedActor`，失效拒绝 | [`declarative.py`](testapps/contacts/declarative/declarative.py) |
+| **元数据与只读能力** | `entities_from_openapi` 或 `EntitySpec` / `PageSpec` / `FormSpec` | 同账号查询、内置 `TurnTables` 内存 SQL 与 `<DataTable>` 输出 | [应用声明式接入指南](docs/zh-cn/integration/onboarding.md) |
+| **前端 Preset 与宿主** | `assistant.js` + `FRONTEND_PRESETS` + `DeclarativeSessionHost` | Shadow DOM 面板、有界 DOM 操控与会话/预算持久化宿主 | [`testapps/contacts/adapter.py`](testapps/contacts/adapter.py) |
+| **可选核验写入** | `TypedWriteSpec`、`convention_updates`、`CompiledWrites`、`SubmitSpec` | `WritePipeline` 单次可见审批、四类编译写入与可撤销预填 | [写入安全与隐私边界](docs/zh-cn/security/verified-writes.md) |
 
 ---
 
 ## 文档与许可
 
-- **起步与接入**：[文档中心](docs/zh-cn/index.md) · [本地示例上手](docs/zh-cn/integration/quickstart.md) · [L0–L3 接入指南](docs/zh-cn/integration/levels.md) · [Skill 与类型化写入](docs/zh-cn/integration/skills-and-writes.md)
+- **起步与接入**：[文档中心](docs/zh-cn/index.md) · [本地示例上手](docs/zh-cn/integration/quickstart.md) · [应用声明式接入指南](docs/zh-cn/integration/onboarding.md) · [Skill 与类型化写入](docs/zh-cn/integration/skills-and-writes.md)
 - **架构与执行**：[架构总览](docs/zh-cn/architecture/overview.md) · [执行引擎与浏览器运行时](docs/zh-cn/architecture/execution-and-runtime.md)
 - **安全与运维**：[写入安全与隐私边界](docs/zh-cn/security/verified-writes.md) · [部署、运维与排障](docs/zh-cn/security/operations-and-observability.md)
 - **参考手册**：[配置与通信协议](docs/zh-cn/reference/protocol-and-configuration.md) · [内置工具、能力与自检](docs/zh-cn/reference/tools-and-capabilities.md)

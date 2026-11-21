@@ -45,11 +45,11 @@ skills/<kebab-case-name>/
 2. **审批与并发锁**：由 `WritePipeline` 展示审批卡片、消费单次审批并进入单飞锁（见 [写入安全与隐私边界](../security/verified-writes.md)）。
 3. **`execute_mutation(proposal, approval, context, claimed=...)`**：调用外部写接口前先回调 `claimed()` 落盘意图；若标记 `claimed` 后发生超时或连接中断，抛出 `BusinessMutationIndeterminate` 且不重试；写接口返回后通过 `ResultPostconditionVerifier` 按同一操作员身份回读核验。
 
-参考实现见 `testapps/contacts/adapter.py` 与 `src/web_operation_agent/business/write_pipeline.py`（提供 `change_detail`、`create_detail`、`preserved_detail`、`side_effect_detail`、`derived_detail`、`target_rule_detail`、`body_detail` 辅助构造函数）。
+参考实现见 `testapps/contacts/adapter.py`（`TypedWriteSpec`）、`testapps/contacts/declarative/declarative_writes.py`、`src/web_operation_agent/business/compiled_writes.py` 与 `src/web_operation_agent/business/write_pipeline.py`（提供 `change_detail`、`create_detail`、`preserved_detail`、`side_effect_detail`、`derived_detail`、`target_rule_detail`、`body_detail` 辅助构造函数）。
 
 ## 三、扁平对称约定更新（`ConventionWritePort`）
 
-如果系统存在大量结构简单的编辑实体，为每个实体手写写工具成本较高。在 `GoalPort.capabilities()` 声明 `"updates"` 后，可通过 `ConventionWritePort`（`src/web_operation_agent/business/convention_writes.py`）自动派生写入能力：
+如果系统存在大量结构简单的编辑实体，为每个实体手写写工具成本较高。在 `GoalPort.capabilities()` 声明 `"updates"` 后，可通过 `DeclarativeConventionWritePort`（`testapps/contacts/declarative/declarative_writes.py`）或核心层的 `ConventionWritePort` / `CompiledWrites`（`src/web_operation_agent/business/convention_writes.py`、`src/web_operation_agent/business/compiled_writes.py`）自动派生写入能力：
 
 - **字段规范（`ConventionFieldSpec`）**：仅面向读写 1:1 往返对称的顶层标量字段（`string`、`integer`、`number`、`boolean`、`id_array`），支持定点单位缩放（`unit_scale`，如人民币分 `100`）与时间戳格式（`epoch_ms`、`datetime`、`date`）。
 - **敏感字段排除**：字段名或标签匹配 `DEFAULT_SECRET_FIELD_PATTERN`（密码、密钥、Token 等）的字段不会暴露给约定更新。

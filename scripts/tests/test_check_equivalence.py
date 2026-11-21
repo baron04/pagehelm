@@ -108,6 +108,7 @@ class EquivalenceHarnessTests(unittest.TestCase):
             "yudao_skill_write_denied": ("cancelled", "approval_denied"),
             "yudao_skill_write_readback_timeout": ("indeterminate", "indeterminate_write"),
             "yudao_native_submit_approved": ("finished", "agent_finished"),
+            "yudao_native_submit_form_handoff": ("finished", "agent_finished"),
             "yudao_native_submit_prefill": ("finished", "agent_finished"),
             "yudao_native_submit_denied": ("cancelled", "approval_denied"),
             "yudao_native_submit_reread_drift": ("refused", "business_mutation_refused"),
@@ -128,6 +129,9 @@ class EquivalenceHarnessTests(unittest.TestCase):
         self.assertEqual(len(by_name["yudao_skill_write_denied"]["dispatched_writes"]), 0)
         self.assertEqual(len(by_name["yudao_skill_write_readback_timeout"]["dispatched_writes"]), 1)
         self.assertEqual(len(by_name["yudao_native_submit_approved"]["dispatched_writes"]), 1)
+        self.assertEqual(len(by_name["yudao_native_submit_form_handoff"]["dispatched_writes"]), 0)
+        self.assertFalse(any(r["kind"] == "write" for r in by_name["yudao_native_submit_form_handoff"]["approval_requests"]))
+        self.assertIn("手动点击「保存」提交", by_name["yudao_native_submit_form_handoff"]["result"]["user_answer"])
         self.assertEqual(len(by_name["yudao_native_submit_prefill"]["dispatched_writes"]), 0)
         self.assertTrue(by_name["yudao_native_submit_prefill"]["approval_requests"][0]["offer_prefill"])
         self.assertEqual(len(by_name["yudao_native_submit_denied"]["dispatched_writes"]), 0)

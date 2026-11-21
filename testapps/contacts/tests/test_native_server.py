@@ -1799,9 +1799,8 @@ class ContactsWireSubmitTests(unittest.TestCase):
         return host
 
     def test_approved_update_goes_once_through_the_real_window_gate_and_reads_back(self):
-        from testapps.contacts.adapter import MinimalContactsAdapter
+        from testapps.contacts.adapter import ContactsSubmitPort, MinimalContactsAdapter
         from testapps.contacts.app import MinimalContactsApplication
-        from testapps.contacts.native_submit import ContactsSubmitPort
         from testapps.contacts.server import admit_armed_write
         with MinimalContactsApplication() as application:
             adapter = MinimalContactsAdapter(application.origin, api_token=DEMO_API_TOKEN)
@@ -1850,9 +1849,8 @@ class ContactsWireSubmitTests(unittest.TestCase):
                              application.write_journal)
 
     def test_unrestorable_self_edit_refuses_before_the_card(self):
-        from testapps.contacts.adapter import MinimalContactsAdapter
+        from testapps.contacts.adapter import ContactsSubmitPort, MinimalContactsAdapter
         from testapps.contacts.app import MinimalContactsApplication
-        from testapps.contacts.native_submit import ContactsSubmitPort
         from testapps.contacts.server import admit_armed_write
         with MinimalContactsApplication() as application:
             adapter = MinimalContactsAdapter(application.origin, api_token=DEMO_API_TOKEN)

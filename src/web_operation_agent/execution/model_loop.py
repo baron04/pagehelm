@@ -258,6 +258,15 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
         tables = turn.get("finish_tables") if hasattr(turn, "get") else None
         if isinstance(tables, dict) and table_ref in tables:
             return tables[table_ref]
+        turn_tables = turn.get("turn_tables") if hasattr(turn, "get") else None
+        if isinstance(turn_tables, tuple) and turn_tables:
+            turn_tables = turn_tables[0]
+        if turn_tables is not None and hasattr(turn_tables, "export_table"):
+            from .turn_tables import TurnReadError
+            try:
+                return turn_tables.export_table(table_ref)
+            except TurnReadError:
+                return None
         return None
 
     def _closing(self, s, turn, args):
@@ -544,8 +553,9 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             return self._page_action_outcome
         page = _ProcedurePage(lambda: PageObservation.from_json(s.obs.to_json()), execute,
                               checkpoint, lambda: bool(s.terminal_reason))
+        turn_tables = turn.get("turn_tables") if hasattr(turn, "get") else None
         return PageProcedureContext(context, page, lambda facts: self._note(s, **facts),
-                                    s.ledger.append, s.receipt.stage)
+                                    s.ledger.append, s.receipt.stage, turn_tables=turn_tables)
 
     def _run(self, s):
         self._trace = None
@@ -654,6 +664,16 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             prepared=s.obs is not None,
             read_only=not s.approvals.mutations_enabled,
         )
+        if any(
+            (p.schema.get("function") or {}).get("name") in {"sql", "tables"}
+            for p in self.profile.procedures
+        ):
+            from .turn_tables import TurnTables
+            turn["turn_tables"] = TurnTables(
+                SessionHandoffPolicy.extending(
+                    self.application.ports.routes.session_handoff_query_keys
+                )
+            )
         self._trace_steps = turn.trace
         prompt = s.message.text
         starting_page = self._page(s, turn)
@@ -668,6 +688,9 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             return self._loop(s, prompt, turn, verified=not self.verify)
         finally:
             self._carried_skills = tuple(sorted(turn.skills))
+            tables = turn.pop("turn_tables", None)
+            if tables is not None and hasattr(tables, "close"):
+                tables.close()
 
     def _settle(self, s, current, text):
         trace, self._trace = self._trace, None

@@ -99,7 +99,7 @@ export default defineConfig({
           translations: { 'zh-cn': '起步与接入' },
           items: [
             { label: 'Local Demo Quickstart', translations: { 'zh-cn': '本地示例上手' }, slug: 'integration/quickstart' },
-            { label: 'L0–L3 Integration Guide', translations: { 'zh-cn': 'L0–L3 接入指南' }, slug: 'integration/levels' },
+            { label: 'Application Onboarding', translations: { 'zh-cn': '应用声明式接入' }, slug: 'integration/onboarding' },
             { label: 'Skills & Typed Writes', translations: { 'zh-cn': 'Skill 与类型化写入' }, slug: 'integration/skills-and-writes' },
           ],
         },

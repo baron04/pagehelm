@@ -5,7 +5,7 @@ envelope and a different timezone than the other adapter running this same suite
 """
 import unittest
 
-from testapps.contacts.native_submit import ContactsSubmitPort
+from testapps.contacts.adapter import ContactsSubmitPort
 from web_operation_agent.tests.execution.write_contract_suite import (
     Fixture, SharedSubmitContractSuite)
 

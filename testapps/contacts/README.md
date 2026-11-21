@@ -9,10 +9,10 @@ Its files mirror the responsibilities a real integration implements:
 | File | What it is | Do you write this? |
 |---|---|---|
 | [`app.py`](app.py) | The synthetic Contacts application: a list page, a record page per contact, a typed read and write API, two credentials, users with different permissions, two workspaces that repeat contact names, and the same-origin PageController the SPI requires a host to serve | **No** — your application already exists. This file exists so the example runs with nothing provisioned |
-| [`adapter.py`](adapter.py) | Identity, routes, current forms, postconditions, reconciliation and data classification, plus one dedicated read, one write, and REST/list implementations of the application-neutral entity-read and current-form contracts | See the Yudao adapter for the reference integration |
+| [`adapter.py`](adapter.py) | Declarative integration built on [`testapps/contacts/declarative/`](declarative/) and core `ApplicationPorts` / `CompiledWrites`: `CONTACTS_OPENAPI` / `entities_from_openapi`, `PageSpec`/`FormSpec`, `TypedWriteSpec`, `StatusToggleSpec`, and `build_declarative_profile` | See the [Declarative Application Onboarding](../../docs/integration/onboarding.md) guide |
 | [`skills/`](skills/) | One Skill artifact per capability: when the tool applies, and the instructions the model follows when it does | Test fixtures only |
 | [`demo.py`](demo.py) | A Playwright-driven qualification composition for repeatable browser tests | **No** — it proves the chain but is not the product host |
-| [`server.py`](server.py) | The ordinary-browser composition: application login, server-side identity binding, durable session/journal state, shared gateway, and ReAct executor | Test host |
+| [`server.py`](server.py) | The ordinary-browser composition subclassing `DeclarativeSessionHost`: application login, server-side identity binding, durable session/journal state, shared gateway, and ReAct/model-loop executor | Test host |
 
 ## Run it
 
@@ -102,9 +102,9 @@ steps, and each exists because of a specific way writes go wrong:
 
 Two consequences worth noticing in the code:
 
-- **A writeable integration needs a real identity port.** `AgentTurnConfig` refuses to
-  enable business mutations without a verified session identity. `_ContactsIdentityPort`
-  asks the application who the browser is and who the delegated token is, *separately*, and
+- **A writeable integration needs a real identity port.** `AgentTurnConfig` refuses to enable
+  business mutations without a verified session identity. `HttpWhoamiIdentityPort` asks
+  the application who the browser is and who the delegated token is, *separately*, and
   `bind_matching_identity` refuses unless both name the same actor. An application with no
   authenticated actor uses `AnonymousIdentityPort` and cannot write.
 - **The application refuses a write carrying only the browser session.** A page that could
@@ -122,7 +122,7 @@ PYTHONPATH=src:. python -m testapps.contacts.demo --allow-mutations --actor rosa
 ```
 
 - **The principal carries what the application grants, not what the catalog offers.**
-  `_ContactsIdentityPort` asks the application what the actor may do. Rosalind's principal
+  `HttpWhoamiIdentityPort` asks the application what the actor may do. Rosalind's principal
   has `contacts:read` only, so the create tool is refused before any request is made; the
   panel says the account is not permitted and nothing changed, and the turn ends there —
   the Agent is never handed the refusal to try the page instead.
@@ -137,7 +137,7 @@ PYTHONPATH=src:. python -m testapps.contacts.demo --allow-mutations --actor rosa
   "not found" is stated only for the scope this account could search.
 
 Reconciliation is the other half of "never retried": when an outcome is lost,
-`_ContactsReconciler` returns `unknown` with `requires_human` and the counts an operator
+`DeclarativeReconciler` returns `unknown` with `requires_human` and the counts an operator
 needs. It never answers "completed" — a matching record is not proof that this proposal
 created it.
 

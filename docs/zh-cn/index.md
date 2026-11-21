@@ -18,7 +18,7 @@ hero:
 | 目标 | 推荐入口 |
 | --- | --- |
 | 想先在本地跑通参考示例，体验查询、预填和审批写入 | [本地示例上手](integration/quickstart.md) |
-| 要把 PageHelm 接入自己的后台系统 | [L0–L3 接入指南](integration/levels.md) · [Skill 与类型化写入](integration/skills-and-writes.md) |
+| 要把 PageHelm 接入自己的后台系统 | [应用声明式接入指南](integration/onboarding.md) · [Skill 与类型化写入](integration/skills-and-writes.md) |
 | 评估系统边界、执行机制与安全模型 | [架构总览](architecture/overview.md) · [写入安全与隐私边界](security/verified-writes.md) |
 | 部署、备份对账或查阅配置与协议字段 | [部署、运维与排障](security/operations-and-observability.md) · [配置与通信协议](reference/protocol-and-configuration.md) |
 

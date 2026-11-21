@@ -21,6 +21,7 @@ DISTRIBUTIONS = {
             "web_operation_agent/business/entities.py",
             "web_operation_agent/business/page_entries.py",
             "web_operation_agent/business/forms.py",
+            "web_operation_agent/execution/turn_tables.py",
             "web_operation_agent/composition/binding.py",
             "web_operation_agent/composition/ports.py",
             "web_operation_agent/skills/artifacts.py",

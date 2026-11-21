@@ -184,7 +184,7 @@ description: pagehelm.toml 与 .env 校验规则、模式展开、HTTP/SSE 端�
 | 单次 POST 请求体（`MAX_BODY_BYTES`） | `1 MiB`（`1,048,576` 字节） | `transport/gateway.py` |
 | 单帧事件上限（`_MAX_EVENT_BYTES`） | `256 KiB` | `transport/protocol.py` |
 | 单页 DOM 观测控件数 | `200`（`max_elements`） | `browser_contract.json` |
-| 单轮临时 `TurnTables` SQLite | `36` 张表、`5000` 行/表、`128` 列、`1.5s` 查询超时 | 适配器 `turn_tables.py` |
-| `<DataTable>` 导出上限 | `24` 列、`2000` 行、`300` 字符/单元格 | 适配器 `turn_tables.py` / `panel_view.py` |
+| 单轮临时 `TurnTables` SQLite | `36` 张表、`5000` 行/表、`128` 列、`1.5s` 查询超时 | `execution/turn_tables.py` |
+| `<DataTable>` 导出上限 | `24` 列、`2000` 行、`300` 字符/单元格 | `execution/turn_tables.py` / `panel_view.py` |
 | 回答契约（Answer Protocol） | `50` 条结论、`2` 次修复、`50` 行展示记录 | `answer/answer_protocol.py` |
 | 单轮模型步数上限 | `24`（核心默认）/ `33`（`YudaoTurnExecutor`） | `panel_contract.json` / `page_prompts.py` |

@@ -12,7 +12,7 @@ const basePrefix = rawBase === '/' ? '' : '/' + rawBase.replace(/^\/+|\/+$/g, ''
 const SECTIONS = [
   { rel: 'index.md', route: '/', lang: 'en' },
   { rel: 'integration/quickstart.md', route: '/integration/quickstart/', lang: 'en' },
-  { rel: 'integration/levels.md', route: '/integration/levels/', lang: 'en' },
+  { rel: 'integration/onboarding.md', route: '/integration/onboarding/', lang: 'en' },
   { rel: 'integration/skills-and-writes.md', route: '/integration/skills-and-writes/', lang: 'en' },
   { rel: 'architecture/overview.md', route: '/architecture/overview/', lang: 'en' },
   { rel: 'architecture/execution-and-runtime.md', route: '/architecture/execution-and-runtime/', lang: 'en' },
@@ -22,7 +22,7 @@ const SECTIONS = [
   { rel: 'reference/tools-and-capabilities.md', route: '/reference/tools-and-capabilities/', lang: 'en' },
   { rel: 'zh-cn/index.md', route: '/zh-cn/', lang: 'zh-cn' },
   { rel: 'zh-cn/integration/quickstart.md', route: '/zh-cn/integration/quickstart/', lang: 'zh-cn' },
-  { rel: 'zh-cn/integration/levels.md', route: '/zh-cn/integration/levels/', lang: 'zh-cn' },
+  { rel: 'zh-cn/integration/onboarding.md', route: '/zh-cn/integration/onboarding/', lang: 'zh-cn' },
   { rel: 'zh-cn/integration/skills-and-writes.md', route: '/zh-cn/integration/skills-and-writes/', lang: 'zh-cn' },
   { rel: 'zh-cn/architecture/overview.md', route: '/zh-cn/architecture/overview/', lang: 'zh-cn' },
   { rel: 'zh-cn/architecture/execution-and-runtime.md', route: '/zh-cn/architecture/execution-and-runtime/', lang: 'zh-cn' },

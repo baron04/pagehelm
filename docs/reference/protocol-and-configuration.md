@@ -184,7 +184,7 @@ Frontend interaction and geometry constants live in `frontend/src/presentation.j
 | POST request body (`MAX_BODY_BYTES`) | `1 MiB` (`1,048,576` bytes) | `transport/gateway.py` |
 | Event frame size (`_MAX_EVENT_BYTES`) | `256 KiB` | `transport/protocol.py` |
 | DOM observation elements | `200` (`max_elements`) | `browser_contract.json` |
-| Per-turn `TurnTables` SQLite | `36` tables, `5000` rows/table, `128` cols, `1.5s` query timeout | Adapter `turn_tables.py` |
-| `<DataTable>` export | `24` cols, `2000` rows, `300` chars/cell | Adapter `turn_tables.py` / `panel_view.py` |
+| Per-turn `TurnTables` SQLite | `36` tables, `5000` rows/table, `128` cols, `1.5s` query timeout | `execution/turn_tables.py` |
+| `<DataTable>` export | `24` cols, `2000` rows, `300` chars/cell | `execution/turn_tables.py` / `panel_view.py` |
 | Answer Protocol bounds | `50` items, `2` repair passes, `50` displayed records | `answer/answer_protocol.py` |
 | Turn model step cap | `24` (core default) / `33` (`YudaoTurnExecutor`) | `panel_contract.json` / `page_prompts.py` |

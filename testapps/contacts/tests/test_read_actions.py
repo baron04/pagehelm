@@ -8,8 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from testapps.contacts.app import ACTORS_BY_ID, DEMO_SESSION_COOKIE, MinimalContactsApplication
-from testapps.contacts.adapter import MinimalContactsAdapter
-from testapps.contacts.read_actions import ContactsReadActions
+from testapps.contacts.adapter import ContactsReadActions, MinimalContactsAdapter
 from web_operation_agent.execution.action_admission import ActionAdmission, ActionAdmissionRefused
 from web_operation_agent.execution.product import AgentTurnConfig
 from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation

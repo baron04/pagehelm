@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 import json
 from urllib.parse import urlsplit
-from typing import Callable, Literal, Protocol
+from typing import Any, Callable, Literal, Protocol
 
 from ..business.write_service import OperationOutcome
 from ..business.tools.registry import _validate_schema
@@ -87,6 +87,7 @@ class PageProcedureContext:
     progress: Callable[[dict], None]
     audit: Callable[..., None]
     measure: Callable
+    turn_tables: Any = None
 
     @property
     def obs(self):

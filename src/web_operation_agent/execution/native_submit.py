@@ -450,6 +450,25 @@ class NativeSubmitMixin:
                                   state="refused", error_code="invalid_target")
         attrs = element.attrs
         form = bool(attrs.get("form_scope")) and attrs.get("page_control") != "query"
+        if form and not attrs.get("row_id") and not getattr(port, "allow_form_submit", True):
+            if turn.get("submit_handoff_blocked"):
+                return self._not_sent(s, str(turn["submit_handoff_blocked"]))
+            handoff_fn = getattr(self, "_default_handoff", None)
+            marked = handoff_fn(s, turn) if callable(handoff_fn) else ""
+            if not marked:
+                handed = self._invoke_tool(s, "highlight", {"index": int(element.ref[1:])}, turn)
+                marked = handed.marked if handed.state == "completed" else ""
+                if marked and hasattr(self, "_page_fingerprint") and getattr(s, "obs", None) is not None:
+                    turn["handoff"] = (self._page_fingerprint(s.obs), marked)
+            if marked:
+                return LoopToolResult(
+                    f"本部署对页面表单只做预填交接，已核验并标出「{marked}」，停在提交前交给用户自己点击；"
+                    "请如实说明已填内容和尚未提交，直接调用 finish(status='done') 结束。",
+                    kind="page",
+                    state="completed",
+                    marked=marked,
+                )
+            return LoopToolResult("未能核验本次表单交接，助手未提交。", kind="page", state="unverified")
         s.step += 1
         try:
             return (self._submit_form(s, element, turn) if form

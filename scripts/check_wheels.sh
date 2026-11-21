@@ -43,12 +43,14 @@ from web_operation_agent.state.store import SQLiteSessionStore
 from web_operation_agent.state.quota import SQLiteProviderQuota
 from web_operation_agent.business.operations import reconcile
 from web_operation_agent.planning.sourcetree import SourceTree
+from web_operation_agent.execution.turn_tables import TurnTables
 
 installed = Path(web_operation_agent.__file__).resolve()
 assert Path(sys.prefix).resolve() in installed.parents, installed
 assert Path(os.environ["WOA_CHECKOUT"]).resolve() not in installed.parents, installed
 assert SQLiteMutationJournal and SQLiteSessionStore and SQLiteProviderQuota
 assert reconcile and SourceTree
+assert TurnTables
 # The framework ships no application and no example. Any of these resolving here would mean
 # the core wheel is carrying something a framework has no business carrying.
 for name in ("web_operation_agent_odoo", "web_operation_agent_demo", "examples", "testapps"):

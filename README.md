@@ -31,7 +31,7 @@ Captured live against the repository's synthetic reference environment (`example
 - **Same-actor server reads & deterministic compute:** Executes read ports under the signed-in actor's `PrincipalContext` with concurrent prefetch and ordered main-thread commit, exact `Decimal` summaries (`read_summary`), per-turn read-only in-memory SQLite (`TurnTables`, `SELECT`/`WITH` allowlist), and `<DataTable>` delivery without transcribing rows into prose.
 - **Live browser DOM control & handover:** `PageController` captures bounded snapshots (`<= 200` elements, active dialogs prioritized) with noise-filtered settling (`PageSettleWatch`); form prefill returns structured applied/previous/rejected/restricted receipts, supports one-click `undoFormFill`, and skips password or file controls.
 - **Six-stage `WritePipeline` safety gate:** Unifies typed write Skills, symmetric flat convention updates (`ConventionWritePort`), and native form submit (`SubmitPort`)—enforcing diff validation, occluded/dwell visibility gates (`>= 0.9` visible ratio, `>= 400ms`, `event.isTrusted`), single-flight consumption, pre-dispatch drift reread, at-most-once dispatch, and same-actor readback.
-- **Domain disambiguation & L0–L3 adoption:** Clarifies module terminology via `domain_playbooks/*.md` and renders clickable `need_input` pills when multiple same-actor records match a name; adopt incrementally from a single `<script>` tag (L0) to typed reads (L1), playbooks (L2), and verified writes (L3).
+- **Declarative onboarding & domain disambiguation:** Onboard apps via server `IdentityResolver`, OpenAPI (`entities_from_openapi`) or `EntitySpec`/`PageSpec`/`FormSpec`, UI presets (`FRONTEND_PRESETS`), and `DeclarativeSessionHost`, while clarifying terminology via `domain_playbooks/*.md` and `need_input` pills.
 - **Operational guardrails:** Web Locks prevent duplicate-tab session collisions; recursive URL-decoding redaction guards outbound model calls (`AuditedChat`) and replay exports; includes 3-tier spend caps, WAL-safe SQLite backup/restore, `INDETERMINATE` reconciliation CLI/API, and content-free OTLP telemetry.
 
 ---
@@ -90,22 +90,22 @@ cp pagehelm.example.toml pagehelm.toml
 
 Run diff-aware repository checks with `.venv/bin/python scripts/check.py --plan && .venv/bin/python scripts/check.py` (no paid model calls).
 
-### 2. Integrate Into Your Own Web App (L0–L3)
+### 2. Integrate Into Your Own Web App (Declarative Onboarding Prototype)
 
-If you are embedding PageHelm into your own application, skip the `yudao` cache and adopt incrementally:
+Core (`web_operation_agent`) provides the application-neutral ports (`ApplicationPorts`, `WritePipeline`, `CompiledWrites`) and built-in `TurnTables` SQLite engine (`execution/turn_tables.py`). The single-app declarative REST/HTML wrapper under `testapps/contacts/declarative/` demonstrates onboarding with three host inputs (kept outside core until validated by a second structurally different adapter):
 
-| Level | Host integration work | Capabilities enabled | Reference |
+| Layer | Host input | Capability unlocked | Reference |
 | --- | --- | --- | --- |
-| **L0** | Mount `/v1/runtime/assistant.js` + `/bootstrap` | Shadow DOM panel, bounded UI actions, Element Plus helpers | `frontend/src/integrations/element-plus/` |
-| **L1** | Implement identity, routes, and read ports | Same-actor queries, `TurnTables` SQL, `<DataTable>` delivery | [`testapps/contacts`](testapps/contacts/adapter.py) |
-| **L2** | Add `domain_playbooks` and `entity_rules` | Terminology disambiguation, rule explanations, `need_input` pills | [L0–L3 Integration Guide](docs/integration/levels.md) |
-| **L3** | Add journal, postcondition verifier, and Skills / `SubmitPort` | Typed Skill writes, flat `update_record`, native submit & undo | [Write Safety & Privacy](docs/security/verified-writes.md) |
+| **Server Identity** | `IdentityResolver` / `HttpWhoamiIdentityPort` | Fail-closed cookie/token lookup to `ResolvedActor` | [`declarative.py`](testapps/contacts/declarative/declarative.py) |
+| **Metadata & Reads** | `entities_from_openapi` or `EntitySpec` / `PageSpec` / `FormSpec` | Same-actor queries, `TurnTables` SQL, `<DataTable>` export | [Declarative Onboarding](docs/integration/onboarding.md) |
+| **UI Preset & Host** | `assistant.js` + `FRONTEND_PRESETS` + `DeclarativeSessionHost` | Shadow DOM panel, bounded DOM control, durable session/quota stores | [`testapps/contacts/adapter.py`](testapps/contacts/adapter.py) |
+| **Optional Verified Writes** | `TypedWriteSpec`, `convention_updates`, `CompiledWrites`, `SubmitSpec` | Single-consume `WritePipeline`, compiled CRUD/relation writes, undoable prefill | [Write Safety & Privacy](docs/security/verified-writes.md) |
 
 ---
 
 ## Documentation & License
 
-- **Getting Started & Integration:** [Docs Home](docs/index.md) · [Local Demo Quickstart](docs/integration/quickstart.md) · [L0–L3 Integration Guide](docs/integration/levels.md) · [Skills & Typed Writes](docs/integration/skills-and-writes.md)
+- **Getting Started & Integration:** [Docs Home](docs/index.md) · [Local Demo Quickstart](docs/integration/quickstart.md) · [Declarative Application Onboarding](docs/integration/onboarding.md) · [Skills & Typed Writes](docs/integration/skills-and-writes.md)
 - **Architecture & Runtime:** [Architecture Overview](docs/architecture/overview.md) · [Execution & Browser Runtime](docs/architecture/execution-and-runtime.md)
 - **Security & Operations:** [Write Safety & Privacy](docs/security/verified-writes.md) · [Deployment & Operations](docs/security/operations-and-observability.md)
 - **Reference:** [Configuration & Protocol](docs/reference/protocol-and-configuration.md) · [Tools, Capabilities & Checks](docs/reference/tools-and-capabilities.md)

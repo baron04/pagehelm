@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from testapps.contacts.adapter import MinimalContactsAdapter
+from testapps.contacts.adapter import ContactsModelGoalPort, MinimalContactsAdapter, contacts_profile
 from testapps.contacts.app import (
     DEMO_ACTORS,
     DEMO_SESSION_COOKIE,
@@ -15,7 +15,6 @@ from testapps.contacts.app import (
     OTHER_WORKSPACE,
     MinimalContactsApplication,
 )
-from testapps.contacts.model_loop import ContactsModelGoalPort, contacts_profile
 from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.business.mutation import MemoryMutationJournal
 from web_operation_agent.composition import bind_application

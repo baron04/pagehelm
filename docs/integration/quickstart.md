@@ -5,7 +5,7 @@ description: Start the bundled examples/yudao synthetic environment locally and 
 
 This guide starts PageHelm locally against the repository's bundled reference application (`examples/yudao`, a full back-office web app) so you can test same-actor reads, UI actions, and approval-gated writes.
 
-> If you are integrating PageHelm into your own application, you do not need the `yudao` cache—start with the [L0–L3 Integration Guide](./levels.md). For online deployment, backups, and reconciliation, see [Deployment & Operations](../security/operations-and-observability.md).
+> If you are integrating PageHelm into your own application, you do not need the `yudao` cache—start with [Declarative Application Onboarding](./onboarding.md). For online deployment, backups, and reconciliation, see [Deployment & Operations](../security/operations-and-observability.md).
 
 ## 1. Prerequisites and Installation
 

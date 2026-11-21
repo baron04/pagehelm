@@ -18,7 +18,7 @@ hero:
 | Goal | Start here |
 | --- | --- |
 | Run the bundled local demo to inspect queries, prefill, and write approvals | [Local Demo Quickstart](integration/quickstart.md) |
-| Integrate PageHelm into your own web application | [L0–L3 Integration Guide](integration/levels.md) · [Skills & Typed Writes](integration/skills-and-writes.md) |
+| Integrate PageHelm into your own web application | [Declarative Application Onboarding](integration/onboarding.md) · [Skills & Typed Writes](integration/skills-and-writes.md) |
 | Review trust boundaries, execution engine, and write safety | [Architecture Overview](architecture/overview.md) · [Write Safety & Privacy](security/verified-writes.md) |
 | Deploy, reconcile writes, or look up config and protocol fields | [Deployment & Operations](security/operations-and-observability.md) · [Configuration & Protocol](reference/protocol-and-configuration.md) |
 

@@ -52,7 +52,7 @@ ModelDrivenTurnExecutor 主循环
 
 ## 四、单轮临时 SQL（`TurnTables`）与 `<DataTable>`
 
-需要多表关联、分组排名、均值统计（`AVG`）或二次切片分析时，适配器可绑定单轮内存 SQLite 引擎 `TurnTables`：
+需要多表关联、分组排名、均值统计（`AVG`）或二次切片分析时，核心层提供内置内存 SQLite 引擎 `TurnTables`（`src/web_operation_agent/execution/turn_tables.py`；使用 `build_declarative_profile(..., enable_sql=True)` 时自动挂载）：
 
 - **隔离与生命周期**：使用 `sqlite3.connect(":memory:", cached_statements=0)` 且设置 `SQLITE_LIMIT_ATTACHED = 0`，本轮结束后调用 `TurnTables.close()` 立即释放。
 - **容量与超时上限**：详见 [配置与通信协议](../reference/protocol-and-configuration.md)（单轮最多 36 张表、单表 5000 行 / 128 列，预览上限 200 行 / 14000 字符，单条 SQL 超时 1.5 秒）。

@@ -52,7 +52,7 @@ When a model issues parallel read calls in one step or an adapter fetches pagina
 
 ## 4. Per-Turn Temporary SQL (`TurnTables`) and `<DataTable>`
 
-For joins, rankings, averages (`AVG`), or secondary slicing over rows already fetched in the current turn, adapters can attach `TurnTables`:
+For joins, rankings, averages (`AVG`), or secondary slicing over rows already fetched in the current turn, core provides `TurnTables` (`src/web_operation_agent/execution/turn_tables.py`, automatically wired when `build_declarative_profile(..., enable_sql=True)` is used):
 
 - **Isolation and lifecycle:** Opens `sqlite3.connect(":memory:", cached_statements=0)` with `SQLITE_LIMIT_ATTACHED = 0` and releases immediately on `TurnTables.close()` at turn end.
 - **Bounds:** See [Configuration & Protocol](../reference/protocol-and-configuration.md) (36 tables/turn, 5000 rows/table, 128 columns, 200-row / 14000-char model preview, 1.5s query timeout).

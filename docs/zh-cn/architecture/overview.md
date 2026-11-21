@@ -23,16 +23,16 @@ PageHelm 由三层组成：**第一方浏览器 Runtime**（`assistant.js`）、
 |  - 传输网关与通道租约状态机（Transport Gateway & Lease）
 |  - ModelDrivenTurnExecutor + TurnHarness + TurnBudget
 |  - AuditedChat 出站审计与 SessionHandoffPolicy 参数脱敏
-|  - WritePipeline（提案校验、一次性审批、单飞锁、复读与回读）
-|  - SQLiteSessionStore、SQLiteMutationJournal、SQLiteSpendCap
+|  - TurnTables 单轮只读 SQL 引擎、WritePipeline 与 CompiledWrites 写管道    |
+|  - SQLiteSessionStore、SQLiteMutationJournal、SQLiteSpendCap           |
 +-----------------------------------------------------------------------+
-             ^ ApplicationPorts SPI（显式能力声明）
+             ^ ApplicationPorts SPI（Identity / Routes / Reads / Writes / Forms）
              v
 +-----------------------------------------------------------------------+
 | 业务适配器与领域 Skill（Adapters / Skill Packs）
-|  - ApplicationDescriptor、IdentityPort、ApplicationRoutePort
-|  - EntityReadPort、ReferenceLookupTools、TurnTables SQL / summarize
-|  - ResultPostconditionVerifier、ConventionWritePort / SubmitPort
+|  - Identity / Entity / Page / Form 端口（单应用声明式辅助：            |
+|    testapps/contacts/declarative/）                                   |
+|  - 可选 CompiledWrites、ConventionWritePort / SubmitPort              |
 |  - 可选 SourceTree 白名单检索与 domain_playbooks / SKILL.md
 +-----------------------------------------------------------------------+
 ```
@@ -120,4 +120,4 @@ PageHelm 由三层组成：**第一方浏览器 Runtime**（`assistant.js`）、
 
 - 单轮调度、临时 SQL 与浏览器稳定机制：[执行引擎与浏览器运行时](./execution-and-runtime.md)
 - 写入审批管道与隐私边界：[写入安全与隐私边界](../security/verified-writes.md)
-- 接入自有业务系统：[L0–L3 接入指南](../integration/levels.md)
+- 接入自有业务系统：[应用声明式接入指南](../integration/onboarding.md)

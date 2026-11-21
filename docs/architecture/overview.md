@@ -23,16 +23,16 @@ PageHelm is divided into three layers: the **first-party browser Runtime** (`ass
 |  - Transport gateway & session lease state machine
 |  - ModelDrivenTurnExecutor + TurnHarness + TurnBudget
 |  - AuditedChat egress audit & SessionHandoffPolicy redaction
-|  - WritePipeline (proposal checks, approval, single-flight, reread, readback)
-|  - SQLiteSessionStore, SQLiteMutationJournal, SQLiteSpendCap
+|  - TurnTables per-turn SQLite engine, WritePipeline & CompiledWrites      |
+|  - SQLiteSessionStore, SQLiteMutationJournal, SQLiteSpendCap           |
 +-----------------------------------------------------------------------+
-             ^ ApplicationPorts SPI (explicit capability declarations)
+             ^ ApplicationPorts SPI (Identity / Routes / Reads / Writes / Forms)
              v
 +-----------------------------------------------------------------------+
 | Application Adapter & Domain Skills
-|  - ApplicationDescriptor, IdentityPort, ApplicationRoutePort
-|  - EntityReadPort, ReferenceLookupTools, TurnTables SQL / summarize
-|  - ResultPostconditionVerifier, ConventionWritePort / SubmitPort
+|  - Identity / Entity / Page / Form ports (declarative helpers:        |
+|    testapps/contacts/declarative/)                                    |
+|  - Optional CompiledWrites, ConventionWritePort / SubmitPort          |
 |  - Optional allowlisted SourceTree, domain_playbooks, and SKILL.md
 +-----------------------------------------------------------------------+
 ```
@@ -120,4 +120,4 @@ Storing a session ID only in `sessionStorage` causes a browser's "Duplicate Tab"
 
 - Turn loop, temporary SQL, and browser settling: [Execution & Browser Runtime](./execution-and-runtime.md)
 - Write safety pipeline and privacy controls: [Write Safety & Privacy](../security/verified-writes.md)
-- Integrating a host application: [L0–L3 Integration Guide](../integration/levels.md)
+- Integrating a host application: [Declarative Application Onboarding](../integration/onboarding.md)

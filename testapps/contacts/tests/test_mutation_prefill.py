@@ -3,8 +3,7 @@ from dataclasses import replace
 import json
 import unittest
 
-from testapps.contacts.adapter import MinimalContactsAdapter
-from testapps.contacts.mutation_prefill import ContactsMutationPrefill
+from testapps.contacts.adapter import ContactsMutationPrefill, MinimalContactsAdapter
 from testapps.contacts.tests.test_generic_forms import _context
 from web_operation_agent.business.tools.contracts import BusinessMutationProposal
 from web_operation_agent.execution.model_loop_contracts import PageActionOutcome, PageProcedureContext

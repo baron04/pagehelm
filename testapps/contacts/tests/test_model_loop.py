@@ -7,10 +7,13 @@ import unittest
 from types import SimpleNamespace as NS
 from unittest.mock import patch
 
-from testapps.contacts.adapter import MinimalContactsAdapter
+from testapps.contacts.adapter import (
+    ContactsGoalPort,
+    ContactsProcedure,
+    MinimalContactsAdapter,
+    contacts_profile,
+)
 from testapps.contacts.app import ACTORS_BY_ID, DEMO_SESSION_COOKIE, MinimalContactsApplication
-from testapps.contacts.goal import ContactsGoalPort
-from testapps.contacts.model_loop import ContactsProcedure, contacts_profile
 from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor
@@ -216,7 +219,7 @@ class ContactsModelLoopTests(unittest.TestCase):
         with MinimalContactsApplication() as app, tempfile.TemporaryDirectory() as tmp:
             source = RepositorySourceTurns()._source(Path(tmp), "src/policy.py", "batch_limit = 125\n")
             with patch.object(_RemoteBrowser, "start", side_effect=AssertionError("no browser")), \
-                    patch("testapps.contacts.model_loop.ContactsProcedure.execute",
+                    patch("testapps.contacts.adapter.ContactsProcedure.execute",
                           side_effect=AssertionError("no business reads")):
                 result, chat, executor = self.execute(app, "ada-lovelace", [
                     ("lookup_source", {"query": "batch_limit"}),
@@ -251,7 +254,7 @@ class ContactsModelLoopTests(unittest.TestCase):
         from web_operation_agent.tests.execution.test_repository_source_turn import RepositorySourceTurns
         with MinimalContactsApplication() as app, tempfile.TemporaryDirectory() as tmp:
             source = RepositorySourceTurns()._source(Path(tmp), "src/policy.py", "batch_limit = 125\n")
-            with patch("testapps.contacts.model_loop.ContactsProcedure.execute") as business:
+            with patch("testapps.contacts.adapter.ContactsProcedure.execute") as business:
                 result, chat, _ = self.execute(app, "ada-lovelace", [
                     ("list_contacts", {}),
                     ("finish", {"status": "cannot", "answer": "No browser observation."})],
@@ -478,7 +481,7 @@ class ModelBrowserTests(unittest.TestCase):
                 chat = PickSection([('goto', {'path': '/contacts/workflows/partner'}),
                     ('click', {}), ('finish', {'status': 'cannot', 'answer': 'Selection could not be verified.'})])
                 with tempfile.TemporaryDirectory() as directory, patch('testapps.contacts.server._chat', return_value=(chat, None)), \
-                        patch('testapps.contacts.model_loop.contacts_profile', side_effect=profile), \
+                        patch('testapps.contacts.adapter.contacts_profile', side_effect=profile), \
                         patch.object(ContactsProcedure, 'execute', procedure), \
                         NativeContactsHost(NativeServerConfig(Path(directory), port=0, model_loop=True)) as host, \
                         sync_playwright() as playwright:

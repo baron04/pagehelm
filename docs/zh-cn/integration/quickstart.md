@@ -5,7 +5,7 @@ description: 使用仓库内置参考应用 examples/yudao 在本地启动完整
 
 本页说明如何借助仓库内置的参考示例应用（`examples/yudao`，一套完整后台系统）在本地启动 PageHelm，体验同账号查询、页面操作和审批写入。
 
-> 如果你准备将 PageHelm 接入自己的业务系统，不需要准备 `yudao` 示例缓存，请直接阅读 [L0–L3 接入指南](./levels.md)。线上发布与备份恢复见 [部署、运维与排障](../security/operations-and-observability.md)。
+> 如果你准备将 PageHelm 接入自己的业务系统，不需要准备 `yudao` 示例缓存，请直接阅读 [应用声明式接入指南](./onboarding.md)。线上发布与备份恢复见 [部署、运维与排障](../security/operations-and-observability.md)。
 
 ## 一、前置条件与依赖安装
 

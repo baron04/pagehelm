@@ -45,11 +45,11 @@ Typed write tools separate proposal construction from irreversible execution:
 2. **Approval and single-flight gate:** Handled by `WritePipeline` (see [Write Safety & Privacy](../security/verified-writes.md)).
 3. **`execute_mutation(proposal, approval, context, claimed=...)`:** Invokes `claimed()` to record journal intent immediately before the external write call; raises `BusinessMutationIndeterminate` without retrying if a timeout or disconnect occurs after `claimed`; verifies postconditions via `ResultPostconditionVerifier` under the same actor.
 
-Reference implementations live in `testapps/contacts/adapter.py` and `src/web_operation_agent/business/write_pipeline.py` (which provides `change_detail`, `create_detail`, `preserved_detail`, `side_effect_detail`, `derived_detail`, `target_rule_detail`, and `body_detail`).
+Reference implementations live in `testapps/contacts/adapter.py` (`TypedWriteSpec`), `testapps/contacts/declarative/declarative_writes.py`, `src/web_operation_agent/business/compiled_writes.py`, and `src/web_operation_agent/business/write_pipeline.py` (which provides `change_detail`, `create_detail`, `preserved_detail`, `side_effect_detail`, `derived_detail`, `target_rule_detail`, and `body_detail`).
 
 ## 3. Symmetric Flat Convention Updates (`ConventionWritePort`)
 
-Adapters that declare `"updates"` in `GoalPort.capabilities()` can use `ConventionWritePort` (`src/web_operation_agent/business/convention_writes.py`) instead of hand-writing tools for every flat editable entity:
+Adapters that declare `"updates"` in `GoalPort.capabilities()` can use `DeclarativeConventionWritePort` (`testapps/contacts/declarative/declarative_writes.py`) or `ConventionWritePort` / `CompiledWrites` (`src/web_operation_agent/business/convention_writes.py`, `src/web_operation_agent/business/compiled_writes.py`) instead of hand-writing tools for every flat editable entity:
 
 - **Field contract (`ConventionFieldSpec`):** Restricted to top-level scalar fields with 1:1 read/write symmetry (`string`, `integer`, `number`, `boolean`, `id_array`), with fixed-point scaling (`unit_scale`, e.g. `100` for cents) and timestamp formats (`epoch_ms`, `datetime`, `date`).
 - **Secret exclusion:** Fields whose names or labels match `DEFAULT_SECRET_FIELD_PATTERN` (passwords, keys, tokens) are excluded.
