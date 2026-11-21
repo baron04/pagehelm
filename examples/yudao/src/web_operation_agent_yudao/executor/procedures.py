@@ -608,6 +608,8 @@ class YudaoProceduresBase:
                         for value in _date_range_receipt_values(data):
                             note_receipt(policy_turn, "", value)
                 body = fenced(json.dumps(data, ensure_ascii=False))
+                if name == "sql" and isinstance(data, dict) and data.get("order_summary"):
+                    body += f"\n排序首键统计：{data['order_summary']}"
                 if name == "sql" and isinstance(data, dict) and data.get("table_ref"):
                     if data.get("returned_rows", 0) >= 20 or data.get("truncated"):
                         body += f"\n本结果集较大，可用 finish(..., table_ref=\"{data['table_ref']}\") 原样交付完整表格。"
@@ -651,6 +653,26 @@ class YudaoProceduresBase:
             if not guide:
                 return LoopToolResult(f"未知业务域：{domain}", kind="read", state="refused", error_code="unknown_domain")
             return LoopToolResult(guide, kind="read")
+        if name == "switch_domain":
+            from .domain_toolpacks import YUDAO_DOMAIN_PACKS, format_domain_contract, resolve_domain_pack
+            domain_arg = str(args.get("domain") or "").strip()
+            self._note(s, stage="search", what="guide", term=domain_arg, tool=name, arguments=said)
+            pack = resolve_domain_pack(YUDAO_DOMAIN_PACKS, domain_arg)
+            if pack is None:
+                return LoopToolResult(f"未知业务域：{domain_arg}", kind="read", state="refused", error_code="unknown_domain")
+            if policy_turn is not None:
+                pinned = policy_turn.setdefault("pinned_domains", [])
+                if pack.domain_id not in pinned:
+                    pinned.append(pack.domain_id)
+            principal = getattr(s.operation, "principal", None)
+            writes_on = bool(
+                getattr(self, "writes_enabled", False)
+                and (principal is None or "yudao.write" in getattr(principal, "scopes", ()))
+            )
+            return LoopToolResult(
+                "已激活业务域契约（保留本轮已读数据）：\n" + format_domain_contract(pack, writes_enabled=writes_on),
+                kind="read",
+            )
         if name == "find_record":
             self._note(s, stage="search", what="record", term=args["name"], tool=name, arguments=said)
             targets: list[AnswerTarget] = []
@@ -1533,7 +1555,25 @@ class YudaoProceduresBase:
                 policy_turn=self._ctx().executor_turn,
             )
         dates = _precomputed_dates(prompt, self._ctx().turn_tables)
-        for extra in (dates, fms_note):
+        domain_note = ""
+        if getattr(self, "enable_domain_packs", False):
+            from .domain_toolpacks import active_domain_contract_block
+            obs = getattr(context, "obs", None)
+            obs_url = str(getattr(obs, "url", "") or "")
+            policy_turn = self._ctx().executor_turn
+            pinned = tuple((policy_turn or {}).get("pinned_domains") or ())
+            principal = getattr(getattr(context, "operation", None), "principal", None)
+            writes_on = bool(
+                getattr(self, "writes_enabled", False)
+                and (principal is None or "yudao.write" in getattr(principal, "scopes", ()))
+            )
+            domain_note = active_domain_contract_block(
+                page_url=obs_url,
+                prompt=prompt,
+                pinned_domains=pinned,
+                writes_enabled=writes_on,
+            )
+        for extra in (dates, fms_note, domain_note):
             if extra:
                 suggested = (suggested + "\n\n" + extra) if suggested else extra
         return suggested

@@ -12,6 +12,7 @@ import json
 import re
 import hashlib
 from dataclasses import replace
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 from ..business.errors import (BusinessToolRequestError, BusinessToolPermissionError,
@@ -605,7 +606,9 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             if self.config.source.runtime_source else None)
         if sources is not None:
             instructions += SOURCE_INSTRUCTIONS
-        if catalog:
+        profile = getattr(self, "profile", None)
+        suppress_catalog = bool(getattr(profile, "suppress_system_operation_catalog", False))
+        if catalog and not suppress_catalog:
             if self.direct_skill_operations:
                 route_cap = resolve_write_route_capability(self.goal_port)
                 has_updates = "updates" in capabilities_of(self.goal_port)
@@ -664,6 +667,11 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             prepared=s.obs is not None,
             read_only=not s.approvals.mutations_enabled,
         )
+        if s.obs is not None:
+            turn["obs"] = s.obs
+        page_url = str(getattr(s.message, "page_url", "") or "")
+        if page_url:
+            turn["initial_page_url"] = page_url
         if any(
             (p.schema.get("function") or {}).get("name") in {"sql", "tables"}
             for p in self.profile.procedures
@@ -748,21 +756,80 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
     def _remember_observation(self, s, turn, message):
         loop_guard.remember_observation(s.obs, turn, message)
 
-    def _tools(self, turn):
+    @staticmethod
+    def _procedure_name(procedure) -> str:
+        return str(((getattr(procedure, "schema", None) or {}).get("function") or {}).get("name") or "")
+
+    def _defer_dom_tools(self, turn, obs=None) -> bool:
+        profile = getattr(self, "profile", None)
+        deferred = getattr(profile, "deferred_dom_tools", frozenset()) if profile is not None else frozenset()
+        is_hub = getattr(profile, "is_hub_route", None) if profile is not None else None
+        if not deferred or is_hub is None:
+            return False
+        if turn.get("dom_tools_unlocked"):
+            return False
+        current = obs if obs is not None else turn.get("obs")
+        if current is None:
+            page_url = str(turn.get("initial_page_url") or "")
+            if not page_url:
+                return False
+            current = SimpleNamespace(url=page_url, page_route="", elements=())
+        if bool(is_hub(current)):
+            return True
+        turn["dom_tools_unlocked"] = True
+        return False
+
+    def _tools(self, turn, obs=None):
+        if obs is not None:
+            turn["obs"] = obs
         supported = capabilities_of(self.goal_port)
-        tools = [p.schema for p in self.profile.procedures if p.required_capabilities <= supported]
+        profile = getattr(self, "profile", None)
+        deferred_names = frozenset(getattr(profile, "deferred_dom_tools", None) or ())
+        defer_dom = self._defer_dom_tools(turn, obs)
+        procedures = getattr(profile, "procedures", ()) if profile is not None else ()
+        tools = [
+            p.schema
+            for p in procedures
+            if p.required_capabilities <= supported
+            and self._procedure_name(p) not in deferred_names
+        ]
+        dynamic_tools: list[dict] = []
         writes = turn.get("writes")
         if writes is not None:
             tools += WRITE_TOOLS
             if self.direct_skill_operations:
                 tools.append(PROPOSE_OPERATION_TOOL)
-            for definition in writes.definitions():
+            resident_fn = getattr(writes, "resident_definitions", None)
+            dynamic_fn = getattr(writes, "dynamic_definitions", None)
+            resident_defs = resident_fn() if callable(resident_fn) else writes.definitions()
+            dynamic_defs = dynamic_fn() if callable(dynamic_fn) else ()
+            for definition in resident_defs:
                 schema = definition.schema
                 schema["function"]["description"] = _OPERATION_NOTE + definition.description
                 tools.append(schema)
+            for definition in dynamic_defs:
+                schema = definition.schema
+                schema["function"]["description"] = _OPERATION_NOTE + definition.description
+                dynamic_tools.append(schema)
         if self._submit_offered(turn):
             tools.append(REQUEST_SUBMIT_TOOL)
-        return [*tools, *(SOURCE_TOOLS if turn.get("sources") is not None else ()), self._finish_tool(turn)]
+        tail_dom_tools = (
+            []
+            if defer_dom or not deferred_names
+            else [
+                p.schema
+                for p in procedures
+                if p.required_capabilities <= supported
+                and self._procedure_name(p) in deferred_names
+            ]
+        )
+        return [
+            *tools,
+            *(SOURCE_TOOLS if turn.get("sources") is not None else ()),
+            self._finish_tool(turn),
+            *dynamic_tools,
+            *tail_dom_tools,
+        ]
 
     def _finish_tool(self, turn):
         tool = json.loads(json.dumps(FINISH_TOOL))
@@ -1067,6 +1134,19 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             if not ok:
                 raise payload
             return self._concurrent_read_commit(s, name, args, payload, turn)
+        profile = getattr(self, "profile", None)
+        deferred = getattr(profile, "deferred_dom_tools", frozenset()) if profile is not None else frozenset()
+        if (
+            deferred
+            and name in deferred
+            and self._defer_dom_tools(turn, getattr(s, "obs", None))
+        ):
+            return LoopToolResult(
+                "当前在门户导航页，暂未启用页内低层控件操作；请先通过导航打开目标页面，或直接使用业务读写工具。",
+                kind="read",
+                state="refused",
+                error_code="hub_route_deferred",
+            )
         writes = turn.get("writes")
         if name == "propose_operation" and self.direct_skill_operations and writes is not None:
             op_name = args.get("operation")
@@ -1435,6 +1515,8 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                 else:
                     read_observation_available = True
         changed = before_epoch != (s.obs.epoch if s.obs is not None else None)
+        if s.obs is not None:
+            turn["obs"] = s.obs
         s.ledger.append("model_loop_result", tool=name, kind=result.kind,
                         state=result.state, dispatch=result.dispatch,
                         error_code=result.error_code, terminal_reason=result.terminal_reason)
@@ -1741,6 +1823,8 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                                        "还有没做到的部分就用 cannot，说明哪些查到了、哪些没做到。"})
             self._forget_old_observations()
             wire = [{k: v for k, v in m.items() if not k.startswith("_")} for m in self._messages]
+            if s.obs is not None and isinstance(turn, dict):
+                turn["obs"] = s.obs
             try:
                 tools = ([self._finish_tool(turn)] if forced_at and turn.get("forced_summary_kind") in {"read", "tools"}
                          and taken > forced_at else self._tools(turn))

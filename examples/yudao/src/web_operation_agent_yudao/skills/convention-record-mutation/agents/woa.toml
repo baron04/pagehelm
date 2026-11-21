@@ -1,0 +1,2 @@
+schema_version = 1
+write_operations = ["create_record", "update_record", "toggle_record_status", "assign_record_relations"]

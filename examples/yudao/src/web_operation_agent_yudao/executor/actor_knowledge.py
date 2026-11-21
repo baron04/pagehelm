@@ -97,11 +97,86 @@ class QueryParametersError(ValueError):
     """Safe structural correction, generated only from installed parameter names."""
 
 
-def _cell_values(rows, column_names=None, cap=400):
+_ENTITY_READ_SUFFIXES = (
+    "/list-all-simple",
+    "/simple-all-list",
+    "/directory-list",
+    "/export-excel",
+    "/simple-list",
+    "/get-detail",
+    "/page",
+    "/list",
+    "/get",
+)
+_REF_CELL_KEYS = frozenset({"id", "name", "title", "no", "code", "period", "stage", "installment", "nickname", "username"})
+_NON_METRIC_COL_RE = re.compile(
+    r"^(?:id|period|stage|sort|status|auditStatus|type|creator|updater)$|Id$|Time$|Date$",
+    re.I,
+)
+
+
+def _entity_slug_for_path(path: str) -> str:
+    rel = str(path or "").removeprefix("/admin-api/").strip("/")
+    for suffix in _ENTITY_READ_SUFFIXES:
+        if rel.endswith(suffix):
+            rel = rel[: -len(suffix)]
+            break
+    return rel.strip("/")
+
+
+def _inline_small_table_ties_note(rows: list, col_labels: dict[str, str] | None = None) -> str:
+    """Non-imperative extremum tie statistics for inline complete small tables (2..30 rows)."""
+    dict_rows = [r for r in rows or () if isinstance(r, dict)]
+    if len(dict_rows) < 2 or len(dict_rows) > 30:
+        return ""
+    labels = col_labels or {}
+    keys = list(dict.fromkeys(k for r in dict_rows[:10] for k in r))
+    parts: list[str] = []
+    for key in keys:
+        if _NON_METRIC_COL_RE.search(key) or _SENSITIVE_COL_KEY.search(key):
+            continue
+        vals = []
+        ok = True
+        for row in dict_rows:
+            v = row.get(key)
+            if v is None:
+                continue
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                ok = False
+                break
+            vals.append(v)
+        if not ok or len(vals) < 2:
+            continue
+        distinct = set(vals)
+        if len(distinct) < 2:
+            continue
+        hi = max(vals)
+        lo = min(vals)
+        hi_cnt = sum(1 for v in vals if v == hi)
+        lo_cnt = sum(1 for v in vals if v == lo)
+        if hi_cnt < 2 and lo_cnt < 2:
+            continue
+        lbl = labels.get(key)
+        col_disp = f"{key}（{lbl}）" if lbl and lbl != key else key
+        sub = []
+        if hi_cnt >= 2:
+            sub.append(f"最大值 {hi} 共 {hi_cnt} 行同值")
+        if lo_cnt >= 2 and lo != hi:
+            sub.append(f"最小值 {lo} 共 {lo_cnt} 行同值")
+        if sub:
+            parts.append(f"{col_disp}：" + "、".join(sub))
+        if len(parts) >= 3:
+            break
+    if not parts:
+        return ""
+    return f"内联全表同值统计（共 {len(dict_rows)} 行）：" + "；".join(parts) + "。"
+
+
+def _cell_values(rows, column_names=None, cap=400, *, entity_slug: str = ""):
     """(binding, value) candidates of rows the actor read this turn: every scalar cell
     bound to its column's label (and raw field key when different), plus the record's
-    own name/id cells unbound for selection fields."""
-    bound, raw_keys, records = [], [], []
+    own name/id cells unbound for selection fields (and ``entity_slug`` when known)."""
+    bound, raw_keys, records, ref_cands = [], [], [], []
     names = column_names or {}
     for row in rows or ():
         if not isinstance(row, dict):
@@ -116,9 +191,11 @@ def _cell_values(rows, column_names=None, cap=400):
                 raw_keys.append((raw_key, cell))
             if _RECORD_KEY.search(str(key)) or _RECORD_KEY.search(label):
                 records.append(("", cell))
+            if entity_slug and (raw_key in _REF_CELL_KEYS or _RECORD_KEY.search(raw_key)):
+                ref_cands.append((entity_slug, cell))
             if len(bound) >= cap:
-                return bound + raw_keys + records, bound
-    return bound + raw_keys + records, bound
+                return bound + raw_keys + records + ref_cands, bound
+    return bound + raw_keys + records + ref_cands, bound
 
 
 class ActorKnowledge:
@@ -743,11 +820,13 @@ class ActorKnowledge:
                 column_names = dict((self._columns(relative) or {}) if self._columns is not None else {})
             except (DataRefused, LookupError, ValueError):
                 column_names = {}
+            entity_slug = _entity_slug_for_path(path)
             prepared["has_last_read"] = True
             prepared["last_read"] = {"count": 1 if rows is None else len(rows), "scope": self._by_path[path]["tag"],
                                      "complete": whole if rows is not None else None,
                                      "declared_total": declared_total,
-                                     "values": _cell_values(rows if rows is not None else [data], column_names)[0]}
+                                     "values": _cell_values(rows if rows is not None else [data], column_names, entity_slug=entity_slug)[0]}
+            prepared["has_unbound_filter"] = bool(rows is not None and unbound_line)
             if rows is None:
                 keys = list(data.keys()) if isinstance(data, dict) else []
             else:
@@ -940,7 +1019,7 @@ class ActorKnowledge:
             sib_codes = self._extract_code_maps(sib_native, sib_keys, sib_props, sib_blanked)
             sib_shown = [self._row(r) if isinstance(r, dict) else r for r in sib_rows]
             sib_filters = {k: v for k, v in sib_params.items() if k not in {"pageNo", "pageSize"}}
-            sib_cands, _ = _cell_values(sib_rows, sib_col_names)
+            sib_cands, _ = _cell_values(sib_rows, sib_col_names, entity_slug=_entity_slug_for_path(sib_path))
             eff_total = sib_total if type(sib_total) is int and sib_total >= 0 else len(sib_rows)
             note = (
                 f"库存流水旁路对照（{reason} 触发同账号只读补查）：GET {sib_path} "
@@ -1001,8 +1080,21 @@ class ActorKnowledge:
                 if inline and len(inline) <= 9000:
                     out.append(f"全部行（共 {len(observed)} 行，已读完所有页；内联时间字段已按本应用时区换算为 YYYY-MM-DD HH:MM:SS，单表原样字段或名单可直接引用上方读取回执交付，"
                                f"无需再调 tables/sql 重复取行；若需分转元÷100.0 等单位换算、子集计数、多行聚合、差额、分组或排序极值，须调 sql 计算，注意 SQL 行表内时间列仍存原始毫秒整数）：" + inline)
+                    ties_note = _inline_small_table_ties_note(
+                        observed, prepared["row_sink_payload"].get("column_labels") or {}
+                    )
+                    if ties_note:
+                        out.append(ties_note)
                 else:
                     out.append("样例（不是全表）：" + json.dumps(shown_rows[:3], ensure_ascii=False)[:2600])
+            else:
+                filters_used = prepared["row_sink_payload"].get("params") or {}
+                if info.get("complete") and filters_used and not prepared.get("has_unbound_filter"):
+                    cond_desc = json.dumps(filters_used, ensure_ascii=False)[:300]
+                    out.append(
+                        f"精确绑定空集核实（complete=True，0 行）：在已绑定筛选参数 {cond_desc} 下已读取全部结果共 0 行；"
+                        "若筛选条件已准确对应用户范围，权威空集已核实，无需为凑记录反复放宽或更换无关查询。"
+                    )
             out.extend(prepared["clock_notes"])
             sib = prepared.get("sib_prepared")
             if sib is not None:
@@ -1013,8 +1105,10 @@ class ActorKnowledge:
                 except TurnReadError:
                     sib_info = None
                 if sib_info is not None:
+                    has_sib_time = any(re.search(r"Time$|Date$", str(c)) for c in (sib_info.get("columns") or ()))
+                    time_hint = "（SQL 行表内时间列存原始毫秒整数，请用 date_range 返回的 start_ms / end_exclusive_ms 比较）" if has_sib_time else ""
                     out.append(
-                        f"{sib['note']} 已写入独立关联行表 {sib_info['name']}，读取回执 {sib_info['receipt']}。"
+                        f"{sib['note']} 已写入独立关联行表 {sib_info['name']}，读取回执 {sib_info['receipt']}。{time_hint}"
                     )
                     data_lines.add(len(out))
                     out.append(json.dumps(sib_info, ensure_ascii=False))

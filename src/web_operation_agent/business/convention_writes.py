@@ -29,6 +29,7 @@ from ..execution.value_source import (
     Entry,
     SourceLedger,
     check_entries,
+    cn_number,
 )
 from ..goal.skill_literals import _existing_append_supplied, literal_supplied
 from .effects import EffectProjection, RequestedEffect, canonical
@@ -418,6 +419,49 @@ def collect_provenance_context(
     return ledger, receipt_vals
 
 
+_PAREN_REF_RE = re.compile(r"^(.+?)\s*[（(]([^()（）]+)[）)]\s*$")
+_ORDINAL_STAGE_RE = re.compile(r"^第?\s*([0-9]+|[零〇一二两三四五六七八九十百千万]+)\s*([期批轮次])$")
+_TEXT_ORDINAL_RE = re.compile(r"第\s*([0-9]+|[零〇一二两三四五六七八九十百千万]+)\s*([期批轮次])")
+
+
+def _parse_ordinal_int(token: str) -> int | None:
+    raw = str(token or "").strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        return int(raw)
+    return cn_number(raw)
+
+
+def _reference_token_variants(token: str) -> set[str]:
+    """Expand safe ID/label, parenthesized display, and ordinal period forms for FK matching."""
+    out: set[str] = set()
+    queue: list[str] = [str(token or "").strip()]
+    while queue:
+        cur = queue.pop().strip()
+        if not cur or cur in out:
+            continue
+        out.add(cur)
+        if "/" in cur:
+            leaf = cur.rsplit("/", 1)[-1].strip()
+            if leaf and leaf not in out:
+                queue.append(leaf)
+        m_paren = _PAREN_REF_RE.match(cur)
+        if m_paren is not None:
+            for part in (m_paren.group(1).strip(), m_paren.group(2).strip()):
+                if part and part not in out:
+                    queue.append(part)
+        m_ord = _ORDINAL_STAGE_RE.match(cur)
+        if m_ord is not None:
+            num = _parse_ordinal_int(m_ord.group(1))
+            unit = m_ord.group(2)
+            if num is not None and num > 0:
+                out.add(str(num))
+                out.add(f"第{num}{unit}")
+                out.add(f"{num}{unit}")
+    return out
+
+
 def validate_single_field_provenance(
     f_spec: ConventionFieldSpec,
     raw_val: object,
@@ -431,6 +475,7 @@ def validate_single_field_provenance(
     existing_values: dict[str, tuple[str, ...]] | None,
     allow_append: bool = True,
     allow_existing_candidates: bool = True,
+    allow_fk_candidates: bool = True,
 ) -> None:
     """Validate provenance for one field input against user texts, scoped candidates, and receipts."""
     label = f_spec.label or f_spec.name
@@ -458,7 +503,7 @@ def validate_single_field_provenance(
         (cand.binding, cand.value) for cand in ledger.candidates
         if (
             (allow_existing_candidates and cand.binding in {label, f_spec.name})
-            or (f_spec.reference_entity and cand.binding == f_spec.reference_entity)
+            or (f_spec.reference_entity and (allow_fk_candidates or allow_existing_candidates) and cand.binding == f_spec.reference_entity)
             or (allow_existing_candidates and cand.binding and cand.binding.endswith("." + f_spec.name))
         )
     ]
@@ -511,6 +556,23 @@ def validate_single_field_provenance(
     # 3. Reference fields (single FK or ID array)
     if f_spec.reference_entity and raw_val is not None:
         tokens = raw_val if isinstance(raw_val, list) else [raw_val]
+        text_ordinals: set[str] = set()
+        for t in texts:
+            for m_ord in _TEXT_ORDINAL_RE.finditer(str(t or "")):
+                num = _parse_ordinal_int(m_ord.group(1))
+                unit = m_ord.group(2)
+                if num is not None and num > 0:
+                    text_ordinals.add(str(num))
+                    text_ordinals.add(f"第{num}{unit}")
+                    text_ordinals.add(f"{num}{unit}")
+        cand_variants: set[str] = set()
+        cand_exact: set[str] = set()
+        for _, c_val in scoped_cands:
+            s_cand = str(c_val or "").strip()
+            if not s_cand:
+                continue
+            cand_exact.add(s_cand)
+            cand_variants.update(_reference_token_variants(s_cand))
         for tok in tokens:
             s_tok = str(tok).strip()
             leaf = s_tok.rsplit("/", 1)[-1].strip()
@@ -519,6 +581,13 @@ def validate_single_field_provenance(
             if (literal_supplied(s_tok, texts)
                     or (leaf and literal_supplied(leaf, texts))
                     or any(c_val in {s_tok, leaf} for _, c_val in scoped_cands)):
+                continue
+            tok_variants = _reference_token_variants(s_tok)
+            if tok_variants & cand_variants:
+                continue
+            if any(variant in cand_exact or literal_supplied(variant, texts) for variant in tok_variants):
+                continue
+            if tok_variants & text_ordinals and (cand_variants or _ORDINAL_STAGE_RE.match(s_tok)):
                 continue
             raise BusinessToolRequestError(
                 f"关联字段「{label}」的目标「{s_tok[:60]}」未在用户原话或已读候选中找到依据。"

@@ -51,7 +51,9 @@ from web_operation_agent.business.errors import (
 )
 from web_operation_agent.business.write_pipeline import DEFAULT_SECRET_FIELD_PATTERN
 from web_operation_agent.execution.submit_contract import scalar_text
+from web_operation_agent.execution.value_source import cn_number, note_candidates
 
+from ..reads.bound_data_reads import current_turn_read_scope
 from ..reads.client import YudaoReadRefused
 from ..rules.compiled_write_source import compile_yudao_write_catalog
 from .write_definitions import RECORD_CONTRACTS
@@ -71,6 +73,74 @@ _QUERY_CANDIDATES = (
     "username", "search", "voucherNumber", "digest", "subject",
     "code", "jobNumber",
 )
+_ORDINAL_STAGE_RE = re.compile(r"^(?:第\s*)?([0-9]+|[零〇一二两三四五六七八九十百千万]+)\s*[期批轮次]$")
+_PARENTHESIZED_ID_RE = re.compile(r"^(.+?)\s*[（(](?:ID\s*[=：:]\s*|#)?(\d+)[）)]\s*$", re.I)
+
+
+def _parse_period_int(token: str) -> int | None:
+    raw = str(token or "").strip()
+    m = _ORDINAL_STAGE_RE.fullmatch(raw)
+    if not m:
+        return None
+    inner = m.group(1)
+    if inner.isdigit():
+        val = int(inner)
+        return val if val > 0 else None
+    val = cn_number(inner)
+    return val if isinstance(val, int) and val > 0 else None
+
+
+def _active_turn_and_knowledge():
+    scope = current_turn_read_scope()
+    if not isinstance(scope, dict):
+        return None, None
+    turn_ctx = scope.get("turn_context")
+    policy_turn = getattr(turn_ctx, "executor_turn", None) if turn_ctx is not None else None
+    knowledge = scope.get("knowledge")
+    return policy_turn if isinstance(policy_turn, dict) else None, knowledge
+
+
+def _verified_turn_id(ref_entity: str, target_id: int) -> bool:
+    """True only when ``target_id`` was actually read in this turn under ``ref_entity``."""
+    policy_turn, knowledge = _active_turn_and_knowledge()
+    s_id = str(target_id)
+    if policy_turn is not None:
+        ledger = policy_turn.get("sources")
+        if ledger is not None and hasattr(ledger, "candidates"):
+            for cand in getattr(ledger, "candidates", ()) or ():
+                binding = getattr(cand, "binding", "")
+                val = str(getattr(cand, "value", "") or "").strip()
+                if val == s_id and (binding == ref_entity or not binding):
+                    return True
+    if knowledge is not None:
+        turn_targets = getattr(knowledge, "turn_targets", None) or {}
+        target_prefix = f"/admin-api/{ref_entity.strip('/')}"
+        if s_id in (turn_targets.get(target_prefix) or ()):
+            return True
+    return False
+
+
+def _record_ref_candidates(ref_entity: str, rows: list[dict], *, name_keys: tuple[str, ...]) -> None:
+    policy_turn, _knowledge = _active_turn_and_knowledge()
+    if policy_turn is None or not rows:
+        return
+    items: list[tuple[str, object]] = []
+    for row in rows[:12]:
+        rid = row.get("id")
+        if rid is not None:
+            items.append((ref_entity, str(rid)))
+        for nk in name_keys:
+            val = row.get(nk)
+            if isinstance(val, str) and val.strip():
+                items.append((ref_entity, val.strip()))
+        period = row.get("period")
+        if isinstance(period, int) and period > 0:
+            items.append((ref_entity, str(period)))
+            items.append((ref_entity, f"第{period}期"))
+    if items:
+        note_candidates(policy_turn, items)
+
+
 _CRM_BIZ_TYPES = {
     "crm/clue": 1,
     "crm/customer": 2,
@@ -878,10 +948,12 @@ class YudaoConventionWritePort:
         docs = self._docs()
         paths = docs.get("paths") or {}
         get_op = ((paths.get(f"/admin-api/{list_path}") or {}).get("get") or {})
-        req_params = [
-            p["name"] for p in (get_op.get("parameters") or ())
-            if isinstance(p, dict) and p.get("in") == "query" and p.get("required") is True
+        query_params = [
+            p for p in (get_op.get("parameters") or ())
+            if isinstance(p, dict) and p.get("in") == "query" and p.get("name")
         ]
+        req_params = [p["name"] for p in query_params if p.get("required") is True]
+        opt_query_names = {p["name"] for p in query_params}
         call_params: dict[str, object] = {}
         if list_path.endswith("/page"):
             call_params["pageNo"] = 1
@@ -897,6 +969,25 @@ class YudaoConventionWritePort:
                 missing_acct = True
             else:
                 raise BusinessToolRequestError(f"关联列表 {list_path} 缺少必需查询参数 {rp}。")
+        for opt_key, opt_val in q_ctx.items():
+            if opt_val is not None and opt_key in opt_query_names and opt_key not in call_params:
+                call_params[opt_key] = opt_val
+
+        def _narrow(rows_in: list[dict]) -> list[dict]:
+            if not q_ctx:
+                return rows_in
+            narrowed = []
+            for row in rows_in:
+                ok = True
+                for fk, fv in q_ctx.items():
+                    if fv is None or fk not in row or row[fk] is None:
+                        continue
+                    if str(row[fk]) != str(fv):
+                        ok = False
+                        break
+                if ok:
+                    narrowed.append(row)
+            return narrowed
 
         items_acc: list[dict] = []
         if missing_acct:
@@ -905,14 +996,14 @@ class YudaoConventionWritePort:
                 raw_rows = self.client.get(list_path, **p_try)
                 sub = raw_rows if isinstance(raw_rows, list) else (raw_rows or {}).get("list") if isinstance(raw_rows, dict) else []
                 items_acc.extend(r for r in (sub or ()) if isinstance(r, dict) and type(r.get("id")) is int)
-            return list_path, name_keys, items_acc, call_params
+            return list_path, name_keys, _narrow(items_acc), call_params
 
         raw_rows = self.client.get(list_path, **call_params) if call_params else self.client.get(list_path)
         items = raw_rows if isinstance(raw_rows, list) else (raw_rows or {}).get("list") if isinstance(raw_rows, dict) else None
         if not isinstance(items, list):
             raise BusinessToolRequestError(f"关联列表 {list_path} 当前不可读。")
         rows = [r for r in items if isinstance(r, dict) and type(r.get("id")) is int]
-        return list_path, name_keys, rows, call_params
+        return list_path, name_keys, _narrow(rows), call_params
 
     def _resolve_single_ref(
         self,
@@ -924,12 +1015,30 @@ class YudaoConventionWritePort:
     ) -> tuple[int, str, dict]:
         cleaned = token.strip()
         m_cand = _CANDIDATE_SUFFIX.fullmatch(cleaned)
-        name = m_cand.group(1).strip() if m_cand else cleaned
-        hint_id = m_cand.group(2) if m_cand else None
+        m_paren_id = _PARENTHESIZED_ID_RE.fullmatch(cleaned) if m_cand is None else None
+        name = m_cand.group(1).strip() if m_cand else (m_paren_id.group(1).strip() if m_paren_id else cleaned)
+        hint_id = m_cand.group(2) if m_cand else (m_paren_id.group(2) if m_paren_id else None)
         if allow_root and name == "根节点":
             return 0, "根节点", {"kind": "root", "entity": ref_entity, "id": 0, "name": "根节点"}
-        if not m_cand and name.isdigit():
-            raise BusinessToolRequestError(f"关联对象（{ref_entity}）请传确切业务名称或层级路径，不能传裸数字 ID。")
+
+        # Support parent/child qualified tokens such as "合同名称/第1期" on crm/receivable-plan.
+        if ref_entity == "crm/receivable-plan" and "/" in name and hint_id is None:
+            parent_tok, child_tok = (part.strip() for part in name.rsplit("/", 1))
+            if parent_tok and child_tok:
+                parent_id, _p_label, _p_binding = self._resolve_single_ref("crm/contract", parent_tok)
+                child_ctx = {**(query_ctx or {}), "contractId": parent_id}
+                return self._resolve_single_ref(
+                    ref_entity,
+                    child_tok,
+                    allow_root=allow_root,
+                    query_ctx=child_ctx,
+                )
+
+        if name.isdigit() and hint_id is None:
+            cand_id = int(name)
+            if not _verified_turn_id(ref_entity, cand_id):
+                raise BusinessToolRequestError(f"关联对象（{ref_entity}）请传确切业务名称或层级路径，不能传裸数字 ID。")
+            hint_id = name
 
         if ref_entity == "system/area":
             from .write_inputs import _area
@@ -939,7 +1048,19 @@ class YudaoConventionWritePort:
         list_path, name_keys, rows, call_params = self._list_ref_rows(ref_entity, query_ctx=query_ctx)
         primary_key = next((k for k in name_keys if any(r.get(k) for r in rows)), name_keys[0])
 
-        if ref_entity in {"system/dept", "oa/file-node"} and "/" in name:
+        matches: list[dict] = []
+        if hint_id is not None and name.isdigit():
+            matches = [r for r in rows if str(r.get("id")) == hint_id]
+            if not matches:
+                try:
+                    rec = self.read_record(ref_entity, int(hint_id))
+                except (BusinessToolRequestError, BusinessToolUnavailableError):
+                    rec = None
+                if isinstance(rec, dict) and str(rec.get("id")) == hint_id:
+                    q_ctx = dict(query_ctx or {})
+                    if all(str(rec[k]) == str(v) for k, v in q_ctx.items() if k in rec and v is not None and rec[k] is not None):
+                        matches = [rec]
+        elif ref_entity in {"system/dept", "oa/file-node"} and "/" in name:
             by_id = {r["id"]: r for r in rows}
             def full_path(row: dict) -> str:
                 parts = [str(row.get("name") or "").strip()]
@@ -960,14 +1081,61 @@ class YudaoConventionWritePort:
                 if (hint_id is None or str(r["id"]) == hint_id)
                 and any(str(r.get(k) or "").strip() == name for k in name_keys)
             ]
+            if not matches:
+                period_num = _parse_period_int(name)
+                if period_num is not None:
+                    matches = [
+                        r for r in rows
+                        if (hint_id is None or str(r["id"]) == hint_id)
+                        and any(r.get(pk) == period_num for pk in ("period", "stage", "installment"))
+                    ]
+            if not matches and hint_id is not None:
+                # Parenthesized display + exact verified ID fallback
+                by_hint = [r for r in rows if str(r.get("id")) == hint_id]
+                if len(by_hint) == 1:
+                    matches = by_hint
+
         if len(matches) != 1:
-            sample = "、".join(str(r.get(primary_key)) for r in rows[:15] if r.get(primary_key))
-            raise BusinessToolRequestError(
-                f"在 {ref_entity} 中未找到唯一匹配的「{token}」（可选示例：{sample}）。"
+            cand_pool = matches if matches else rows
+            _record_ref_candidates(ref_entity, cand_pool, name_keys=name_keys)
+
+            def _fmt_cand(r: dict) -> str:
+                lbl = next((str(r.get(k)).strip() for k in name_keys if r.get(k)), "")
+                if lbl:
+                    return f"{lbl}（ID={r['id']}）"
+                if r.get("period") is not None:
+                    p_str = f"第{r['period']}期"
+                    if r.get("contractId") is not None:
+                        p_str = f"contractId={r['contractId']}/{p_str}"
+                    return f"{p_str}（ID={r['id']}）"
+                return f"ID={r['id']}"
+
+            choices = tuple(dict.fromkeys(_fmt_cand(r) for r in cand_pool[:8]))
+            sample = "、".join(choices)
+            if len(matches) > 1:
+                raise BusinessToolReferenceError(
+                    f"在 {ref_entity} 中「{token}」匹配到多个候选（{sample}），请补充父记录限定或选择确切候选。",
+                    entity=ref_entity,
+                    choices=choices,
+                )
+            raise BusinessToolReferenceError(
+                f"在 {ref_entity} 中未找到唯一匹配的「{token}」（可选示例：{sample}）。",
+                entity=ref_entity,
+                choices=choices,
             )
+
         chosen = matches[0]
-        label = next((str(chosen.get(k)).strip() for k in name_keys if chosen.get(k)), name)
-        return chosen["id"], label, {
+        label = next((str(chosen.get(k)).strip() for k in name_keys if chosen.get(k)), "")
+        if not label and chosen.get("period") is not None:
+            label = f"第{chosen['period']}期"
+        if not label:
+            label = name if not name.isdigit() else f"ID={chosen['id']}"
+        expected_fields = {
+            k: chosen[k]
+            for k in ("contractId", "customerId", "period")
+            if chosen.get(k) is not None
+        }
+        binding = {
             "kind": "relation",
             "list_path": list_path,
             "query_params": call_params,
@@ -976,6 +1144,9 @@ class YudaoConventionWritePort:
             "id": chosen["id"],
             "name": label,
         }
+        if expected_fields:
+            binding["expected_fields"] = expected_fields
+        return chosen["id"], label, binding
 
     def encode_field(
         self,
@@ -985,6 +1156,7 @@ class YudaoConventionWritePort:
         current_record: dict,
         *,
         allow_status_field: bool = False,
+        extra_query_ctx: dict | None = None,
     ) -> tuple[object, str, str, dict | None]:
         if (
             not allow_status_field
@@ -1002,7 +1174,16 @@ class YudaoConventionWritePort:
                 "（创建后锁定或需走专用转移/变更入口），请改走对应专用操作或页面。"
             )
         old_raw = current_record.get(field.name) if isinstance(current_record, dict) else None
-        ref_ctx = {"accountSetId": current_record["accountSetId"]} if isinstance(current_record, dict) and current_record.get("accountSetId") is not None else None
+        ref_ctx: dict[str, object] = {}
+        if isinstance(current_record, dict):
+            for ctx_key in ("accountSetId", "contractId", "customerId", "parentId", "warehouseId", "supplierId"):
+                if current_record.get(ctx_key) is not None:
+                    ref_ctx[ctx_key] = current_record[ctx_key]
+        if extra_query_ctx:
+            for ctx_key, ctx_val in extra_query_ctx.items():
+                if ctx_val is not None:
+                    ref_ctx[ctx_key] = ctx_val
+        ref_ctx_arg = ref_ctx or None
 
         if raw_value is None:
             if field.required:
@@ -1019,7 +1200,7 @@ class YudaoConventionWritePort:
                 labels: list[str] = []
                 sub_bindings: list[dict] = []
                 for item in raw_value:
-                    rid, rlabel, b = self._resolve_single_ref(field.reference_entity, str(item), query_ctx=ref_ctx)
+                    rid, rlabel, b = self._resolve_single_ref(field.reference_entity, str(item), query_ctx=ref_ctx_arg)
                     if rid in ids:
                         raise BusinessToolRequestError(f"字段「{shown_label}」包含重复关联项：{rlabel}")
                     ids.append(rid)
@@ -1032,7 +1213,7 @@ class YudaoConventionWritePort:
                 field.reference_entity,
                 str(raw_value),
                 allow_root=allow_root,
-                query_ctx=ref_ctx,
+                query_ctx=ref_ctx_arg,
             )
             old_disp = "（空）" if old_raw is None else str(old_raw)
             return rid, old_disp, f"{rlabel}（ID={rid}）", b
@@ -1153,9 +1334,29 @@ class YudaoConventionWritePort:
         raw_value,
         *,
         actor_id: str,
+        resolved_fields: dict | None = None,
     ) -> tuple[object, str, dict | None]:
+        extra_ctx: dict[str, object] = {}
+        if resolved_fields:
+            for ctx_key in (
+                "accountSetId",
+                "contractId",
+                "customerId",
+                "businessId",
+                "parentId",
+                "warehouseId",
+                "supplierId",
+                "spuId",
+            ):
+                if resolved_fields.get(ctx_key) is not None:
+                    extra_ctx[ctx_key] = resolved_fields[ctx_key]
         api_val, _old, disp, binding = self.encode_field(
-            spec, field, raw_value, {}, allow_status_field=True
+            spec,
+            field,
+            raw_value,
+            {},
+            allow_status_field=True,
+            extra_query_ctx=extra_ctx or None,
         )
         return api_val, disp, binding
 
@@ -1234,10 +1435,18 @@ class YudaoConventionWritePort:
                 raw_rows = self.client.get(b["list_path"], **qp) if qp else self.client.get(b["list_path"])
                 items = raw_rows if isinstance(raw_rows, list) else (raw_rows or {}).get("list") if isinstance(raw_rows, dict) else None
                 name_keys = b.get("name_keys") or [b["name_key"]]
-                if not isinstance(items, list) or not any(
-                    isinstance(r, dict) and r.get("id") == b["id"] and any(str(r.get(nk) or "").strip() == b["name"] for nk in name_keys)
-                    for r in items
-                ):
+                expected_fields = b.get("expected_fields") or {}
+
+                def _rel_row_matches(r: dict) -> bool:
+                    if not isinstance(r, dict) or r.get("id") != b["id"]:
+                        return False
+                    if any(str(r.get(nk) or "").strip() == b["name"] for nk in name_keys):
+                        return True
+                    if expected_fields and all(r.get(fk) == fv for fk, fv in expected_fields.items()):
+                        return True
+                    return False
+
+                if not isinstance(items, list) or not any(_rel_row_matches(r) for r in items):
                     raise BusinessMutationRefusedError("related record changed after approval", reason="precondition_changed")
 
     def encode_preserved_field(self, spec, field: ConventionFieldSpec, raw_value):

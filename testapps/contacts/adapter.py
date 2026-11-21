@@ -275,7 +275,7 @@ class MinimalContactsAdapter(DeclarativeApplicationAdapter):
 
     def __init__(self, origin: str, *, api_token: str = "", allow_mutations: bool = False,
                  mutation_journal=None, extra_skills=(), standard_skills: bool = False,
-                 convention_updates: bool = False):
+                 convention_updates: bool = False, resident_convention_skill: bool = False):
         spec = DeclarativeAppSpec(
             application_id=APPLICATION_ID, display_name="Minimal Contacts",
             entities=CONTACTS_ENTITIES, pages=CONTACTS_PAGES, forms=CONTACTS_FORMS,
@@ -297,7 +297,11 @@ class MinimalContactsAdapter(DeclarativeApplicationAdapter):
             executor_cls=_ContactsToolExecutor, entity_port_cls=_ContactsEntityReadPort,
             form_port_cls=_ContactsFormPort,
             operations_factory=lambda ex, idp: contact_operations(
-                ex, allow_mutations, convention_updates=convention_updates, identity=idp
+                ex,
+                allow_mutations,
+                convention_updates=convention_updates,
+                identity=idp,
+                resident_convention_skill=resident_convention_skill,
             ),
             identity_port_cls=lambda **kw: HttpWhoamiIdentityPort(
                 origin=origin, api_token=api_token, default_tenant_id="synthetic",
@@ -374,11 +378,27 @@ class ContactsSubmitPort(DeclarativeSubmitPort):
         return frozenset(found) | super().catalog(prefixes)
 
 
-def contacts_profile(adapter: MinimalContactsAdapter, goal_port, *, drafts: bool = False, filters: bool = False):
+def contacts_profile(
+    adapter: MinimalContactsAdapter,
+    goal_port,
+    *,
+    drafts: bool = False,
+    filters: bool = False,
+    hub_routes: frozenset[str] = frozenset(),
+    deferred_dom_tools: frozenset[str] = frozenset(),
+    suppress_system_operation_catalog: bool = False,
+):
     return build_declarative_profile(
-        adapter, goal_port, procedure_cls=ContactsProcedure, drafts=drafts, filters=filters,
+        adapter,
+        goal_port,
+        procedure_cls=ContactsProcedure,
+        drafts=drafts,
+        filters=filters,
         draft_steps=ContactsDraftSteps(adapter) if drafts else None,
         mutation_prefill=(ContactsMutationPrefill(adapter) if drafts and adapter.ports.operations is not None else None),
+        hub_routes=hub_routes,
+        deferred_dom_tools=deferred_dom_tools,
+        suppress_system_operation_catalog=suppress_system_operation_catalog,
     )
 
 

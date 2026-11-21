@@ -52,7 +52,8 @@ class BusinessToolRuntime:
                  answer_labels: dict[str, dict[str, str]] | None = None,
                  numeric_goal_binding: bool = False,
                  skill_registry=None, require_skill_for_writes: bool = False,
-                 mutation_dispatch_enabled: bool = True):
+                 mutation_dispatch_enabled: bool = True,
+                 default_loaded_skill_ids: frozenset[str] = frozenset()):
         if type(mutation_dispatch_enabled) is not bool:
             raise TypeError("mutation_dispatch_enabled must be boolean")
         self._mutation_dispatch_enabled = mutation_dispatch_enabled
@@ -179,6 +180,10 @@ class BusinessToolRuntime:
             except re.error as exc:
                 raise ValueError("route Skill hint pattern is invalid") from exc
         self._route_skill_hints = tuple(compiled_hints)
+        if not isinstance(default_loaded_skill_ids, frozenset):
+            raise TypeError("default_loaded_skill_ids must be a frozenset")
+        if not default_loaded_skill_ids <= set(self._skills):
+            raise ValueError("default_loaded_skill_ids must name installed Skills")
         self._catalog = BusinessSkillCatalog(
             skills=self._skills,
             schemas=self._schemas,
@@ -186,6 +191,7 @@ class BusinessToolRuntime:
             required_scopes=scopes,
             route_skill_hints=self._route_skill_hints,
             withheld_skills=self._withheld_skills,
+            resident_skill_ids=default_loaded_skill_ids,
         )
         self.application_id = application_id
         self.answer_labels = _answer_labels(answer_labels or {})

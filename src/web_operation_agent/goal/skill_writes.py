@@ -34,9 +34,27 @@ class SkillWrites:
         self.context = SkillContext(self.operations.skills)
         #: Shared with the write service: the runtime binds every write to one of these.
         self.loaded_ids: set[str] = set()
+        self._resident_ids: set[str] = set()
         self.service = BusinessWriteService(self.runtime, approvals, self.loaded_ids)
         #: Proposals this turn completed, so that the same one is not asked for twice.
         self._completed: set[str] = set()
+        default_ids = getattr(self.operations, "default_loaded_skill_ids", frozenset())
+        if default_ids:
+            offered_skills = {skill.skill_id for skill, _ in self.catalog()}
+            for skill_id in sorted(default_ids):
+                if skill_id in offered_skills:
+                    self.context.load(skill_id)
+                    self.loaded_ids.add(skill_id)
+                    self._resident_ids.add(skill_id)
+
+    def resident_definitions(self) -> tuple:
+        """Operations exposed directly by skills pre-loaded silently at turn start."""
+        return tuple(self._offered(self._resident_ids).values()) if self._resident_ids else ()
+
+    def dynamic_definitions(self) -> tuple:
+        """Operations exposed by skills loaded dynamically mid-turn."""
+        dynamic_ids = self.loaded_ids - self._resident_ids
+        return tuple(self._offered(dynamic_ids).values()) if dynamic_ids else ()
 
     def _offered(self, skill_ids) -> dict:
         """The write definitions these Skills support that this deployment and actor may use."""

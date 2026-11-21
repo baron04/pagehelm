@@ -64,6 +64,7 @@ from ..writes.draft_readback import product_price_readback
 from ..writes.live_forms import SUBMIT_WORDS, plain
 from ..writes.write_intent import WriteIntent, classify_write_intent, preceding_draft_handoff
 from .actor_knowledge import ActorKnowledge, QueryParametersError
+from .domain_toolpacks import YUDAO_DEFERRED_DOM_TOOLS, is_yudao_hub_route
 from .page_prompts import (
     MODEL_STEPS,
     NATIVE_SUBMIT_RULES,
@@ -111,7 +112,7 @@ from .procedures import (
     build_handoff_facts,
 )
 
-_STATUS_READ_TOOLS = frozenset({"find_record", "search_api", "call_api", "entity_rules", "load_domain_guide", "finish"})
+_STATUS_READ_TOOLS = frozenset({"find_record", "search_api", "call_api", "entity_rules", "load_domain_guide", "switch_domain", "finish"})
 _CONCURRENT_READ_TOOLS = frozenset({"call_api", "find_record", "search_api", "entity_rules", "load_domain_guide"})
 
 YUDAO_CHECK_SPECS: dict[str, ProgramCheckSpec] = {
@@ -566,7 +567,7 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
         tables = TurnTables(handoffs)
         ctx.turn_tables = (tables, _today(date_override, time_zone), time_zone)
         try:
-            with turn_actor_reads(self.knowledge.client, turn_context=ctx):
+            with turn_actor_reads(self.knowledge.client, turn_context=ctx, knowledge=self.knowledge):
                 return super()._run(state)
         finally:
             ctx.turn_tables = prev_tables
@@ -1235,7 +1236,7 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
         procedures = tuple(LoopProcedure(json.dumps(schema, ensure_ascii=False),
             (_ConcurrentReadProcedure if schema["function"]["name"] in _CONCURRENT_READ_TOOLS else _Procedure)(
                 owner, schema["function"]["name"]),
-            "read" if schema["function"]["name"] in {"call_api", "find_record", "entity_rules", "load_domain_guide"} | _TABLE_TOOLS else
+            "read" if schema["function"]["name"] in {"call_api", "find_record", "entity_rules", "load_domain_guide", "switch_domain"} | _TABLE_TOOLS else
             "metadata" if schema["function"]["name"] in {"search_menu", "search_api"} else "page",
             "yudao.read", frozenset({"handoffs"}) if schema["function"]["name"] == "highlight" else frozenset(),
             lambda arguments, observation, name=schema["function"]["name"]:
@@ -1257,23 +1258,30 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
             owner.prepare, lambda observation, answer: tuple(
                 _tabs_not_shown(observation, answer, request=self.turn_context.current_request)),
             owner.verification_messages, draft_steps, mutation_prefill,
+            is_hub_route=is_yudao_hub_route,
+            deferred_dom_tools=YUDAO_DEFERRED_DOM_TOOLS,
+            suppress_system_operation_catalog=True,
             untraced_numbers=untraced_answer_numbers)
         super().__init__(profile=profile, **kwargs)
+        ops_port = getattr(getattr(application, "ports", None), "operations", None)
+        ops_available = bool(ops_port is not None and getattr(getattr(ops_port, "tools", None), "definitions", ()))
+        owner.writes_enabled = bool(ops_available and native_submit is not None)
+        owner.enable_domain_packs = True
         if native_submit is not None:
             self.native_submit = native_submit
             if hasattr(self.channel, "read_only_mode"):
                 self.channel.read_only_mode = False
             cap = resolve_write_route_capability(kwargs.get("goal_port"))
             updated_instructions = apply_write_route_capability(
-                self.profile.instructions, cap, native_submit=True
+                self.profile.instructions,
+                cap,
+                native_submit=True,
+                direct_skill_operations=bool(self.direct_skill_operations),
+                ops_available=ops_available,
             )
-            self.profile = replace(self.profile, instructions=updated_instructions)
-        instructions = self.profile.instructions.replace(
-            "先 load_skill，再用已安装操作提出提案",
-            "直接用 propose_operation(operation, inputs) 提出提案（程序自动加载对应 Skill，需要查完整领域规则时仍可调 load_skill；"
-            "已安装的专用操作优先，其余扁平新建用 create_record，单表或 1–2 层嵌套明细单据修改用 update_record，两态启停/上下架用 toggle_record_status，角色/关联集合分配用 assign_record_relations）",
-        )
-        self.profile = replace(self.profile, instructions=instructions + PAGE_DELIVERY_RULES)
+            self.profile = replace(self.profile, instructions=updated_instructions + PAGE_DELIVERY_RULES)
+        else:
+            self.profile = replace(self.profile, instructions=self.profile.instructions + PAGE_DELIVERY_RULES)
 
 
 SlimTurnExecutor = YudaoTurnExecutor

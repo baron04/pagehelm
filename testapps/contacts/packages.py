@@ -327,7 +327,14 @@ class ContactsConventionWritePort:
         return None
 
 
-def contact_operations(executor, enabled: bool, *, convention_updates: bool = False, identity=None):
+def contact_operations(
+    executor,
+    enabled: bool,
+    *,
+    convention_updates: bool = False,
+    identity=None,
+    resident_convention_skill: bool = False,
+):
     base_skills = SkillRegistry.discover(Path(__file__).parent / "packages", namespace="minimal.contacts")
     artifacts = list(base_skills.artifacts)
     schema = next(
@@ -373,11 +380,17 @@ def contact_operations(executor, enabled: bool, *, convention_updates: bool = Fa
             port = ContactsConventionWritePort(executor, identity)
             definitions = (*definitions, *compiled_write_tool_definitions(port, scope="contacts:write"))
     skills = SkillRegistry(tuple(artifacts))
+    default_loaded = (
+        frozenset({"minimal.contacts.record-convention-maintenance"})
+        if resident_convention_skill and convention_updates and identity is not None and enabled
+        else frozenset()
+    )
     return RegisteredOperations(
         ToolRegistry(definitions),
         skills,
         lambda entities: None,
         observed_mutation_operations=frozenset(d.name for d in definitions),
+        default_loaded_skill_ids=default_loaded,
     )
 
 

@@ -203,17 +203,21 @@ class YudaoSubmitPort:
             return None
         failure = None
         for prefix in prefixes:
-            try:
-                data = self.client.get((prefix + "get").removeprefix("/admin-api/"), id=record_id)
-            except YudaoReadRefused as exc:
-                if _MISSING.search(str(exc)):
+            for suffix in ("get", "get-detail"):
+                try:
+                    data = self.client.get((prefix + suffix).removeprefix("/admin-api/"), id=record_id)
+                except YudaoReadRefused as exc:
+                    if suffix == "get" and getattr(exc, "code", None) in {404, 405}:
+                        failure = exc
+                        continue
+                    if _MISSING.search(str(exc)):
+                        return None
+                    failure = exc
+                    break
+                if isinstance(data, dict):
+                    return _enrich_erp_line_totals(prefix, data)
+                if data is None and suffix == "get-detail":
                     return None
-                failure = exc
-                continue
-            if isinstance(data, dict):
-                return _enrich_erp_line_totals(prefix, data)
-            if data is None:
-                return None
         if failure is not None:
             raise failure
         return None

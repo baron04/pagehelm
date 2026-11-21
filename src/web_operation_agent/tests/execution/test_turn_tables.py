@@ -114,6 +114,63 @@ class CoreTurnTablesTests(unittest.TestCase):
         with self.assertRaises(TurnReadError):
             self.tables.add(path="/api/bad", params={}, rows=[], total=0, complete=True, table_name="bad_name")
 
+    def test_json_extract_arrow_operators_and_virtual_tables_without_polluting_sources(self):
+        info = self.tables.add(
+            path="/api/orders",
+            params={},
+            rows=[
+                {"id": 1, "meta": '{"tier": "vip"}', "items": '[{"sku":"A","qty":2},{"sku":"B","qty":5}]'},
+                {"id": 2, "meta": '{"tier": "std"}', "items": '[{"sku":"C","qty":3}]'},
+            ],
+            total=2,
+            complete=True,
+        )
+        res = self.tables.query(
+            "SELECT t1.id, json_extract(t1.meta, '$.tier') AS tier, "
+            "t1.meta->>'$.tier' AS arrow_tier, j.value->>'$.sku' AS sku, "
+            "j.value->'$.qty' AS qty_json, j.value->>'$.qty' AS qty_val "
+            "FROM t1, json_each(t1.items) AS j ORDER BY t1.id ASC, sku ASC"
+        )
+        self.assertEqual(res["sources"], [info["receipt"]])
+        self.assertEqual(res["rows"][0], [1, "vip", "vip", "A", "2", 2])
+        self.assertEqual(len(res["rows"]), 3)
+
+        tree_res = self.tables.query(
+            "SELECT DISTINCT t1.id FROM t1, json_tree(t1.meta) AS k WHERE k.value = 'vip'"
+        )
+        self.assertEqual(tree_res["rows"], [[1]])
+        self.assertEqual(tree_res["sources"], [info["receipt"]])
+
+        with self.assertRaises(TurnReadError):
+            self.tables.query("SELECT * FROM json_each('[1,2]')")
+
+    def test_unbounded_order_summary_for_projected_key_without_limit(self):
+        self.tables.add(
+            path="/api/scores",
+            params={},
+            rows=[
+                {"id": 1, "name": "A", "score": 95},
+                {"id": 2, "name": "B", "score": 95},
+                {"id": 3, "name": "C", "score": 80},
+                {"id": 4, "name": "D", "score": 60},
+                {"id": 5, "name": "E", "score": 60},
+            ],
+            total=5,
+            complete=True,
+        )
+        tied = self.tables.query("SELECT id, name, score FROM t1 ORDER BY score DESC, id ASC")
+        summary = tied.get("order_summary", "")
+        self.assertIn("前 2 行同为 95", summary)
+        self.assertIn("末 2 行同为 60", summary)
+        self.assertNotIn("必须", summary)
+        self.assertNotIn("须", summary)
+
+        limited = self.tables.query("SELECT id, name, score FROM t1 ORDER BY score DESC LIMIT 2")
+        self.assertNotIn("order_summary", limited)
+
+        unprojected = self.tables.query("SELECT id, name FROM t1 ORDER BY score DESC")
+        self.assertNotIn("order_summary", unprojected)
+
 
 if __name__ == "__main__":
     unittest.main()

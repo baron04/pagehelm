@@ -186,6 +186,7 @@ class YudaoApplication:
                                    session_handoff_query_keys=SESSION_HANDOFF_KEYS)
         from .reconciliation import YudaoMutationReconciler
         self.identity = YudaoIdentityPort(api_base, self.client, native_writes=native_writes or native_write_preparation)
+        resident_skills = frozenset({"yudao.convention-record-mutation"})
         self.business_tools = BusinessToolRuntime(
             (), CombinedTools(reads, registry, write_tracker=write_tracker) if registry else reads, application_id=APPLICATION_ID,
             required_scopes={**{name: "yudao.read" for name in names}, **{name: "yudao.write" for name in mutation_names}}, data_classifier=data,
@@ -193,7 +194,8 @@ class YudaoApplication:
                         **{t.name: t.operation for t in registry.definitions}},
             skill_registry=skills, require_skill_for_writes=True, mutation_journal=mutation_journal,
             mutation_dispatch_enabled=not native_write_preparation,
-            postcondition_verifier=postconditions, route_validator=routes)
+            postcondition_verifier=postconditions, route_validator=routes,
+            default_loaded_skill_ids=resident_skills)
         self.ports = ApplicationPorts(
             identity=self.identity, routes=routes, postconditions=postconditions,
             reconciliation=YudaoMutationReconciler(
@@ -203,8 +205,15 @@ class YudaoApplication:
                 writing_gets=writing_gets,
                 application_id=APPLICATION_ID,
             ), data=data,
-            operations=RegisteredOperations(registry, skills, self.goal_data.invalidate_reads,
-                observed_mutation_operations=frozenset(d.name for d in registry.definitions)),
+            operations=RegisteredOperations(
+                registry,
+                skills,
+                self.goal_data.invalidate_reads,
+                observed_mutation_operations=frozenset(d.name for d in registry.definitions),
+                default_loaded_skill_ids=(
+                    frozenset({"yudao.convention-record-mutation"}) if registry.definitions else frozenset()
+                ),
+            ),
             goal_scopes=YudaoIdentityPort.required_scopes,
             forms=forms if forms is not None else NoApplicationForms())
         self.descriptor = ApplicationDescriptor(

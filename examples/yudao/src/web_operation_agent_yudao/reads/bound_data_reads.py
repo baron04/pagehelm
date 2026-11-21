@@ -15,8 +15,16 @@ from .client import YudaoReadRefused
 _TURN_ACTOR_LOCAL = threading.local()
 
 
+def current_turn_read_scope() -> dict | None:
+    """Return the active synchronous turn read scope on this thread, if any."""
+    scope = getattr(_TURN_ACTOR_LOCAL, "scope", None)
+    if isinstance(scope, dict) and scope.get("thread_id") == threading.get_ident():
+        return scope
+    return None
+
+
 @contextmanager
-def turn_actor_reads(client, turn_context=None, *, seed_scope=None):
+def turn_actor_reads(client, turn_context=None, *, seed_scope=None, knowledge=None):
     """Reuse identity matching, never permissions, within one synchronous slim turn.
 
     The delegated token names one actor. Renewing it invalidates the whole turn;
@@ -30,11 +38,15 @@ def turn_actor_reads(client, turn_context=None, *, seed_scope=None):
             and seed_scope.get("generation") == generation
             and seed_scope.get("binding") is not None):
         binding = seed_scope["binding"]
+    if knowledge is None and isinstance(seed_scope, dict):
+        knowledge = seed_scope.get("knowledge")
     state = {
         "client": client,
         "generation": generation,
         "binding": binding,
         "thread_id": threading.get_ident(),
+        "turn_context": turn_context,
+        "knowledge": knowledge,
     }
     previous_local = getattr(_TURN_ACTOR_LOCAL, "scope", None)
     _TURN_ACTOR_LOCAL.scope = state

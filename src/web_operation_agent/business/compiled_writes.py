@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import inspect
 import json
 import math
 import re
@@ -40,6 +41,7 @@ from .errors import (
     BusinessMutationIndeterminate,
     BusinessMutationRefusedError,
     BusinessToolIdentityError,
+    BusinessToolReferenceError,
     BusinessToolRequestError,
 )
 from .tools.contracts import BusinessMutationSpec, BusinessToolResult, ToolOperation
@@ -496,8 +498,9 @@ class CompiledCreateHandler:
         bindings: list[dict] = []
         details = []
         default_lookup = spec.default_map()
+        indexed_items: list[tuple[int, ConventionFieldSpec, object]] = []
 
-        for item in raw_fields:
+        for idx, item in enumerate(raw_fields):
             raw_field = str(item.get("field") or "").strip()
             f_spec = spec.resolve_field(raw_field)
             if f_spec is None:
@@ -517,12 +520,68 @@ class CompiledCreateHandler:
                     shown = f"{f_spec.label}（{f_spec.name}）" if f_spec.label else f_spec.name
                     raise BusinessToolRequestError(f"新建{spec.label}必填字段「{shown}」不能为空或 null，请向用户确认后再提交。")
                 continue
-            encode_create_fn = getattr(self.port, "encode_create_field", None)
+            indexed_items.append((idx, f_spec, raw_val))
+
+        encode_create_fn = getattr(self.port, "encode_create_field", None)
+        accepts_resolved = False
+        if callable(encode_create_fn):
+            try:
+                sig = inspect.signature(encode_create_fn)
+                accepts_resolved = "resolved_fields" in sig.parameters or any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+                )
+            except (ValueError, TypeError):
+                accepts_resolved = False
+
+        resolved_fields: dict[str, object] = {}
+
+        def _encode_one(f_spec: ConventionFieldSpec, raw_val: object):
             if callable(encode_create_fn):
-                api_val, disp, binding = encode_create_fn(spec, f_spec, raw_val, actor_id=actor_id)
-            else:
-                api_val, _old, disp, binding = self.port.encode_field(spec, f_spec, raw_val, {})
+                if accepts_resolved:
+                    return encode_create_fn(
+                        spec,
+                        f_spec,
+                        raw_val,
+                        actor_id=actor_id,
+                        resolved_fields=dict(resolved_fields),
+                    )
+                return encode_create_fn(spec, f_spec, raw_val, actor_id=actor_id)
+            api_val, _old, disp, binding = self.port.encode_field(spec, f_spec, raw_val, {})
+            return api_val, disp, binding
+
+        resolved_entries: list[tuple[int, ConventionFieldSpec, object, object, dict | None]] = []
+        deferred: list[tuple[int, ConventionFieldSpec, object]] = []
+        for pos, (idx, f_spec, raw_val) in enumerate(indexed_items):
+            try:
+                api_val, disp, binding = _encode_one(f_spec, raw_val)
+            except (BusinessToolRequestError, BusinessToolReferenceError):
+                if f_spec.reference_entity and pos + 1 < len(indexed_items):
+                    deferred.append((idx, f_spec, raw_val))
+                    continue
+                raise
             _check_explicit_bounds(f_spec, api_val)
+            resolved_fields[f_spec.name] = api_val
+            resolved_entries.append((idx, f_spec, api_val, disp, binding))
+
+        while deferred:
+            progress = False
+            next_deferred: list[tuple[int, ConventionFieldSpec, object]] = []
+            for idx, f_spec, raw_val in deferred:
+                try:
+                    api_val, disp, binding = _encode_one(f_spec, raw_val)
+                except (BusinessToolRequestError, BusinessToolReferenceError):
+                    next_deferred.append((idx, f_spec, raw_val))
+                    continue
+                _check_explicit_bounds(f_spec, api_val)
+                resolved_fields[f_spec.name] = api_val
+                resolved_entries.append((idx, f_spec, api_val, disp, binding))
+                progress = True
+            if not progress:
+                # Re-run first unresolved item to surface its original typed error cleanly.
+                _encode_one(next_deferred[0][1], next_deferred[0][2])
+            deferred = next_deferred
+
+        for _idx, f_spec, api_val, disp, binding in sorted(resolved_entries, key=lambda entry: entry[0]):
             payload[f_spec.name] = api_val
             expected_created[f_spec.name] = api_val
             if binding is not None:
@@ -649,6 +708,7 @@ class CompiledCreateHandler:
                 existing_values=existing_values,
                 allow_append=False,
                 allow_existing_candidates=False,
+                allow_fk_candidates=bool(f_spec.reference_entity),
             )
 
     def dispatch(self, args: dict, *, context=None) -> BusinessToolResult:

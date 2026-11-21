@@ -14,13 +14,17 @@ class BusinessSkillCatalog:
 
     def __init__(self, *, skills: dict[str, BusinessSkill], schemas: dict[str, dict],
                  effects: dict[str, str], required_scopes: dict[str, str],
-                 route_skill_hints: tuple, withheld_skills: tuple[BusinessSkill, ...]):
+                 route_skill_hints: tuple, withheld_skills: tuple[BusinessSkill, ...],
+                 resident_skill_ids: frozenset[str] = frozenset()):
         self._skills = skills
         self._schemas = schemas
         self._effects = effects
         self._required_scopes = required_scopes
         self._route_skill_hints = route_skill_hints
         self._withheld_skills = withheld_skills
+        if not isinstance(resident_skill_ids, frozenset):
+            raise TypeError("resident_skill_ids must be a frozenset")
+        self._resident_skill_ids = resident_skill_ids
 
     @property
     def catalog_manifest(self) -> dict:
@@ -173,7 +177,8 @@ class BusinessSkillCatalog:
             # installed description, so the catalog size itself is the bound; each
             # description is separately bounded. A larger catalog must supply a
             # retrieval surface -- exceeding the bound is refused, never truncated.
-            if len(self._skills) > 24:
+            non_resident = [sid for sid in self._skills if sid not in self._resident_skill_ids]
+            if len(non_resident) > 24:
                 raise ValueError("Skill catalog requires bounded description retrieval")
             return BusinessSkillSelection("skill-description-v1", tuple(self._skills.values()), (), False)
         if trusted_entry_path and (

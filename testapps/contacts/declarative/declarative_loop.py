@@ -398,6 +398,9 @@ def build_declarative_profile(
     adapter: DeclarativeApplicationAdapter, goal_port, *, procedure_cls: type[DeclarativeProcedure] = DeclarativeProcedure,
     drafts: bool = False, filters: bool = False, enable_sql: bool = False, today: str = "", time_zone: str = "UTC",
     draft_steps=None, mutation_prefill=None,
+    hub_routes: frozenset[str] = frozenset(),
+    deferred_dom_tools: frozenset[str] = frozenset(),
+    suppress_system_operation_catalog: bool = False,
 ) -> ModelLoopProfile:
     """Build a complete ``ModelLoopProfile`` from ``DeclarativeAppSpec``."""
     schemas: list[tuple[dict, str, frozenset[str], str]] = []
@@ -450,7 +453,22 @@ def build_declarative_profile(
     draft_hint = " Page forms only prefill fields and highlight the submit button via fill_fields(then_highlight=...) for the user to submit manually (never auto-submit)." if drafts else ""
     filter_hint = " Query forms accept filter entry followed by then_click on the search button." if filters else " This profile does not offer list filters."
     instructions = "Answer from current REST reads. Clarify ambiguous names; never choose one silently. " + summary_hints + " The server calculates and renders the selected read_answer; keep finish.answer empty. This application offers reviewed navigation and visible-control handoff." + sql_hint + draft_hint + filter_hint + " It does not offer pagination. Source tools depend on deployment configuration."
-    return ModelLoopProfile(instructions, procedures, render, prepare, draft_steps=draft_steps, mutation_prefill=mutation_prefill)
+    hub_fn = (
+        (lambda obs: (getattr(obs, "page_route", "") or urlsplit(getattr(obs, "url", "") or "").path) in hub_routes)
+        if hub_routes
+        else None
+    )
+    return ModelLoopProfile(
+        instructions,
+        procedures,
+        render,
+        prepare,
+        draft_steps=draft_steps,
+        mutation_prefill=mutation_prefill,
+        is_hub_route=hub_fn,
+        deferred_dom_tools=deferred_dom_tools,
+        suppress_system_operation_catalog=suppress_system_operation_catalog,
+    )
 
 
 __all__ = ["DeclarativeGoalPort", "DeclarativeModelGoalPort", "DeclarativeProcedure", "build_declarative_profile"]

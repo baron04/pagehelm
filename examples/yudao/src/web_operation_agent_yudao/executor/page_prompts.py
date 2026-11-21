@@ -17,6 +17,7 @@ from web_operation_agent.privacy import redact_sensitive_assignments
 from ..reads.turn_tables import TurnReadError, date_range
 from ..writes.convention_writes import YUDAO_WRITE_ROUTE_CAPABILITY
 from ..writes.write_intent import WriteIntent
+from .domain_toolpacks import SWITCH_DOMAIN_SCHEMA
 
 #: Requests a turn may make of the model for its steps; the check at the end is extra.
 MODEL_STEPS = 33
@@ -120,6 +121,7 @@ TOOLS = [
             "crm-sales", "erp-trade-stock", "erp-finance", "mall-catalog-promo",
             "mall-trade-aftersale", "hrm-org-salary", "fms-accounting", "oa-bpm-system",
         ]}}, ["domain"]),
+    SWITCH_DOMAIN_SCHEMA,
     _tool("call_api", "以当前用户身份调用一个只读接口（GET）。分页接口必须带 pageNo 和 pageSize。", {
         "path": {"type": "string"},
         "params": {"type": "string", "maxLength": 8000, "description": "查询参数的 JSON 对象字符串，例如 {\"pageNo\":1,\"pageSize\":20}"},
@@ -291,11 +293,55 @@ def build_native_submit_rules(cap: WriteRouteCapability = YUDAO_WRITE_ROUTE_CAPA
     ))
 
 
+def structured_write_routing_rules(
+    cap: WriteRouteCapability = YUDAO_WRITE_ROUTE_CAPABILITY,
+    *,
+    ops_available: bool = True,
+    direct_skill_operations: bool = True,
+) -> str:
+    """Explicit three-way write routing derived cleanly from WriteRouteCapability."""
+    if not ops_available and cap.page_form_mode != "prefill_handoff" and not cap.inline_row_status_submit:
+        return ""
+    lines = ["", "写入路由与执行规范（三路分流）："]
+    if ops_available:
+        if direct_skill_operations:
+            lines.append(
+                "- 路 1（常驻编译写与领域 Skill API 写入）：扁平新建用 create_record、单表或 1–2 层明细修改用 update_record、"
+                "两态启停/上下架用 toggle_record_status、角色/关联集合用 assign_record_relations（均已常驻，可直接调用）；"
+                "激活业务域契约中的专用操作（或 via switch_domain 补充切换域）直接用 propose_operation(operation, inputs) 提出提案"
+                "（程序自动加载 Skill，需要完整领域规则时再调 load_skill）。关联外键优先填确切业务名称或「父名称/第N期」，"
+                "无名称字段的编号外键可用本轮已读核验候选；提案须用户批准并回读核对，只问流程或仅要求预填时禁止提出。"
+            )
+        else:
+            lines.append(
+                "- 路 1（Skill API 写入）：优先先 load_skill 再用已安装的 typed 操作提出提案；每项写入须用户批准并回读核对。"
+            )
+    if cap.inline_row_status_submit:
+        lines.append(
+            "- 路 2（表格行内无表单按钮）：如审核、启停、关闭等无表单行内动作且未被 API 写入覆盖时，用 request_submit(index=按钮序号) 请求批准执行。"
+        )
+    if cap.page_form_mode == "prefill_handoff":
+        lines.append(
+            "- 路 3（复杂或未覆盖页面表单预填交接）：不含在 API 写入覆盖内的新建/流程起草（如含密码用户新建、多行明细新建等），"
+            "打开目标原生表单按用户原话填满字段并用 fill_fields(..., then_highlight='确定/保存/提交') 标出提交按钮，"
+            "由用户自行点击确认——完成预填高亮即调 finish(status='done')，不得对表单提交按钮调用 request_submit，也不得因无 Skill 而拒绝。"
+        )
+    else:
+        lines.append("- 当前部署不开放页面表单提交。")
+    lines.append(
+        "- 危险或不可逆动作（关闭秒杀、反审批、删除/作废等）：先向用户说明连带影响并用 finish(status='need_input', options=[确认/取消]) 取得确认后再执行；"
+        "用户请求包含多个子义务或写/查混杂时，办完一项继续完成其余部分。"
+    )
+    return "\n".join(lines)
+
+
 def apply_write_route_capability(
     instructions: str,
     cap: WriteRouteCapability = YUDAO_WRITE_ROUTE_CAPABILITY,
     *,
     native_submit: bool,
+    direct_skill_operations: bool = False,
+    ops_available: bool = False,
 ) -> str:
     """Apply WriteRouteCapability consistently to system instructions."""
     if not native_submit:
@@ -303,11 +349,17 @@ def apply_write_route_capability(
     if cap.page_form_mode == "prefill_handoff":
         row_clause = "；行内启停、审核、关闭等无表单动作可配合 request_submit 经批准卡提交" if cap.inline_row_status_submit else ""
         partial_row = "（行内动作可配合 request_submit）" if cap.inline_row_status_submit else ""
+        op_phrase = (
+            "直接调用常驻通用操作（create_record / update_record / toggle_record_status / assign_record_relations）"
+            "或用 propose_operation 提出专用 Skill 提案"
+            if direct_skill_operations
+            else "先 load_skill，再用已安装操作提出提案"
+        )
         new_lead = (
             "优先用下面“已安装的 Skill”覆盖的操作提出提案；Skill 未覆盖（或改走页面表单）的新增、修改，"
             "直接在用户页用原生表单填好并通过 then_highlight 标出提交按钮交由用户自己提交（完成预填交接即 finish(status=\"done\")，不对表单调用 request_submit，也不得因无对应 Skill 而拒绝）"
             f"{row_clause}。\n"
-            "   - 本轮提供了 Skill 写入工具且用户要求办理其覆盖的事时，先 load_skill，再用已安装操作提出提案（Skill 自身失败不会阻碍你改用页面表单完成预填交接）；走页面表单时填好字段并标出提交按钮即完成交接。"
+            f"   - 本轮提供了 Skill 写入工具且用户要求办理其覆盖的事时，{op_phrase}（Skill 自身失败不会阻碍你改用页面表单完成预填交接）；走页面表单时填好字段并标出提交按钮即完成交接。"
         )
         new_partial = (
             f"用户要的事里若既有 Skill 参数没覆盖某个字段或动作，表单字段改走用户页表单预填交接{partial_row}；"
@@ -315,17 +367,29 @@ def apply_write_route_capability(
         )
     else:
         row_clause = "；表格行内无表单动作可配合 request_submit 经批准卡提交" if cap.inline_row_status_submit else ""
+        op_phrase = (
+            "直接调用常驻通用操作或用 propose_operation 提出专用 Skill 提案"
+            if direct_skill_operations
+            else "先 load_skill，再用已安装操作提出提案"
+        )
         new_lead = (
             f"优先用下面“已安装的 Skill”覆盖的操作提出提案{row_clause}；当前部署不开放页面表单提交。\n"
-            "   - 本轮提供了 Skill 写入工具且用户要求办理其覆盖的事时，先 load_skill，再用已安装操作提出提案。"
+            f"   - 本轮提供了 Skill 写入工具且用户要求办理其覆盖的事时，{op_phrase}。"
         )
         new_partial = "用户要的事里有已安装写入操作办不到的部分：先如实说明办不到的是哪部分（cannot），不要只办能办的那部分就说完成。"
-    return (
+    had_write_lead = _OLD_WRITE_LEAD in instructions
+    updated = (
         instructions
         .replace(_OLD_WRITE_LEAD, new_lead, 1)
         .replace(_OLD_PARTIAL_RULE, new_partial, 1)
-        + build_native_submit_rules(cap)
     )
+    if direct_skill_operations and not had_write_lead:
+        routing = structured_write_routing_rules(
+            cap, ops_available=ops_available, direct_skill_operations=True
+        )
+        if routing:
+            updated += routing
+    return updated + build_native_submit_rules(cap)
 
 
 NATIVE_SUBMIT_RULES = build_native_submit_rules(YUDAO_WRITE_ROUTE_CAPABILITY)
@@ -679,7 +743,13 @@ def _date_pair(element, elements):
 
 def _words(content: str) -> str:
     """The person's own words in a message that also carries what the program added."""
-    return content.split("\n当前页面:")[0].split("\n上一轮用到的 Skill")[0].split("\n程序按字面先找到的")[0]
+    return (
+        content.split("\n当前页面:")[0]
+        .split("\n上一轮用到的 Skill")[0]
+        .split("\n程序按字面先找到的")[0]
+        .split("\n\n当前激活业务域契约")[0]
+        .split("\n当前激活业务域契约")[0]
+    )
 
 
 def _control_name(element) -> str:
