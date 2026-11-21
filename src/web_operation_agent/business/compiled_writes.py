@@ -663,6 +663,13 @@ class CompiledCreateHandler:
         if missing:
             errors.append(f"新建{spec.label}还缺少以下必填信息，请先向用户确认：{'、'.join(missing)}。")
 
+        validate_create_fn = getattr(self.port, "validate_create_payload", None)
+        if callable(validate_create_fn) and not errors and not ref_errors:
+            try:
+                validate_create_fn(spec, payload, bindings=bindings, actor_id=actor_id)
+            except BusinessToolRequestError as exc:
+                errors.append(str(exc))
+
         if not errors and len(ref_errors) == 1:
             raise ref_errors[0]
         combined_errors = list(dict.fromkeys([*errors, *(str(e) for e in ref_errors)]))

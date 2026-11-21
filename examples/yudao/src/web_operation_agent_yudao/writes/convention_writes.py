@@ -196,6 +196,8 @@ def _record_ref_candidates(ref_entity: str, rows: list[dict], *, name_keys: tupl
         note_candidates(policy_turn, items)
 
 
+_CRM_PERMISSION_DENIED_CODE = 1020007001
+
 _CRM_BIZ_TYPES = {
     "crm/clue": 1,
     "crm/customer": 2,
@@ -606,7 +608,7 @@ class YudaoConventionWritePort:
         try:
             data = self.client.get(path, **qparams)
         except YudaoReadRefused as exc:
-            if exc.permission_denied or exc.code == 401:
+            if exc.permission_denied or exc.code in (401, _CRM_PERMISSION_DENIED_CODE):
                 raise BusinessToolPermissionError("当前账号无权读取目标记录详情。") from exc
             if exc.read_failed:
                 raise BusinessToolUnavailableError("目标记录详情接口当前不可用。") from exc
@@ -1260,6 +1262,30 @@ class YudaoConventionWritePort:
         }
         if expected_fields:
             binding["expected_fields"] = expected_fields
+        paths = (self._docs() or {}).get("paths") or {}
+        if ref_entity in _CRM_BIZ_TYPES and f"/admin-api/{ref_entity}/get" in paths:
+            policy_turn, _knowledge = _active_turn_and_knowledge()
+            try:
+                detail = self.client.get(f"{ref_entity}/get", id=chosen["id"])
+            except YudaoReadRefused as exc:
+                if exc.permission_denied or exc.code in (401, 403, _CRM_PERMISSION_DENIED_CODE):
+                    if isinstance(policy_turn, dict):
+                        policy_turn.setdefault("_rejected_fk_entities", set()).add(ref_entity)
+                    raise BusinessToolRequestError(
+                        f"关联对象「{label}（{ref_entity} ID={chosen['id']}）」当前账号没有数据权限（code={exc.code}），"
+                        "无法绑定该记录；禁止在同一轮静默省略用户已指定的关联字段或擅自改绑其他记录，"
+                        "请直接用 cannot 如实说明无权限或用 need_input 请用户确认。"
+                    ) from exc
+                if exc.read_failed:
+                    raise BusinessToolUnavailableError(f"关联对象（{ref_entity}）详情接口当前不可用。") from exc
+                raise BusinessToolRequestError(
+                    f"关联对象「{label}（{ref_entity} ID={chosen['id']}）」详情不可读（code={exc.code}），无法绑定。"
+                ) from exc
+            if not isinstance(detail, dict):
+                raise BusinessToolRequestError(
+                    f"关联对象「{label}（{ref_entity} ID={chosen['id']}）」详情不存在或不可读。"
+                )
+            binding["verify_get_path"] = f"{ref_entity}/get"
         return chosen["id"], label, binding
 
     def encode_field(
@@ -1567,6 +1593,113 @@ class YudaoConventionWritePort:
 
                 if not isinstance(items, list) or not any(_rel_row_matches(r) for r in items):
                     raise BusinessMutationRefusedError("related record changed after approval", reason="precondition_changed")
+                verify_get_path = b.get("verify_get_path")
+                if isinstance(verify_get_path, str) and verify_get_path:
+                    try:
+                        detail = self.client.get(verify_get_path, id=b["id"])
+                    except YudaoReadRefused as exc:
+                        raise BusinessMutationRefusedError(
+                            "related CRM record is no longer accessible after approval",
+                            reason="precondition_changed",
+                        ) from exc
+                    if not isinstance(detail, dict):
+                        raise BusinessMutationRefusedError(
+                            "related CRM record is no longer accessible after approval",
+                            reason="precondition_changed",
+                        )
+
+    def validate_create_payload(
+        self,
+        spec: CompiledCreateSpec,
+        payload: dict,
+        *,
+        bindings: list[dict] | None = None,
+        actor_id: str = "",
+    ) -> None:
+        policy_turn, _knowledge = _active_turn_and_knowledge()
+        rejected_fks = policy_turn.get("_rejected_fk_entities") if isinstance(policy_turn, dict) else None
+        if isinstance(rejected_fks, (set, frozenset, list, tuple)) and rejected_fks:
+            for f_spec in spec.fields:
+                if f_spec.reference_entity in rejected_fks and f_spec.name not in payload:
+                    raise BusinessToolRequestError(
+                        f"本轮前一次提交已指定关联字段「{f_spec.label or f_spec.name}」但因无权限或业务冲突未通过，"
+                        "禁止在同一轮静默省略该关联字段强行新建；请向用户如实说明原因或用 need_input 请用户确认。"
+                    )
+
+        paths = (self._docs() or {}).get("paths") or {}
+        if spec.entity == "crm/receivable":
+            contract_id = payload.get("contractId")
+            if contract_id is not None and "/admin-api/crm/contract/get" in paths:
+                try:
+                    contract = self.client.get("crm/contract/get", id=contract_id)
+                except YudaoReadRefused as exc:
+                    raise BusinessToolRequestError(f"无法核验关联合同（ID={contract_id}）：code={exc.code}") from exc
+                if isinstance(contract, dict):
+                    audit_status = contract.get("auditStatus")
+                    if audit_status is not None and int(audit_status) != 20:
+                        raise BusinessToolRequestError(
+                            f"关联合同（ID={contract_id}）当前未审核通过（auditStatus={audit_status}），不能登记回款。"
+                        )
+                    total_price = contract.get("totalPrice")
+                    req_price = payload.get("price")
+                    if total_price is not None and req_price is not None and "/admin-api/crm/receivable/page" in paths:
+                        try:
+                            recv_page = self.client.get(
+                                "crm/receivable/page",
+                                contractId=contract_id,
+                                pageNo=1,
+                                pageSize=100,
+                            )
+                        except YudaoReadRefused:
+                            recv_page = None
+                        if isinstance(recv_page, dict) and isinstance(recv_page.get("list"), list):
+                            total_rows = recv_page.get("total")
+                            rows = recv_page["list"]
+                            if isinstance(total_rows, int) and total_rows <= len(rows):
+                                try:
+                                    used_sum = sum(
+                                        (
+                                            Decimal(str(r["price"]))
+                                            for r in rows
+                                            if isinstance(r, dict)
+                                            and r.get("price") is not None
+                                            and r.get("auditStatus") in (10, 20)
+                                        ),
+                                        Decimal(0),
+                                    )
+                                    remaining = Decimal(str(total_price)) - used_sum
+                                    if Decimal(str(req_price)) > remaining:
+                                        raise BusinessToolRequestError(
+                                            f"回款金额（{req_price}）超过关联合同剩余可回款金额（{scalar_text(remaining)}），"
+                                            "请核对合同金额与已登记回款后向用户确认。"
+                                        )
+                                except (InvalidOperation, ValueError):
+                                    pass
+            plan_id = payload.get("planId")
+            if plan_id is not None and "/admin-api/crm/receivable-plan/get" in paths:
+                try:
+                    plan = self.client.get("crm/receivable-plan/get", id=plan_id)
+                except YudaoReadRefused as exc:
+                    if exc.permission_denied or exc.code in (401, 403, _CRM_PERMISSION_DENIED_CODE):
+                        if isinstance(policy_turn, dict):
+                            policy_turn.setdefault("_rejected_fk_entities", set()).add("crm/receivable-plan")
+                    raise BusinessToolRequestError(
+                        f"无法读取所选回款计划（ID={plan_id}，code={exc.code}），不能绑定该计划。"
+                    ) from exc
+                if isinstance(plan, dict):
+                    if (
+                        plan.get("contractId") is not None
+                        and contract_id is not None
+                        and str(plan["contractId"]) != str(contract_id)
+                    ):
+                        raise BusinessToolRequestError("所选回款计划不属于当前关联合同。")
+                    if plan.get("receivableId") not in (None, "", 0):
+                        if isinstance(policy_turn, dict):
+                            policy_turn.setdefault("_rejected_fk_entities", set()).add("crm/receivable-plan")
+                        raise BusinessToolRequestError(
+                            f"所选回款计划（ID={plan_id}）已关联回款（receivableId={plan['receivableId']}），"
+                            "不能重复使用；禁止擅自改绑其他期次或静默省略 planId，请如实说明或用 need_input 请用户确认。"
+                        )
 
     def encode_preserved_field(self, spec, field: ConventionFieldSpec, raw_value):
         if field.date_kind == "epoch_ms" and isinstance(raw_value, str) and raw_value.strip():

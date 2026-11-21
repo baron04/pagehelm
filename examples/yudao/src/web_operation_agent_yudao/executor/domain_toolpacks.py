@@ -61,8 +61,8 @@ YUDAO_DOMAIN_PACKS: tuple[DomainToolpack, ...] = (
         aliases=("crm", "crm-sales", "客户", "线索", "联系人", "商机", "合同", "回款", "回款计划", "公海", "跟进"),
         route_prefixes=("/crm",),
         write_contract_text=(
-            "回款新建调 create_record(entity='crm/receivable')；若用户未指定具体期次，planId 为选填字段可直接省略并在 contractId 名下直接 create_record；"
-            "仅当用户明确点名某期回款计划而该计划缺失或无权读取时，应直接说明或 need_input，严禁擅自调 crm_receivable_plan_create 代建计划。"
+            "回款新建调 create_record(entity='crm/receivable')；仅当用户未指定具体期次时，planId 为选填字段可直接省略并在 contractId 名下直接 create_record；"
+            "若用户已指定具体回款期次或计划而该计划无权读取、不存在或已关联回款，禁止在同一轮静默省略 planId 或擅自改绑其他期次，更严禁擅自调 crm_receivable_plan_create 代建计划，应如实说明（cannot）或 need_input 请用户确认。"
         ),
         read_contract_text="实体前缀 crm/customer、crm/contact、crm/clue、crm/business、crm/contract、crm/receivable-plan、crm/receivable。",
         default_priority=3,

@@ -191,6 +191,25 @@ class Phase51ContractTests(unittest.TestCase):
         self.assertEqual(loaded_skills, ["minimal.contacts.contact-maintenance"])
         self.assertNotIn("minimal.contacts.record-convention-maintenance", loaded_skills)
 
+    def test_contacts_convention_port_validate_create_payload_blocks_archived_before_approval(self):
+        result, chat, events, channel = self._run_contacts([
+            _tool_reply((
+                "create_record",
+                {
+                    "entity": "contact-notes",
+                    "fields": [
+                        {"field": "title", "value": "Archived attempt"},
+                        {"field": "category", "value": "archived"},
+                    ],
+                },
+            )),
+            _tool_reply(("finish", {"status": "cannot", "answer": "Archived category is disallowed."})),
+        ], resident_convention_skill=True)
+        self.assertEqual(result.terminal_reason, "agent_refused", result.user_answer)
+        self.assertEqual(channel.approvals, [])
+        self.assertFalse(any(e.get("event") == "approval_requested" for e in events))
+        self.assertIn("archived", json.dumps(chat.calls[1][0], ensure_ascii=False))
+
     def test_hub_route_defers_dom_tools_until_navigation_keeping_stable_prefix(self):
         result, chat, events, _channel = self._run_contacts(
             [
@@ -615,6 +634,54 @@ class Phase51ContractTests(unittest.TestCase):
             agg_prop,
             existing_values={"__receipt__": ("11500",)},
         )
+
+    def test_validate_create_payload_hook_refuses_before_approval(self):
+        from web_operation_agent.business.compiled_writes import CompiledCreateHandler, CompiledCreateSpec
+        from web_operation_agent.business.convention_writes import ConventionFieldSpec
+        from web_operation_agent.business.errors import BusinessToolRequestError
+
+        dispatches: list[dict] = []
+
+        class _PrecheckPort:
+            def verify_actor(self, context):
+                return "9"
+
+            def create_specs(self):
+                return {
+                    "contact-notes": CompiledCreateSpec(
+                        entity="contact-notes",
+                        label="Contact note",
+                        fields=(
+                            ConventionFieldSpec("title", "string", label="Title", required=True),
+                            ConventionFieldSpec("category", "string", label="Category", required=True),
+                        ),
+                    )
+                }
+
+            def encode_field(self, spec, field, raw_val, cur_rec):
+                return str(raw_val), "", str(raw_val), None
+
+            def validate_create_payload(self, spec, payload, *, bindings=None, actor_id=""):
+                if payload.get("category") == "archived":
+                    raise BusinessToolRequestError("archived category refused in precheck")
+
+            def dispatch_create(self, spec, payload):
+                dispatches.append(dict(payload))
+                return "1"
+
+        handler = CompiledCreateHandler(_PrecheckPort())
+        with self.assertRaises(BusinessToolRequestError) as ctx:
+            handler.prepare(
+                {
+                    "entity": "contact-notes",
+                    "fields": [
+                        {"field": "title", "value": "Follow up"},
+                        {"field": "category", "value": "archived"},
+                    ],
+                }
+            )
+        self.assertIn("archived category refused in precheck", str(ctx.exception))
+        self.assertEqual(dispatches, [])
 
 
 if __name__ == "__main__":

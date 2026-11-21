@@ -289,6 +289,17 @@ class ContactsConventionWritePort:
     def recheck_bindings(self, bindings: list[dict], *, actor_id: str) -> None:
         return None
 
+    def validate_create_payload(
+        self,
+        spec: CompiledCreateSpec,
+        payload: dict,
+        *,
+        bindings: list[dict] | None = None,
+        actor_id: str = "",
+    ) -> None:
+        if spec.entity == "contact-notes" and str(payload.get("category") or "").strip().casefold() == "archived":
+            raise BusinessToolRequestError("category 'archived' cannot be used when creating a new contact note")
+
     def dispatch_update(self, spec: ConventionUpdateSpec, record_id, payload: dict) -> None:
         self._request_once("PUT", f"/api/contacts/{record_id}", payload)
 

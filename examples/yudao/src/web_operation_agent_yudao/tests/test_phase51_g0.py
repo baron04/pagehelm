@@ -1382,6 +1382,278 @@ class Phase51G0Tests(unittest.TestCase):
         self.assertIn("必填: name, mobile", rules_out)
         self.assertIn("选填字段: remark(备注)", rules_out)
 
+    def test_crm_fk_permission_precheck_blocks_1020007001_before_approval_and_prevents_silent_drop(self):
+        import time
+        from web_operation_agent.business.compiled_writes import CompiledCreateHandler
+        from web_operation_agent.business.errors import BusinessMutationRefusedError, BusinessToolRequestError
+        from web_operation_agent.state.identity import OperationContext, PrincipalContext
+        from web_operation_agent_yudao.reads.bound_data_reads import turn_actor_reads
+        from web_operation_agent_yudao.reads.client import YudaoReadRefused
+        from web_operation_agent_yudao.writes.convention_writes import YudaoConventionWritePort
+
+        now = int(time.time() * 1000)
+        actor = PrincipalContext(
+            1, "yudao", "1", "7", "1", "synthetic",
+            now - 1000, now + 60000, ("yudao.read", "yudao.write"),
+        )
+        op_ctx = OperationContext.create(actor, session_id="s", turn_id="t", operation_id="o", deadline_ms=now + 30000)
+
+        class _CrmReceivableClient:
+            def __init__(self):
+                self.read_generation = 1
+                self.tenant = "1"
+                self.dispatches = []
+                self.contract_audit_status = 20
+                self.contract_total_price = 1000.0
+                self.plan_receivable_id = None
+                self.plan_get_error = YudaoReadRefused(
+                    "crm/receivable-plan/get: 1020007001 回款计划操作失败，原因：没有权限",
+                    code=1020007001,
+                    reason="回款计划操作失败，原因：没有权限",
+                )
+                self.existing_receivables = []
+
+            def read_window(self, _check):
+                return nullcontext()
+
+            def write_window(self, _check):
+                return nullcontext()
+
+            def get(self, path, **params):
+                if path == "system/auth/get-permission-info":
+                    return {
+                        "user": {"id": 1, "nickname": "芋道源码", "username": "admin"},
+                        "roles": [],
+                        "permissions": ["crm:receivable:create"],
+                        "menus": [],
+                    }
+                if path == "system/dict-data/simple-list":
+                    return [{"dictType": "crm_receivable_return_type", "value": "4", "label": "电汇"}]
+                if path == "crm/customer/simple-list":
+                    return [{"id": 998326, "name": "青岛望川瑞宁电力技术有限责任公司"}]
+                if path == "crm/customer/get":
+                    return {"id": 998326, "name": "青岛望川瑞宁电力技术有限责任公司"}
+                if path == "crm/contract/simple-list":
+                    return [{"id": 998427, "name": "北方采购协同供货合同（南区）", "customerId": 998326}]
+                if path == "crm/contract/get":
+                    return {
+                        "id": 998427,
+                        "name": "北方采购协同供货合同（南区）",
+                        "customerId": 998326,
+                        "auditStatus": self.contract_audit_status,
+                        "totalPrice": self.contract_total_price,
+                    }
+                if path == "crm/receivable-plan/simple-list":
+                    return [{"id": 7, "period": 1, "contractId": 998427, "customerId": 998326}]
+                if path == "crm/receivable-plan/get":
+                    if self.plan_get_error is not None:
+                        raise self.plan_get_error
+                    return {
+                        "id": 7,
+                        "period": 1,
+                        "contractId": 998427,
+                        "customerId": 998326,
+                        "receivableId": self.plan_receivable_id,
+                    }
+                if path == "crm/receivable/page":
+                    return {"list": list(self.existing_receivables), "total": len(self.existing_receivables)}
+                return []
+
+            def write_once(self, method, path, *, body=None, params=None, operation="", expect_result="bool"):
+                self.dispatches.append((method, path, dict(body or {})))
+                return 888
+
+        docs = {
+            "paths": {
+                "/admin-api/crm/customer/page": {"get": {"responses": {"200": {}}}},
+                "/admin-api/crm/customer/simple-list": {"get": {"responses": {"200": {}}}},
+                "/admin-api/crm/customer/get": {
+                    "get": {"parameters": [{"name": "id", "in": "query", "required": True}], "responses": {"200": {}}}
+                },
+                "/admin-api/crm/contract/page": {"get": {"responses": {"200": {}}}},
+                "/admin-api/crm/contract/simple-list": {
+                    "get": {"parameters": [{"name": "customerId", "in": "query", "required": True}], "responses": {"200": {}}}
+                },
+                "/admin-api/crm/contract/get": {
+                    "get": {"parameters": [{"name": "id", "in": "query", "required": True}], "responses": {"200": {}}}
+                },
+                "/admin-api/crm/receivable-plan/page": {"get": {"responses": {"200": {}}}},
+                "/admin-api/crm/receivable-plan/simple-list": {
+                    "get": {
+                        "parameters": [
+                            {"name": "customerId", "in": "query", "required": True},
+                            {"name": "contractId", "in": "query", "required": True},
+                        ],
+                        "responses": {"200": {}},
+                    }
+                },
+                "/admin-api/crm/receivable-plan/get": {
+                    "get": {"parameters": [{"name": "id", "in": "query", "required": True}], "responses": {"200": {}}}
+                },
+                "/admin-api/crm/receivable/page": {
+                    "get": {"parameters": [{"name": "contractId", "in": "query"}], "responses": {"200": {}}}
+                },
+                "/admin-api/crm/receivable/get": {
+                    "get": {
+                        "parameters": [{"name": "id", "in": "query", "required": True}],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/RecvGetResp"}}}}},
+                    }
+                },
+                "/admin-api/crm/receivable/create": {
+                    "post": {
+                        "tags": ["管理后台 - CRM 回款"],
+                        "summary": "创建回款",
+                        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/RecvSaveReqVO"}}}},
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                    }
+                },
+            },
+            "components": {
+                "schemas": {
+                    "CommonResultLong": {"properties": {"code": {"type": "integer"}, "data": {"type": "integer"}}},
+                    "RecvGetResp": {"properties": {"data": {"$ref": "#/components/schemas/RecvSaveReqVO"}}},
+                    "RecvSaveReqVO": {
+                        "required": ["contractId", "customerId", "price", "returnTime", "returnType"],
+                        "properties": {
+                            "contractId": {"type": "integer", "format": "int64", "description": "合同名称"},
+                            "customerId": {"type": "integer", "format": "int64", "description": "客户名称"},
+                            "planId": {"type": "integer", "format": "int64", "description": "回款期数"},
+                            "price": {"type": "number", "description": "回款金额"},
+                            "returnTime": {"type": "string", "format": "date-time", "description": "回款日期"},
+                            "returnType": {"type": "integer", "format": "int32", "description": "回款方式"},
+                        },
+                    },
+                }
+            },
+        }
+        client = _CrmReceivableClient()
+        port = YudaoConventionWritePort(client, NS(_documents=docs))
+        handler = CompiledCreateHandler(port)
+
+        # (a) simple-list returns id=7 while /get?id=7 throws 1020007001 -> prepare refuses before approval,
+        # and retrying in the same turn with planId silently omitted is also refused.
+        turn_ctx = NS(executor_turn={})
+        with turn_actor_reads(client, turn_ctx):
+            with self.assertRaises(BusinessToolRequestError) as err1:
+                handler.prepare(
+                    {
+                        "entity": "crm/receivable",
+                        "fields": [
+                            {"field": "contractId", "value": "北方采购协同供货合同（南区）"},
+                            {"field": "customerId", "value": "青岛望川瑞宁电力技术有限责任公司"},
+                            {"field": "planId", "value": "第1期"},
+                            {"field": "price", "value": 160},
+                            {"field": "returnTime", "value": "2026-10-25"},
+                            {"field": "returnType", "value": 4},
+                        ],
+                    },
+                    context=op_ctx,
+                )
+            self.assertIn("1020007001", str(err1.exception))
+            self.assertIn("禁止在同一轮静默省略", str(err1.exception))
+
+            with self.assertRaises(BusinessToolRequestError) as err_drop:
+                handler.prepare(
+                    {
+                        "entity": "crm/receivable",
+                        "fields": [
+                            {"field": "contractId", "value": "北方采购协同供货合同（南区）"},
+                            {"field": "customerId", "value": "青岛望川瑞宁电力技术有限责任公司"},
+                            {"field": "price", "value": 160},
+                            {"field": "returnTime", "value": "2026-10-25"},
+                            {"field": "returnType", "value": 4},
+                        ],
+                    },
+                    context=op_ctx,
+                )
+            self.assertIn("禁止在同一轮静默省略该关联字段", str(err_drop.exception))
+
+        # (b) plan already linked (receivableId=7), unapproved contract (auditStatus=10), and over-limit price
+        client.plan_get_error = None
+        client.plan_receivable_id = 77
+        with turn_actor_reads(client, NS(executor_turn={})):
+            with self.assertRaises(BusinessToolRequestError) as err_dup:
+                handler.prepare(
+                    {
+                        "entity": "crm/receivable",
+                        "fields": [
+                            {"field": "contractId", "value": "北方采购协同供货合同（南区）"},
+                            {"field": "customerId", "value": "青岛望川瑞宁电力技术有限责任公司"},
+                            {"field": "planId", "value": "第1期"},
+                            {"field": "price", "value": 160},
+                            {"field": "returnTime", "value": "2026-10-25"},
+                            {"field": "returnType", "value": 4},
+                        ],
+                    },
+                    context=op_ctx,
+                )
+            self.assertIn("已关联回款", str(err_dup.exception))
+
+        client.plan_receivable_id = None
+        client.contract_audit_status = 10
+        with turn_actor_reads(client, NS(executor_turn={})):
+            with self.assertRaises(BusinessToolRequestError) as err_audit:
+                handler.prepare(
+                    {
+                        "entity": "crm/receivable",
+                        "fields": [
+                            {"field": "contractId", "value": "北方采购协同供货合同（南区）"},
+                            {"field": "customerId", "value": "青岛望川瑞宁电力技术有限责任公司"},
+                            {"field": "planId", "value": "第1期"},
+                            {"field": "price", "value": 160},
+                            {"field": "returnTime", "value": "2026-10-25"},
+                            {"field": "returnType", "value": 4},
+                        ],
+                    },
+                    context=op_ctx,
+                )
+            self.assertIn("未审核通过", str(err_audit.exception))
+
+        client.contract_audit_status = 20
+        client.existing_receivables = [{"id": 1, "price": 900, "auditStatus": 20}]
+        with turn_actor_reads(client, NS(executor_turn={})):
+            with self.assertRaises(BusinessToolRequestError) as err_limit:
+                handler.prepare(
+                    {
+                        "entity": "crm/receivable",
+                        "fields": [
+                            {"field": "contractId", "value": "北方采购协同供货合同（南区）"},
+                            {"field": "customerId", "value": "青岛望川瑞宁电力技术有限责任公司"},
+                            {"field": "planId", "value": "第1期"},
+                            {"field": "price", "value": 160},
+                            {"field": "returnTime", "value": "2026-10-25"},
+                            {"field": "returnType", "value": 4},
+                        ],
+                    },
+                    context=op_ctx,
+                )
+            self.assertIn("剩余可回款金额", str(err_limit.exception))
+        self.assertEqual(client.dispatches, [])
+
+        # (c) post-approval recheck_bindings refuses when /get raises 1020007001 after approval
+        client.existing_receivables = []
+        with turn_actor_reads(client, NS(executor_turn={})):
+            prepared = handler.prepare(
+                {
+                    "entity": "crm/receivable",
+                    "fields": [
+                        {"field": "contractId", "value": "北方采购协同供货合同（南区）"},
+                        {"field": "customerId", "value": "青岛望川瑞宁电力技术有限责任公司"},
+                        {"field": "planId", "value": "第1期"},
+                        {"field": "price", "value": 160},
+                        {"field": "returnTime", "value": "2026-10-25"},
+                        {"field": "returnType", "value": 4},
+                    ],
+                },
+                context=op_ctx,
+            )
+        self.assertTrue(any(b.get("verify_get_path") == "crm/receivable-plan/get" for b in prepared.args["bindings"]))
+        client.plan_get_error = YudaoReadRefused("denied after approval", code=1020007001)
+        with self.assertRaises(BusinessMutationRefusedError) as ref_ctx:
+            port.recheck_bindings(prepared.args["bindings"], actor_id="1")
+        self.assertEqual(ref_ctx.exception.reason, "precondition_changed")
+        self.assertEqual(client.dispatches, [])
+
 
 if __name__ == "__main__":
     unittest.main()
