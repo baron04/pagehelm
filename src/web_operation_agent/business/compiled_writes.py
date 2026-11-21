@@ -61,6 +61,7 @@ from .write_pipeline import (
 from ..execution.submit_contract import same_value
 
 PAGE_DEFAULT_ANNOTATION = "（页面默认值）"
+INHERENT_MASTER_ATTR_ANNOTATION = "（主数据属性）"
 DefaultValueKind = Literal["actor", "literal"]
 _SECRET_FIELD = DEFAULT_SECRET_FIELD_PATTERN
 _INDEX_MATCH = re.compile(r"^(?:#|第\s*)(\d+)(?:\s*[行条项])?$")
@@ -195,14 +196,28 @@ class CompiledFieldDefault:
     display: str = ""
 
 
+def _resolve_collection_from(
+    collections: tuple["CompiledChildCollectionSpec", ...],
+    token: str | None,
+) -> "CompiledChildCollectionSpec | None":
+    if token is None or not str(token).strip():
+        return collections[0] if len(collections) == 1 else None
+    cleaned = str(token).strip().casefold()
+    for col in collections:
+        if col.name.casefold() == cleaned or (col.label and col.label.strip().casefold() == cleaned):
+            return col
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class CompiledCreateSpec:
-    """Compiled flat creation contract with D1–D3 default rules."""
+    """Compiled flat or 1–2 level master-detail creation contract with D1–D3 default rules."""
 
     entity: str
     label: str
     fields: tuple[ConventionFieldSpec, ...]
     defaults: tuple[CompiledFieldDefault, ...] = ()
+    collections: tuple["CompiledChildCollectionSpec", ...] = ()
     id_field: str = "id"
     name_fields: tuple[str, ...] = ("name",)
     server_computed_fields: frozenset[str] = frozenset()
@@ -210,8 +225,8 @@ class CompiledCreateSpec:
     conditional_required_fn: Callable[[dict], tuple[tuple[str, str], ...]] | None = None
 
     def __post_init__(self) -> None:
-        if not self.entity or not self.fields:
-            raise ValueError("compiled create spec requires entity and fields")
+        if not self.entity or (not self.fields and not self.collections):
+            raise ValueError("compiled create spec requires entity and fields or collections")
         names = [f.name for f in self.fields]
         if len(set(names)) != len(names):
             raise ValueError(f"duplicate field in compiled create spec: {self.entity}")
@@ -219,13 +234,16 @@ class CompiledCreateSpec:
     def resolve_field(self, token: str) -> ConventionFieldSpec | None:
         return _resolve_field_from(self.fields, token)
 
+    def resolve_collection(self, token: str | None) -> "CompiledChildCollectionSpec | None":
+        return _resolve_collection_from(self.collections, token)
+
     def default_map(self) -> dict[str, CompiledFieldDefault]:
         return {d.field: d for d in self.defaults}
 
 
 @dataclass(frozen=True, slots=True)
 class CompiledChildCollectionSpec:
-    """One 1st- or 2nd-level child line schema within an aggregate-root update."""
+    """One 1st- or 2nd-level child line schema within an aggregate-root create/update."""
 
     name: str
     label: str
@@ -239,16 +257,16 @@ class CompiledChildCollectionSpec:
     allow_remove: bool = True
     subcollections: tuple["CompiledChildCollectionSpec", ...] = ()
     volatile_fields: frozenset[str] = frozenset()
+    defaults: tuple[CompiledFieldDefault, ...] = ()
 
     def resolve_field(self, token: str) -> ConventionFieldSpec | None:
         return _resolve_field_from(self.fields, token)
 
-    def resolve_subcollection(self, token: str) -> "CompiledChildCollectionSpec | None":
-        cleaned = token.strip().casefold()
-        for sub in self.subcollections:
-            if sub.name.casefold() == cleaned or (sub.label and sub.label.strip().casefold() == cleaned):
-                return sub
-        return None
+    def default_map(self) -> dict[str, CompiledFieldDefault]:
+        return {d.field: d for d in self.defaults}
+
+    def resolve_subcollection(self, token: str | None) -> "CompiledChildCollectionSpec | None":
+        return _resolve_collection_from(self.subcollections, token)
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,13 +296,7 @@ class CompiledAggregateUpdateSpec:
         return _resolve_field_from(self.fields, token)
 
     def resolve_collection(self, token: str | None) -> CompiledChildCollectionSpec | None:
-        if token is None or not str(token).strip():
-            return self.collections[0] if len(self.collections) == 1 else None
-        cleaned = str(token).strip().casefold()
-        for col in self.collections:
-            if col.name.casefold() == cleaned or (col.label and col.label.strip().casefold() == cleaned):
-                return col
-        return None
+        return _resolve_collection_from(self.collections, token)
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,7 +356,52 @@ class CompiledWritePort(Protocol):
     def invalidate_reads(self, entities: frozenset[str]) -> None: ...
 
 
-def _project_create_values(spec: CompiledCreateSpec | None, raw_fields: list | tuple) -> dict[str, object]:
+def _project_create_lines(
+    spec: CompiledCreateSpec | None,
+    col_spec: CompiledChildCollectionSpec | None,
+    col_name: str,
+    raw_lines: list | tuple,
+    *,
+    mapped: dict[str, object],
+    parent_idx: int = -1,
+    parent_col: str = "",
+) -> None:
+    for idx, line in enumerate(raw_lines or ()):
+        if not isinstance(line, dict):
+            continue
+        if parent_idx < 0:
+            cur_col = spec.resolve_collection(line.get("collection")) if spec is not None else None
+            c_name = cur_col.name if cur_col is not None else str(line.get("collection") or (col_name or "items")).strip()
+        else:
+            cur_col = col_spec.resolve_subcollection(line.get("collection")) if col_spec is not None else None
+            c_name = cur_col.name if cur_col is not None else str(line.get("collection") or "sublines").strip()
+        for item in line.get("fields") or ():
+            raw_field = str(item.get("field") or "").strip()
+            f_spec = cur_col.resolve_field(raw_field) if cur_col is not None else None
+            fname = f_spec.name if f_spec is not None else raw_field
+            ekey = (
+                _line_change_effect_key(c_name, idx, f"#{idx + 1}", "", "", fname)
+                if parent_idx < 0
+                else _line_change_effect_key(parent_col, parent_idx, f"#{parent_idx + 1}", c_name, f"#{idx + 1}", fname)
+            )
+            mapped[ekey] = _effect_value(item.get("value"))
+        if parent_idx < 0 and line.get("sublines"):
+            _project_create_lines(
+                spec,
+                cur_col,
+                "",
+                line.get("sublines") or (),
+                mapped=mapped,
+                parent_idx=idx,
+                parent_col=c_name,
+            )
+
+
+def _project_create_values(
+    spec: CompiledCreateSpec | None,
+    raw_fields: list | tuple,
+    raw_lines: list | tuple = (),
+) -> dict[str, object]:
     mapped: dict[str, object] = {}
     for item in raw_fields or ():
         raw_field = str(item.get("field") or "").strip()
@@ -352,6 +409,9 @@ def _project_create_values(spec: CompiledCreateSpec | None, raw_fields: list | t
         key = (f_spec.name if f_spec is not None else raw_field)[:80]
         if key:
             mapped[key] = _effect_value(item.get("value"))
+    if raw_lines:
+        default_col = spec.collections[0].name if (spec is not None and len(spec.collections) == 1) else ""
+        _project_create_lines(spec, None, default_col, raw_lines, mapped=mapped)
     return mapped
 
 
@@ -421,7 +481,7 @@ class CompiledWriteEffects:
                 "create",
                 "",
                 "",
-                canonical(_project_create_values(spec, inputs.get("fields") or ())),
+                canonical(_project_create_values(spec, inputs.get("fields") or (), inputs.get("lines") or ())),
             )
         target = str(inputs["target"]).strip()
         if self.tool_name == "toggle_record_status":
@@ -492,36 +552,26 @@ class CompiledCreateHandler:
             )
         return spec
 
-    def prepare(self, args: dict, *, context=None) -> BusinessMutationSpec:
-        actor_id = self.port.verify_actor(context)
-        entity = str(args.get("entity") or "").strip().strip("/")
-        spec = self._spec_for(entity)
-        cap = resolve_write_route_capability(self.port)
-        raw_fields = list(args.get("fields") or ())
-        if not raw_fields:
-            raise BusinessToolRequestError("fields 不能为空，请提供新建记录所需的字段值。")
-
+    @staticmethod
+    def _encode_field_batch(
+        port: CompiledWritePort,
+        root_spec: CompiledCreateSpec,
+        target_spec,
+        raw_items: list | tuple,
+        *,
+        actor_id: str,
+        initial_resolved: dict[str, object],
+        unsupported_msg_fn: Callable[[str], str],
+        errors: list[str],
+        ref_errors: list[BusinessToolReferenceError],
+    ) -> tuple[list[tuple[int, ConventionFieldSpec, object, object, dict | None]], set[str], dict[str, object]]:
         seen_fields: set[str] = set()
-        payload: dict[str, object] = {}
-        expected_created: dict[str, object] = {}
-        bindings: list[dict] = []
-        details = []
-        default_lookup = spec.default_map()
         indexed_items: list[tuple[int, ConventionFieldSpec, object]] = []
-        errors: list[str] = []
-        ref_errors: list[BusinessToolReferenceError] = []
-
-        for idx, item in enumerate(raw_fields):
+        for idx, item in enumerate(raw_items or ()):
             raw_field = str(item.get("field") or "").strip()
-            f_spec = spec.resolve_field(raw_field)
+            f_spec = target_spec.resolve_field(raw_field)
             if f_spec is None:
-                supported = "、".join(
-                    f"{f.name}({f.label})" if f.label else f.name for f in spec.fields[:25]
-                )
-                errors.append(
-                    f"实体「{entity}」不支持在新建时传入字段「{raw_field}」（支持字段：{supported}）；"
-                    f"如需其他表单专属字段，请{cap.form_fallback_phrase()}。"
-                )
+                errors.append(unsupported_msg_fn(raw_field))
                 continue
             if f_spec.name in seen_fields:
                 errors.append(f"字段「{f_spec.name}」在同一次新建中重复出现。")
@@ -531,11 +581,11 @@ class CompiledCreateHandler:
             if raw_val is None or raw_val == "":
                 if f_spec.required:
                     shown = f"{f_spec.label}（{f_spec.name}）" if f_spec.label else f_spec.name
-                    errors.append(f"新建{spec.label}必填字段「{shown}」不能为空或 null，请向用户确认后再提交。")
+                    errors.append(f"新建{target_spec.label}必填字段「{shown}」不能为空或 null，请向用户确认后再提交。")
                 continue
             indexed_items.append((idx, f_spec, raw_val))
 
-        encode_create_fn = getattr(self.port, "encode_create_field", None)
+        encode_create_fn = getattr(port, "encode_create_field", None)
         accepts_resolved = False
         if callable(encode_create_fn):
             try:
@@ -546,20 +596,20 @@ class CompiledCreateHandler:
             except (ValueError, TypeError):
                 accepts_resolved = False
 
-        resolved_fields: dict[str, object] = {}
+        resolved_fields = dict(initial_resolved)
 
         def _encode_one(f_spec: ConventionFieldSpec, raw_val: object):
             if callable(encode_create_fn):
                 if accepts_resolved:
                     return encode_create_fn(
-                        spec,
+                        root_spec,
                         f_spec,
                         raw_val,
                         actor_id=actor_id,
                         resolved_fields=dict(resolved_fields),
                     )
-                return encode_create_fn(spec, f_spec, raw_val, actor_id=actor_id)
-            api_val, _old, disp, binding = self.port.encode_field(spec, f_spec, raw_val, {})
+                return encode_create_fn(root_spec, f_spec, raw_val, actor_id=actor_id)
+            api_val, _old, disp, binding = port.encode_field(root_spec, f_spec, raw_val, {})
             return api_val, disp, binding
 
         resolved_entries: list[tuple[int, ConventionFieldSpec, object, object, dict | None]] = []
@@ -607,8 +657,246 @@ class CompiledCreateHandler:
                         errors.append(str(exc))
                 break
             deferred = next_deferred
+        return sorted(resolved_entries, key=lambda entry: entry[0]), seen_fields, resolved_fields
 
-        for _idx, f_spec, api_val, disp, binding in sorted(resolved_entries, key=lambda entry: entry[0]):
+    def _apply_defaults(
+        self,
+        root_spec: CompiledCreateSpec,
+        target_spec,
+        *,
+        seen_fields: set[str],
+        visible_fields: frozenset[str] | None,
+        actor_id: str,
+        payload: dict[str, object],
+        expected: dict[str, object],
+        bindings: list[dict],
+        details: list,
+        detail_prefix: str = "",
+        derived_key_prefix: str = "",
+        derived_defaults: dict[str, object] | None = None,
+    ) -> None:
+        encode_default_fn = getattr(self.port, "encode_create_default", None)
+        for d_spec in getattr(target_spec, "defaults", ()) or ():
+            if d_spec.field in seen_fields or d_spec.field in payload:
+                continue
+            if visible_fields is not None and d_spec.field not in visible_fields:
+                continue
+            f_spec = target_spec.resolve_field(d_spec.field)
+            if f_spec is None:
+                continue
+            if d_spec.kind != "actor" and is_rejected_ui_sentinel(
+                d_spec.value,
+                is_fk_or_enum=bool(f_spec.reference_entity or f_spec.enum_type),
+                is_hierarchy_parent=(f_spec.name == "parentId"),
+            ):
+                continue
+            if callable(encode_default_fn):
+                api_val, disp, binding = encode_default_fn(root_spec, f_spec, d_spec, actor_id=actor_id)
+            elif d_spec.kind == "actor":
+                api_val = int(actor_id) if str(actor_id).isdigit() else actor_id
+                disp = str(d_spec.display or f"当前账号({actor_id})")
+                binding = None
+            else:
+                api_val, _old, disp, binding = self.port.encode_field(root_spec, f_spec, d_spec.value, {})
+            if api_val is None or api_val == "":
+                continue
+            payload[f_spec.name] = api_val
+            expected[f_spec.name] = api_val
+            if binding is not None:
+                bindings.append(binding)
+            annotated = f"{disp}{PAGE_DEFAULT_ANNOTATION}"
+            shown_label = f"{f_spec.label}（{f_spec.name}）" if f_spec.label else f_spec.name
+            if detail_prefix:
+                shown_label = f"{detail_prefix}.{shown_label}"
+            if derived_defaults is not None:
+                dkey = f"{derived_key_prefix}.{f_spec.name}" if derived_key_prefix else f_spec.name
+                derived_defaults[dkey] = annotated
+            details.append(create_detail(shown_label, annotated))
+
+    def _prepare_child_level(
+        self,
+        root_spec: CompiledCreateSpec,
+        collections: tuple[CompiledChildCollectionSpec, ...],
+        raw_lines: list[dict],
+        *,
+        actor_id: str,
+        parent_resolved: dict[str, object],
+        bindings: list[dict],
+        details: list,
+        derived_defaults: dict[str, object],
+        errors: list[str],
+        ref_errors: list[BusinessToolReferenceError],
+        depth: int,
+        prefix_base: str = "",
+    ) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
+        grouped_raw: dict[str, list[dict]] = {c.name: [] for c in collections}
+        for line in raw_lines:
+            if not isinstance(line, dict):
+                errors.append("lines 元素必须为对象。")
+                continue
+            raw_col = line.get("collection")
+            col_spec = _resolve_collection_from(collections, raw_col)
+            if col_spec is None:
+                avail = "、".join(f"{c.name}({c.label})" if c.label else c.name for c in collections)
+                errors.append(f"新建{root_spec.label}未识别明细集合「{raw_col or ''}」（支持：{avail}）。")
+                continue
+            grouped_raw[col_spec.name].append(line)
+
+        payload_cols: dict[str, list[dict]] = {}
+        expected_cols: dict[str, list[dict]] = {}
+        derive_inherent_fn = getattr(self.port, "derive_child_inherent_fields", None)
+
+        for col_spec in collections:
+            lines_for_col = grouped_raw[col_spec.name]
+            if len(lines_for_col) < col_spec.min_items:
+                errors.append(f"新建{root_spec.label}的「{col_spec.label}」至少需要 {col_spec.min_items} 条明细行，请补充 lines 参数。")
+                continue
+            if not lines_for_col:
+                continue
+            built_rows: list[dict] = []
+            exp_rows: list[dict] = []
+            col_supported = "、".join(f"{f.name}({f.label})" if f.label else f.name for f in col_spec.fields[:20])
+            for idx, line in enumerate(lines_for_col):
+                line_prefix = f"{prefix_base}{col_spec.label}#{idx + 1}"
+                line_fields = list(line.get("fields") or ())
+                if not line_fields:
+                    errors.append(f"{line_prefix} 缺少 fields 明细字段。")
+                    continue
+                entries, seen_line, _res_map = self._encode_field_batch(
+                    self.port,
+                    root_spec,
+                    col_spec,
+                    line_fields,
+                    actor_id=actor_id,
+                    initial_resolved=parent_resolved,
+                    unsupported_msg_fn=lambda rf, cs=col_spec, sup=col_supported: f"明细「{cs.label}」不支持字段「{rf}」（支持：{sup}）。",
+                    errors=errors,
+                    ref_errors=ref_errors,
+                )
+                line_payload: dict[str, object] = {}
+                line_exp: dict[str, object] = {}
+                line_bindings: list[dict] = []
+                for _i, f_spec, api_val, disp, b in entries:
+                    line_payload[f_spec.name] = api_val
+                    line_exp[f_spec.name] = api_val
+                    if b is not None:
+                        line_bindings.append(b)
+                        bindings.append(b)
+                    shown = f"{f_spec.label}（{f_spec.name}）" if f_spec.label else f_spec.name
+                    details.append(create_detail(f"{line_prefix}.{shown}", str(disp)))
+
+                if callable(derive_inherent_fn) and not errors and not ref_errors:
+                    for df_name, d_api_val, d_disp, d_binding in derive_inherent_fn(
+                        root_spec, col_spec, dict(line_payload), list(line_bindings), actor_id=actor_id
+                    ) or ():
+                        if df_name in seen_line or df_name in line_payload or d_api_val is None or d_api_val == "":
+                            continue
+                        df_spec = col_spec.resolve_field(df_name)
+                        if df_spec is None:
+                            continue
+                        line_payload[df_spec.name] = d_api_val
+                        line_exp[df_spec.name] = d_api_val
+                        if d_binding is not None:
+                            bindings.append(d_binding)
+                        shown = f"{df_spec.label}（{df_spec.name}）" if df_spec.label else df_spec.name
+                        details.append(create_detail(f"{line_prefix}.{shown}", f"{d_disp}{INHERENT_MASTER_ATTR_ANNOTATION}"))
+                        derived_defaults[f"{col_spec.name}[{idx}].{df_spec.name}"] = f"{d_disp}{INHERENT_MASTER_ATTR_ANNOTATION}"
+
+                self._apply_defaults(
+                    root_spec,
+                    col_spec,
+                    seen_fields=seen_line,
+                    visible_fields=None,
+                    actor_id=actor_id,
+                    payload=line_payload,
+                    expected=line_exp,
+                    bindings=bindings,
+                    details=details,
+                    detail_prefix=line_prefix,
+                    derived_key_prefix=f"{col_spec.name}[{idx}]",
+                    derived_defaults=derived_defaults,
+                )
+
+                col_default_map = col_spec.default_map()
+                missing_line = []
+                for f_spec in col_spec.fields:
+                    is_req = f_spec.required or f_spec.name in col_spec.required_on_add
+                    if not is_req or f_spec.name in line_payload or f_spec.name in seen_line or f_spec.name in col_spec.server_computed_fields:
+                        continue
+                    lbl = f"{f_spec.label}（{f_spec.name}）" if f_spec.label else f_spec.name
+                    hint = "（页面为占位值，不静默代填）" if f_spec.name in col_default_map else ""
+                    missing_line.append(lbl + hint)
+                if missing_line:
+                    errors.append(f"{line_prefix} 缺少必填字段：{'、'.join(missing_line)}。")
+
+                raw_subs = list(line.get("sublines") or ())
+                if raw_subs:
+                    if depth >= 2 or not col_spec.subcollections:
+                        errors.append(f"{line_prefix} 不支持更深层级的 sublines 子表。")
+                    else:
+                        sub_p, sub_e = self._prepare_child_level(
+                            root_spec,
+                            col_spec.subcollections,
+                            raw_subs,
+                            actor_id=actor_id,
+                            parent_resolved={**parent_resolved, **line_payload},
+                            bindings=bindings,
+                            details=details,
+                            derived_defaults=derived_defaults,
+                            errors=errors,
+                            ref_errors=ref_errors,
+                            depth=depth + 1,
+                            prefix_base=f"{line_prefix}.",
+                        )
+                        line_payload.update(sub_p)
+                        line_exp.update(sub_e)
+                elif col_spec.subcollections:
+                    for sub in col_spec.subcollections:
+                        if sub.min_items > 0:
+                            errors.append(f"{line_prefix}.{sub.label} 至少需要 {sub.min_items} 条二级明细。")
+                built_rows.append(line_payload)
+                exp_rows.append(line_exp)
+            payload_cols[col_spec.name] = built_rows
+            expected_cols[col_spec.name] = exp_rows
+        return payload_cols, expected_cols
+
+    def prepare(self, args: dict, *, context=None) -> BusinessMutationSpec:
+        actor_id = self.port.verify_actor(context)
+        entity = str(args.get("entity") or "").strip().strip("/")
+        spec = self._spec_for(entity)
+        cap = resolve_write_route_capability(self.port)
+        raw_fields = list(args.get("fields") or ())
+        raw_lines = list(args.get("lines") or ())
+        if raw_lines and not spec.collections:
+            raise BusinessToolRequestError(f"实体「{entity}」为平铺实体，不支持传 lines 明细子行参数。")
+        if not raw_fields and not raw_lines:
+            raise BusinessToolRequestError("fields 与 lines 不能同时为空，请提供新建记录所需的字段值。")
+
+        payload: dict[str, object] = {}
+        expected_created: dict[str, object] = {}
+        bindings: list[dict] = []
+        details = []
+        default_lookup = spec.default_map()
+        errors: list[str] = []
+        ref_errors: list[BusinessToolReferenceError] = []
+
+        supported = "、".join(f"{f.name}({f.label})" if f.label else f.name for f in spec.fields[:25])
+        resolved_entries, seen_fields, _resolved_fields = self._encode_field_batch(
+            self.port,
+            spec,
+            spec,
+            raw_fields,
+            actor_id=actor_id,
+            initial_resolved={},
+            unsupported_msg_fn=lambda rf: (
+                f"实体「{entity}」不支持在新建时传入字段「{rf}」（支持字段：{supported}）；"
+                f"如需其他表单专属字段，请{cap.form_fallback_phrase()}。"
+            ),
+            errors=errors,
+            ref_errors=ref_errors,
+        )
+
+        for _idx, f_spec, api_val, disp, binding in resolved_entries:
             payload[f_spec.name] = api_val
             expected_created[f_spec.name] = api_val
             if binding is not None:
@@ -626,44 +914,25 @@ class CompiledCreateHandler:
             except BusinessToolRequestError as exc:
                 errors.append(str(exc))
         if visible_fields is not None:
-            for _idx, f_spec, _api_val, _disp, _binding in sorted(resolved_entries, key=lambda entry: entry[0]):
+            for _idx, f_spec, _api_val, _disp, _binding in resolved_entries:
                 if f_spec.name not in visible_fields:
                     lbl = f"{f_spec.label}（{f_spec.name}）" if f_spec.label else f_spec.name
                     errors.append(f"新建{spec.label}当前状态下字段「{lbl}」未开启显示，不能提交该字段。")
 
         # Apply static D1/D2 defaults ONLY for omitted fields and always surface with （页面默认值）
         derived_defaults: dict[str, object] = {}
-        for d_spec in spec.defaults:
-            if d_spec.field in seen_fields:
-                continue
-            if visible_fields is not None and d_spec.field not in visible_fields:
-                continue
-            f_spec = spec.resolve_field(d_spec.field)
-            if f_spec is None:
-                continue
-            if d_spec.kind != "actor" and is_rejected_ui_sentinel(
-                d_spec.value,
-                is_fk_or_enum=bool(f_spec.reference_entity or f_spec.enum_type),
-                is_hierarchy_parent=(f_spec.name == "parentId"),
-            ):
-                continue
-            encode_default_fn = getattr(self.port, "encode_create_default", None)
-            if callable(encode_default_fn):
-                api_val, disp, binding = encode_default_fn(spec, f_spec, d_spec, actor_id=actor_id)
-            elif d_spec.kind == "actor":
-                api_val, disp, binding = int(actor_id) if str(actor_id).isdigit() else actor_id, str(d_spec.display or f"当前账号({actor_id})"), None
-            else:
-                api_val, _old, disp, binding = self.port.encode_field(spec, f_spec, d_spec.value, {})
-            if api_val is None or api_val == "":
-                continue
-            payload[f_spec.name] = api_val
-            expected_created[f_spec.name] = api_val
-            if binding is not None:
-                bindings.append(binding)
-            annotated = f"{disp}{PAGE_DEFAULT_ANNOTATION}"
-            shown_label = f"{f_spec.label}（{f_spec.name}）" if f_spec.label else f_spec.name
-            derived_defaults[f_spec.name] = annotated
-            details.append(create_detail(shown_label, annotated))
+        self._apply_defaults(
+            spec,
+            spec,
+            seen_fields=seen_fields,
+            visible_fields=visible_fields,
+            actor_id=actor_id,
+            payload=payload,
+            expected=expected_created,
+            bindings=bindings,
+            details=details,
+            derived_defaults=derived_defaults,
+        )
 
         # Fail closed when required fields (or conditional required form rules) remain missing
         missing: list[str] = []
@@ -679,6 +948,24 @@ class CompiledCreateHandler:
                     missing.append(reason)
         if missing:
             errors.append(f"新建{spec.label}还缺少以下必填信息，请先向用户确认：{'、'.join(missing)}。")
+
+        expected_collections: dict[str, list[dict]] = {}
+        if spec.collections:
+            col_payloads, col_expected = self._prepare_child_level(
+                spec,
+                spec.collections,
+                raw_lines,
+                actor_id=actor_id,
+                parent_resolved=dict(payload),
+                bindings=bindings,
+                details=details,
+                derived_defaults=derived_defaults,
+                errors=errors,
+                ref_errors=ref_errors,
+                depth=1,
+            )
+            payload.update(col_payloads)
+            expected_collections = col_expected
 
         validate_create_fn = getattr(self.port, "validate_create_payload", None)
         if callable(validate_create_fn) and not errors and not ref_errors:
@@ -699,7 +986,7 @@ class CompiledCreateHandler:
             "create",
             "",
             "",
-            canonical(_project_create_values(spec, raw_fields)),
+            canonical(_project_create_values(spec, raw_fields, raw_lines)),
         )
         projection = EffectProjection(
             change,
@@ -715,6 +1002,7 @@ class CompiledCreateHandler:
             "entity": entity,
             "payload": payload,
             "expected": expected_created,
+            "expected_collections": expected_collections,
             "bindings": bindings,
         }
         return BusinessMutationSpec(
@@ -726,6 +1014,64 @@ class CompiledCreateHandler:
             reconciliation={"entity": entity, "operation": "create_record", "body_digest": key},
             effect_projection=projection,
         )
+
+    def _validate_lines_provenance(
+        self,
+        collections: tuple[CompiledChildCollectionSpec, ...],
+        raw_lines: list | tuple,
+        *,
+        texts: tuple[str, ...],
+        prompt: str,
+        joined_words: str,
+        ledger,
+        receipt_vals: tuple[str, ...],
+        existing_values: dict[str, tuple[str, ...]] | None,
+        enum_tokens_fn,
+        prov_errors: list[str],
+        depth: int = 1,
+    ) -> None:
+        for line in raw_lines or ():
+            if not isinstance(line, dict):
+                continue
+            col_spec = _resolve_collection_from(collections, line.get("collection"))
+            if col_spec is None:
+                continue
+            for item in line.get("fields") or ():
+                f_spec = col_spec.resolve_field(str(item.get("field") or "").strip())
+                if f_spec is None:
+                    continue
+                try:
+                    validate_single_field_provenance(
+                        f_spec,
+                        item.get("value"),
+                        old_val=None,
+                        texts=texts,
+                        prompt=prompt,
+                        joined_words=joined_words,
+                        ledger=ledger,
+                        receipt_vals=receipt_vals,
+                        existing_values=existing_values,
+                        allow_append=False,
+                        allow_existing_candidates=False,
+                        allow_fk_candidates=bool(f_spec.reference_entity),
+                        enum_tokens_fn=enum_tokens_fn,
+                    )
+                except BusinessToolRequestError as exc:
+                    prov_errors.append(str(exc))
+            if depth == 1 and col_spec.subcollections and line.get("sublines"):
+                self._validate_lines_provenance(
+                    col_spec.subcollections,
+                    line.get("sublines") or (),
+                    texts=texts,
+                    prompt=prompt,
+                    joined_words=joined_words,
+                    ledger=ledger,
+                    receipt_vals=receipt_vals,
+                    existing_values=existing_values,
+                    enum_tokens_fn=enum_tokens_fn,
+                    prov_errors=prov_errors,
+                    depth=2,
+                )
 
     def validate_provenance(
         self,
@@ -791,6 +1137,20 @@ class CompiledCreateHandler:
                 )
             except BusinessToolRequestError as exc:
                 prov_errors.append(str(exc))
+        if spec.collections and inputs.get("lines"):
+            self._validate_lines_provenance(
+                spec.collections,
+                inputs.get("lines") or (),
+                texts=texts,
+                prompt=prompt,
+                joined_words=joined_words,
+                ledger=ledger,
+                receipt_vals=receipt_vals,
+                existing_values=existing_values,
+                enum_tokens_fn=enum_tokens_fn,
+                prov_errors=prov_errors,
+                depth=1,
+            )
         if prov_errors:
             raise BusinessToolRequestError("；".join(dict.fromkeys(prov_errors)))
 
@@ -851,6 +1211,17 @@ class CompiledCreateHandler:
                         f"compiled create readback did not confirm field {key}",
                         phase="postcondition",
                         reconciliation={"entity": entity, "id": created_id, "field": key},
+                    )
+            expected_collections = args.get("expected_collections") or {}
+            for col in spec.collections:
+                if col.name in expected_collections:
+                    _verify_collection_match(
+                        self.port,
+                        spec,
+                        col,
+                        expected_collections[col.name],
+                        after.get(col.name),
+                        op_label="compiled create",
                     )
             disp_name = _record_display_name(after, spec.name_fields, spec.id_field)
             reference = f"{disp_name}（ID={created_id}）" if disp_name and disp_name != str(created_id) else f"ID={created_id}"
@@ -951,6 +1322,56 @@ def _project_child_item(
                 if isinstance(r, dict)
             ]
     return out
+
+
+def _verify_collection_match(
+    port: CompiledWritePort,
+    spec,
+    col: CompiledChildCollectionSpec,
+    expected_rows: list[dict],
+    actual_rows: object,
+    *,
+    op_label: str = "aggregate update",
+) -> None:
+    if not isinstance(actual_rows, list) or len(actual_rows) != len(expected_rows):
+        raise BusinessMutationIndeterminate(
+            f"{op_label} readback count mismatch on collection {col.name}",
+            phase="postcondition",
+            reconciliation={"entity": spec.entity, "collection": col.name},
+        )
+    match_fn = getattr(port, "matches_readback_value", None)
+    col_ignored = col.server_computed_fields | col.volatile_fields | {col.id_field}
+    for idx, (exp_row, act_row) in enumerate(zip(expected_rows, actual_rows)):
+        if not isinstance(act_row, dict):
+            raise BusinessMutationIndeterminate(
+                f"{op_label} readback row #{idx + 1} invalid on {col.name}",
+                phase="postcondition",
+                reconciliation={"entity": spec.entity, "collection": col.name},
+            )
+        for f_spec in col.fields:
+            if f_spec.name in col_ignored or f_spec.name not in exp_row:
+                continue
+            matched = (
+                match_fn(col, f_spec, act_row.get(f_spec.name), exp_row[f_spec.name])
+                if callable(match_fn)
+                else _values_equal(act_row.get(f_spec.name), exp_row[f_spec.name], kind=f_spec.kind)
+            )
+            if not matched:
+                raise BusinessMutationIndeterminate(
+                    f"{op_label} readback mismatch on {col.name}[{idx}].{f_spec.name}",
+                    phase="postcondition",
+                    reconciliation={"entity": spec.entity, "collection": col.name, "field": f_spec.name},
+                )
+        for sub in col.subcollections:
+            if sub.name in exp_row:
+                _verify_collection_match(
+                    port,
+                    spec,
+                    sub,
+                    exp_row[sub.name],
+                    act_row.get(sub.name),
+                    op_label=op_label,
+                )
 
 
 class CompiledAggregateUpdateHandler:
@@ -1302,46 +1723,6 @@ class CompiledAggregateUpdateHandler:
                     enum_tokens_fn=getattr(self.port, "enum_provenance_tokens", None),
                 )
 
-    def _verify_collection_match(
-        self,
-        spec: CompiledAggregateUpdateSpec,
-        col: CompiledChildCollectionSpec,
-        expected_rows: list[dict],
-        actual_rows: object,
-    ) -> None:
-        if not isinstance(actual_rows, list) or len(actual_rows) != len(expected_rows):
-            raise BusinessMutationIndeterminate(
-                f"aggregate update readback count mismatch on collection {col.name}",
-                phase="postcondition",
-                reconciliation={"entity": spec.entity, "collection": col.name},
-            )
-        match_fn = getattr(self.port, "matches_readback_value", None)
-        col_ignored = col.server_computed_fields | col.volatile_fields | {col.id_field}
-        for idx, (exp_row, act_row) in enumerate(zip(expected_rows, actual_rows)):
-            if not isinstance(act_row, dict):
-                raise BusinessMutationIndeterminate(
-                    f"aggregate update readback row #{idx + 1} invalid on {col.name}",
-                    phase="postcondition",
-                    reconciliation={"entity": spec.entity, "collection": col.name},
-                )
-            for f_spec in col.fields:
-                if f_spec.name in col_ignored or f_spec.name not in exp_row:
-                    continue
-                matched = (
-                    match_fn(col, f_spec, act_row.get(f_spec.name), exp_row[f_spec.name])
-                    if callable(match_fn)
-                    else _values_equal(act_row.get(f_spec.name), exp_row[f_spec.name], kind=f_spec.kind)
-                )
-                if not matched:
-                    raise BusinessMutationIndeterminate(
-                        f"aggregate update readback mismatch on {col.name}[{idx}].{f_spec.name}",
-                        phase="postcondition",
-                        reconciliation={"entity": spec.entity, "collection": col.name, "field": f_spec.name},
-                    )
-            for sub in col.subcollections:
-                if sub.name in exp_row:
-                    self._verify_collection_match(spec, sub, exp_row[sub.name], act_row.get(sub.name))
-
     def dispatch(self, args: dict, *, context=None) -> BusinessToolResult:
         entity = args["entity"]
         record_id = args["record_id"]
@@ -1430,7 +1811,14 @@ class CompiledAggregateUpdateHandler:
             expected_collections = args.get("expected_collections") or {}
             for col in spec.collections:
                 if col.name in expected_collections:
-                    self._verify_collection_match(spec, col, expected_collections[col.name], after.get(col.name))
+                    _verify_collection_match(
+                        self.port,
+                        spec,
+                        col,
+                        expected_collections[col.name],
+                        after.get(col.name),
+                        op_label="aggregate update",
+                    )
 
             col_names = {c.name for c in spec.collections}
             ignore = (
@@ -1739,7 +2127,12 @@ _VALUE_ANYOF = {
         {
             "type": "array",
             "maxItems": 50,
-            "items": {"type": "string", "maxLength": 200},
+            "items": {
+                "anyOf": [
+                    {"type": "string", "maxLength": 200},
+                    {"type": "integer"},
+                ]
+            },
         },
     ]
 }
@@ -1756,6 +2149,28 @@ _FIELD_CHANGE_ITEM = {
         "value": _VALUE_ANYOF,
     },
     "required": ["field", "value"],
+    "additionalProperties": False,
+}
+
+
+_CREATE_SUBLINE_ITEM = {
+    "type": "object",
+    "properties": {
+        "collection": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "二级子表集合字段名（单子集合时可省略）。",
+        },
+        "fields": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 30,
+            "description": "二级子行字段列表（或传 {字段名: 值} 对象）。",
+            "items": _FIELD_CHANGE_ITEM,
+        },
+    },
+    "required": ["fields"],
     "additionalProperties": False,
 }
 
@@ -1778,10 +2193,43 @@ def compiled_write_tool_definitions(
             },
             "fields": {
                 "type": "array",
-                "minItems": 1,
+                "minItems": 0,
                 "maxItems": 40,
-                "description": "新建字段列表（或传 {字段名: 值} 对象）。标量业务字段按用户原话填写（页面合法初始默认值如当前负责人、默认类型将自动补齐并标为「（页面默认值）」上批准卡）；外键关联字段允许绑定本轮同账号已核实读取的目标实体记录（确切业务名称、父名称/第N期 或已读候选ID）；非外键标量属性不跨记录借用；占位哨兵或缺失必填项将追问补充。",
+                "description": "主表新建字段列表（或传 {字段名: 值} 对象）。标量业务字段按用户原话填写（页面合法初始默认值如当前负责人、默认类型将自动补齐并标为「（页面默认值）」上批准卡）；外键关联字段允许绑定本轮同账号已核实读取的目标实体记录（确切业务名称、父名称/第N期 或已读候选ID）；非外键标量属性不跨记录借用；占位哨兵或缺失必填项将追问补充。",
                 "items": _FIELD_CHANGE_ITEM,
+            },
+            "lines": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 30,
+                "description": "仅用于 1–2 层主子表新建时的明细子行（平铺实体勿传）：每行填 fields（子行外键、数量/金额等）及可选二级 sublines；主数据衍生固有属性（如所选商品计量单位）与子行页面默认初值将自动补齐并标注上批准卡。",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "collection": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 80,
+                            "description": "子表集合字段名（单子表实体可省略，多子表必传）。",
+                        },
+                        "fields": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 30,
+                            "description": "子行字段列表（或传 {字段名: 值} 对象）。",
+                            "items": _FIELD_CHANGE_ITEM,
+                        },
+                        "sublines": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 30,
+                            "description": "可选二级子行列表（仅 2 层主子表实体使用）。",
+                            "items": _CREATE_SUBLINE_ITEM,
+                        },
+                    },
+                    "required": ["fields"],
+                    "additionalProperties": False,
+                },
             },
         },
         "required": ["entity", "fields"],
@@ -1928,7 +2376,7 @@ def compiled_write_tool_definitions(
     return (
         ToolDefinition(
             "create_record",
-            "通过已编译 API 创建业务记录（支持为外键关联字段绑定本轮同账号已核实的目标实体记录；页面合法初始默认值自动补齐并显式标出「（页面默认值）」上批准卡；缺失必填值或占位哨兵将追问；严禁代填含密码新建接口，非外键标量属性不跨记录借用）。",
+            "通过已编译 API 创建业务记录（覆盖平铺实体及 1–2 层主子表 lines；支持为外键关联字段绑定本轮同账号已核实的目标实体记录；页面合法初始默认值与主数据固有衍生属性自动补齐并显式标出「（页面默认值）」/「（主数据属性）」上批准卡；缺失必填值或占位哨兵将追问；严禁代填含密码新建接口，非外键标量属性不跨记录借用）。",
             json.dumps(create_schema, ensure_ascii=False),
             "write",
             scope,
@@ -1988,6 +2436,7 @@ __all__ = [
     "CompiledWriteEffects",
     "CompiledWritePort",
     "DefaultValueKind",
+    "INHERENT_MASTER_ATTR_ANNOTATION",
     "PAGE_DEFAULT_ANNOTATION",
     "UnifiedUpdateHandler",
     "compiled_write_tool_definitions",

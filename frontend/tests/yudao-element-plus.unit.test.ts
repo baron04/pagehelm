@@ -126,6 +126,22 @@ describe('generic Element Plus integration helpers', () => {
     expect(out).not.toContain('s3cr3t')
   })
 
+  it('pairs vertical .el-descriptions label and content rows across adjacent table rows', () => {
+    const host = document.createElement('div')
+    host.innerHTML = '<div class="el-descriptions"><table><tbody>'
+      + '<tr><th class="el-descriptions__cell el-descriptions__label">申请人</th><th class="el-descriptions__cell el-descriptions__label">apiToken</th></tr>'
+      + '<tr><td class="el-descriptions__cell el-descriptions__content">王五</td><td class="el-descriptions__cell el-descriptions__content">tok-secret</td></tr>'
+      + '</tbody></table></div>'
+    document.body.append(host)
+    for (const el of host.querySelectorAll('*')) {
+      el.getBoundingClientRect = () => ({width: 120, height: 24, top: 10, bottom: 34, left: 0, right: 120, x: 0, y: 10, toJSON: () => ({})})
+    }
+    const out = annotateElDescriptions('[1]<button>Close />', document)
+    expect(out).toContain('申请人=王五')
+    expect(out).not.toContain('apiToken')
+    expect(out).not.toContain('tok-secret')
+  })
+
   it('reads collapsed checked and half-checked nodes from active dialog ElTree instances and DOM fallback', () => {
     const host = document.createElement('div')
     host.innerHTML = '<div role="dialog"><header class="el-dialog__header"><span class="el-dialog__title">菜单权限</span></header>'

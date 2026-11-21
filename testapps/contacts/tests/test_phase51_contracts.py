@@ -831,6 +831,176 @@ class Phase51ContractTests(unittest.TestCase):
             self.assertEqual(res.content["change_record_id"], "77")
             self.assertIn(expected_fragment, res.content["reference"])
 
+    def test_contacts_split_domain_toolpacks_and_help_hub_tail_append(self):
+        from testapps.contacts.packages import CONTACTS_DOMAIN_PACKS, CONTACTS_HUB_ROUTES
+
+        selected = select_active_domains(
+            CONTACTS_DOMAIN_PACKS,
+            page_url=self.app.origin + "/contacts/workflows",
+            prompt="Inspect dossier subscriptions",
+            top_k=1,
+        )
+        self.assertEqual([p.domain_id for p in selected], ["dossiers_subscriptions", "directory"])
+        schema = build_switch_domain_schema(CONTACTS_DOMAIN_PACKS)
+        self.assertEqual(
+            schema["function"]["parameters"]["properties"]["domain"]["enum"],
+            ["directory", "dossiers_subscriptions"],
+        )
+
+        result, chat, events, _channel = self._run_contacts(
+            [
+                _tool_reply(("highlight", {"index": 0})),
+                _tool_reply(("goto", {"path": "/contacts"})),
+                _tool_reply(("finish", {"status": "done", "answer": "Moved off /contacts/help."})),
+            ],
+            page_path="/contacts/help",
+            resident_convention_skill=True,
+            hub_routes=CONTACTS_HUB_ROUTES,
+            deferred_dom_tools=frozenset({"click", "highlight"}),
+            suppress_system_operation_catalog=True,
+        )
+        self.assertEqual(result.terminal_reason, "agent_finished", result.user_answer)
+        names_hub = [t["function"]["name"] for t in chat.calls[0][1]]
+        names_page = [t["function"]["name"] for t in chat.calls[2][1]]
+        self.assertNotIn("click", names_hub)
+        self.assertNotIn("highlight", names_hub)
+        fin_idx = names_hub.index("finish")
+        self.assertEqual(names_page[: fin_idx + 1], names_hub[: fin_idx + 1])
+        self.assertEqual(set(names_page[fin_idx + 1 :]), {"click", "highlight"})
+        self.assertTrue(
+            any(e.get("event") == "model_loop_result" and e.get("error_code") == "hub_route_deferred" for e in events)
+        )
+
+    def test_contacts_cat5_master_detail_create_fk_inherent_attr_and_scalar_block(self):
+        from web_operation_agent.business.compiled_writes import (
+            INHERENT_MASTER_ATTR_ANNOTATION,
+            PAGE_DEFAULT_ANNOTATION,
+        )
+
+        # Positive Cat 5 end-to-end execution through ModelDrivenTurnExecutor + WritePipeline:
+        # 1) read /api/contacts to put Ada Lovelace in FK candidate ledger,
+        # 2) create contact-dossiers with FK contact_id='Ada Lovelace' (not literal in prompt if read, or via contact_id),
+        #    verifying inherent contact_email derived with （主数据属性）, child category literal default （页面默认值）,
+        #    POST /api/contact-dossiers persistence, and GET /api/contact-dossiers/<id> readback!
+        actor = DEMO_ACTORS[0]
+        adapter = MinimalContactsAdapter(
+            self.app.origin,
+            api_token=actor.token,
+            allow_mutations=True,
+            mutation_journal=MemoryMutationJournal(),
+            standard_skills=True,
+            convention_updates=True,
+            resident_convention_skill=True,
+        )
+        principal = adapter.identity.bind(
+            adapter.identity.page_identity(f"{DEMO_SESSION_COOKIE}={actor.session}"),
+            delegation_id="p51-cat5-contacts",
+        )
+        channel = _Channel(page_url=self.app.origin + "/contacts", principal=principal, decision="approved")
+        goal_port = ContactsModelGoalPort(adapter, updates=True)
+        chat = _ScriptedChat([
+            _tool_reply(("list_contacts", {})),
+            _tool_reply((
+                "create_record",
+                {
+                    "entity": "contact-dossiers",
+                    "fields": {"name": "Northstar VIP Dossier"},
+                    "lines": [
+                        {
+                            "fields": {
+                                "contact_id": "Ada Lovelace",
+                                "label": "Primary Lead",
+                                "value": "+44-200",
+                            }
+                        }
+                    ],
+                },
+            )),
+            _tool_reply(("finish", {"status": "done", "answer": "Created Northstar VIP Dossier."})),
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            executor = ModelDrivenTurnExecutor(
+                channel=channel,
+                config=AgentTurnConfig(
+                    supported_scope="Contacts",
+                    ledger_path=Path(td) / "audit.jsonl",
+                    require_identity=True,
+                    deployment_profile="test",
+                    allow_business_mutations=True,
+                ),
+                application=bind_application(adapter),
+                chat=chat,
+                goal_port=goal_port,
+                profile=contacts_profile(adapter, goal_port, suppress_system_operation_catalog=True),
+                control=ReadOnlyControl(),
+                verify=False,
+                run_id_factory=lambda _m: "p51-cat5-contacts",
+            )
+            with patch("web_operation_agent.goal.executor.RemoteBrowserClient", _RemoteBrowser):
+                res = executor.execute({
+                    "message_id": "m_cat5",
+                    "text": "Create dossier 'Northstar VIP Dossier' for Ada Lovelace with item label 'Primary Lead' and value '+44-200'.",
+                    "page_url": self.app.origin + "/contacts",
+                })
+        self.assertEqual(res.terminal_reason, "agent_finished", res.user_answer)
+        self.assertEqual(len(channel.approvals), 1)
+        card_text = "\n".join(str(d) for d in channel.approvals[0].details)
+        self.assertIn(INHERENT_MASTER_ATTR_ANNOTATION, card_text)
+        self.assertIn(PAGE_DEFAULT_ANNOTATION, card_text)
+        created_dossiers = self.app.contact_dossiers[actor.workspace]
+        created = next(d for d in created_dossiers if d["name"] == "Northstar VIP Dossier")
+        self.assertEqual(created["items"][0]["contact_id"], "ada-lovelace")
+        self.assertEqual(created["items"][0]["contact_email"], "ada@example.test")
+        self.assertEqual(created["items"][0]["category"], "contact-card")
+
+        # Negative Cat 5 provenance check: copying scalar child value ('+44-100') from existing dossier must block!
+        chat_bad = _ScriptedChat([
+            _tool_reply(("list_contacts", {})),
+            _tool_reply((
+                "create_record",
+                {
+                    "entity": "contact-dossiers",
+                    "fields": {"name": "Blocked Dossier"},
+                    "lines": [
+                        {
+                            "fields": {
+                                "contact_id": "Ada Lovelace",
+                                "label": "Primary Lead",
+                                "value": "+44-100",
+                            }
+                        }
+                    ],
+                },
+            )),
+            _tool_reply(("finish", {"status": "need_input", "answer": "Need phone value from user."})),
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            executor_bad = ModelDrivenTurnExecutor(
+                channel=channel,
+                config=AgentTurnConfig(
+                    supported_scope="Contacts",
+                    ledger_path=Path(td) / "audit.jsonl",
+                    require_identity=True,
+                    deployment_profile="test",
+                    allow_business_mutations=True,
+                ),
+                application=bind_application(adapter),
+                chat=chat_bad,
+                goal_port=goal_port,
+                profile=contacts_profile(adapter, goal_port, suppress_system_operation_catalog=True),
+                control=ReadOnlyControl(),
+                verify=False,
+                run_id_factory=lambda _m: "p51-cat5-contacts-bad",
+            )
+            with patch("web_operation_agent.goal.executor.RemoteBrowserClient", _RemoteBrowser):
+                res_bad = executor_bad.execute({
+                    "message_id": "m_cat5_bad",
+                    "text": "Create dossier 'Blocked Dossier' for Ada with item label 'Primary Lead'.",
+                    "page_url": self.app.origin + "/contacts",
+                })
+        self.assertFalse(any(d["name"] == "Blocked Dossier" for d in self.app.contact_dossiers[actor.workspace]))
+        self.assertIn("未在用户原话", chat_bad.calls[2][0][-1]["content"])
+
 
 if __name__ == "__main__":
     unittest.main()

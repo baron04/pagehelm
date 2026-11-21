@@ -621,8 +621,6 @@ class YudaoProceduresBase:
                         for value in _date_range_receipt_values(data):
                             note_receipt(policy_turn, "", value)
                 body = fenced(json.dumps(data, ensure_ascii=False))
-                if name == "sql" and isinstance(data, dict) and data.get("order_summary"):
-                    body += f"\n排序首键统计：{data['order_summary']}"
                 if name == "sql" and isinstance(data, dict) and data.get("table_ref"):
                     if data.get("returned_rows", 0) >= 20 or data.get("truncated"):
                         body += f"\n本结果集较大，可用 finish(..., table_ref=\"{data['table_ref']}\") 原样交付完整表格。"
@@ -1063,6 +1061,7 @@ class YudaoProceduresBase:
         said, incomplete, failure = [], False, None
         paging_commands, paging_targets = [], []
         batch_applied, batch_rejected, batch_previous, batch_restricted = {}, {}, {}, []
+        expanded_filters = False
 
         def _visible_named(target_label: str):
             vis_lines, _ = _page_lines(s.obs)
@@ -1096,6 +1095,18 @@ class YudaoProceduresBase:
                 if missing:
                     return missing
             shown, found = _visible_named(label)
+            if not found and query_only and not expanded_filters:
+                expanded_filters = True
+                expand_tokens = ("展开", "高级筛选", "更多筛选", "展开筛选", "更多条件", "高级搜索")
+                expand_btns = [
+                    e for e in s.obs.elements
+                    if e.ref[1:] in shown
+                    and e.tag in {"button", "a"}
+                    and re.sub(r"\s+", "", str(e.name or e.attrs.get("title") or "")) in expand_tokens
+                ]
+                if len(expand_btns) == 1 and self._act(s, "click", {"ref": expand_btns[0].ref}) is None:
+                    self._settled(s, waits=2)
+                    shown, found = _visible_named(label)
             if not found:
                 incomplete = True
                 batch_rejected[label] = "missing_control"
@@ -1235,6 +1246,7 @@ class YudaoProceduresBase:
             else:
                 result = self._act(s, "click", {"ref": buttons[0].ref}, complete_query=True)
                 if result.completion_command:
+                    self._settled(s)
                     return replace(result, feedback="；".join(said) + "；" + result.feedback)
                 failed = result
                 incomplete = incomplete or bool(failed)

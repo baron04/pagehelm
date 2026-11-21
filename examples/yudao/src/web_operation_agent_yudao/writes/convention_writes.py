@@ -60,9 +60,11 @@ from ..rules.compiled_write_source import compile_yudao_write_catalog
 from .write_definitions import RECORD_CONTRACTS
 from .write_status_ops import ERP_DOCUMENT_ENTITIES
 
+ENABLE_CAT5_MASTER_DETAIL_CREATES: bool = True
+
 _CACHE_LOCK = RLock()
-_COMPILED_SPECS_CACHE: OrderedDict[tuple[int, int, int, str], dict] = OrderedDict()
-_DOCS_OBJECT_CACHE: OrderedDict[int, tuple[object, bool, dict]] = OrderedDict()
+_COMPILED_SPECS_CACHE: OrderedDict[tuple[int, int, int, str, bool], dict] = OrderedDict()
+_DOCS_OBJECT_CACHE: OrderedDict[tuple[int, bool], tuple[object, bool, dict]] = OrderedDict()
 
 _SECRET = DEFAULT_SECRET_FIELD_PATTERN
 _NAME_CANDIDATES = (
@@ -441,7 +443,8 @@ class YudaoConventionWritePort:
         source = getattr(self.goal_data, "_source", None)
         ui = getattr(self.goal_data, "_ui", None)
         rel = str(getattr(source, "release", "")) if source is not None else ""
-        cache_key = (id(docs), id(source), id(ui), rel)
+        cat5_on = bool(ENABLE_CAT5_MASTER_DETAIL_CREATES)
+        cache_key = (id(docs), id(source), id(ui), rel, cat5_on)
         with _CACHE_LOCK:
             cached = _COMPILED_SPECS_CACHE.get(cache_key)
             if cached is not None:
@@ -457,6 +460,7 @@ class YudaoConventionWritePort:
                 dedicated_updates=frozenset(_DEDICATED_UPDATES),
                 dedicated_statuses=frozenset(_DEDICATED_STATUSES),
                 ui_metadata_fn=_compile_ui_metadata,
+                enable_cat5_master_detail_creates=cat5_on,
             )
             _store_cached_catalog(cache_key, docs, source, catalog)
 
@@ -580,10 +584,13 @@ class YudaoConventionWritePort:
                     return self._enrich_special_read(entity, row)
             return None
 
+        paths = self._docs().get("paths") or {}
         if entity == "product/spu":
             path = "product/spu/get-detail"
         elif isinstance(spec, TwoStateStatusSpec) and getattr(spec, "read_path", ""):
             path = spec.read_path
+        elif f"/admin-api/{entity}/get" not in paths and f"/admin-api/{entity}/get-detail" in paths:
+            path = f"{entity}/get-detail"
         else:
             path = f"{entity}/get"
 
@@ -1007,6 +1014,7 @@ class YudaoConventionWritePort:
             "system/menu": ("system/menu/list-all-simple", ("name",)),
             "pms/pm/work-item-status": ("pms/pm/work-item-status/list", ("name",)),
             "oa/file-node": ("oa/file-node/directory-list", ("name",)),
+            "fms/config/account-set": ("fms/config/account-set/list", ("companyName", "name")),
         }
         if ref_entity in known:
             return known[ref_entity]
@@ -1014,11 +1022,22 @@ class YudaoConventionWritePort:
         paths = docs.get("paths") or {}
         for tail in ("simple-list", "simple-all-list", "list-all-simple", "list", "page"):
             cand = f"/admin-api/{ref_entity}/{tail}"
-            if cand in paths and isinstance((paths[cand] or {}).get("get"), dict):
-                return f"{ref_entity}/{tail}", (
-                    "name", "postName", "companyName", "employeeName", "nickname",
-                    "title", "username", "subject", "label", "code", "no", "digest",
-                )
+            get_op = (paths.get(cand) or {}).get("get") if cand in paths else None
+            if not isinstance(get_op, dict):
+                continue
+            if tail == "list":
+                req_q = [
+                    p.get("name")
+                    for p in (get_op.get("parameters") or ())
+                    if isinstance(p, dict) and p.get("in") == "query" and p.get("required") is True
+                ]
+                if any(q not in {"accountSetId"} for q in req_q):
+                    continue
+            return f"{ref_entity}/{tail}", (
+                "name", "postName", "companyName", "employeeName", "nickname",
+                "title", "username", "subject", "label", "code", "no", "digest",
+                "skuName", "productName", "spuName", "itemName", "barCode",
+            )
         raise BusinessToolRequestError(f"不支持解析关联类型：{ref_entity}")
 
     def _list_ref_rows(self, ref_entity: str, *, query_ctx: dict | None = None) -> tuple[str, tuple[str, ...], list[dict], dict]:
@@ -1360,6 +1379,24 @@ class YudaoConventionWritePort:
 
         # 2. Dictionary-bound & Java @InEnum fields
         if field.enum_type:
+            if field.kind == "id_array":
+                if not isinstance(raw_value, list):
+                    raise BusinessToolRequestError(f"字段「{shown_label}」须传选项数组。")
+                codes: list = []
+                labels: list[str] = []
+                sub_bindings: list[dict] = []
+                for item in raw_value:
+                    code, dlabel, b = self._resolve_dict_choice(field.enum_type, item, "string")
+                    if isinstance(code, str) and re.fullmatch(r"-?\d+", code.strip()):
+                        code = int(code.strip())
+                    if code in codes:
+                        raise BusinessToolRequestError(f"字段「{shown_label}」包含重复选项：{dlabel}")
+                    codes.append(code)
+                    labels.append(dlabel)
+                    sub_bindings.append({**b, "code": code} if isinstance(b, dict) else b)
+                old_disp = str(old_raw) if old_raw else "[]"
+                new_disp = "、".join(labels) if labels else "[]"
+                return codes, old_disp, new_disp, {"kind": "batch", "items": sub_bindings}
             code, dlabel, b = self._resolve_dict_choice(field.enum_type, raw_value, field.kind)
             old_disp = self._dict_label_for(field.enum_type, old_raw)
             return code, old_disp, dlabel, b
@@ -1531,6 +1568,9 @@ class YudaoConventionWritePort:
                         return code, lbl, {"kind": "dict", "dict_type": field.enum_type, "label": lbl, "code": code}
             lbl = self._dict_label_for(field.enum_type, val)
             return val, lbl if lbl != str(val) else str(val), None
+        if field.unit_scale > 1 and isinstance(val, (int, float)) and not isinstance(val, bool) and val != 0:
+            unit = field.display_unit or ("元" if field.unit_scale == 100 else "折")
+            val = f"{val}{unit}"
         api_val, _old, disp, binding = self.encode_field(spec, field, val, {}, allow_status_field=True)
         return api_val, disp, binding
 
@@ -1588,6 +1628,8 @@ class YudaoConventionWritePort:
                     if any(str(r.get(nk) or "").strip() == b["name"] for nk in name_keys):
                         return True
                     if expected_fields and all(r.get(fk) == fv for fk, fv in expected_fields.items()):
+                        return True
+                    if not any(r.get(nk) for nk in name_keys) and b["name"] == f"ID={b['id']}":
                         return True
                     return False
 
@@ -1793,6 +1835,87 @@ class YudaoConventionWritePort:
         if comp and created_id is not None:
             self._composite_hints[(spec.entity, str(created_id))] = dict(comp)
         return self.read_record(spec.entity, created_id, spec=spec, composite_id=comp)
+
+    def derive_child_inherent_fields(
+        self,
+        spec: CompiledCreateSpec,
+        col_spec,
+        line_payload: dict,
+        line_bindings: list[dict],
+        *,
+        actor_id: str = "",
+    ) -> list[tuple[str, object, str, dict | None]]:
+        """Derive non-free-choice master-data attributes from bound child FKs."""
+        del line_bindings, actor_id
+        out: list[tuple[str, object, str, dict | None]] = []
+        pid = line_payload.get("productId")
+        if spec.entity.startswith("erp/") and pid is not None:
+            need_unit = any(
+                col_spec.resolve_field(cand) is not None and cand not in line_payload
+                for cand in ("productUnitId", "unitId")
+            )
+            if need_unit:
+                rec = None
+                try:
+                    rec = self.read_record("erp/product", pid)
+                except (BusinessToolRequestError, BusinessToolUnavailableError):
+                    rec = None
+                if not isinstance(rec, dict) or rec.get("unitId") is None:
+                    try:
+                        _, _, rows, _ = self._list_ref_rows("erp/product")
+                        rec = next((r for r in rows if str(r.get("id")) == str(pid)), rec)
+                    except (BusinessToolRequestError, BusinessToolUnavailableError):
+                        pass
+                if isinstance(rec, dict) and rec.get("unitId") is not None:
+                    uid = int(rec["unitId"])
+                    unit_name = str(rec.get("unitName") or "").strip()
+                    u_binding: dict | None = None
+                    try:
+                        lp, nk, urows, qp = self._list_ref_rows("erp/product-unit")
+                        matched = next((r for r in urows if r.get("id") == uid), None)
+                        if isinstance(matched, dict):
+                            u_name = str(matched.get("name") or unit_name).strip()
+                            if u_name:
+                                unit_name = u_name
+                                u_binding = {
+                                    "kind": "relation",
+                                    "list_path": lp,
+                                    "query_params": qp,
+                                    "name_keys": list(nk),
+                                    "name_key": "name",
+                                    "id": uid,
+                                    "name": unit_name,
+                                }
+                    except (BusinessToolRequestError, BusinessToolUnavailableError):
+                        pass
+                    disp = f"{unit_name}（ID={uid}）" if unit_name else f"ID={uid}"
+                    for cand in ("productUnitId", "unitId"):
+                        if col_spec.resolve_field(cand) is not None and cand not in line_payload:
+                            out.append((cand, uid, disp, dict(u_binding) if u_binding else None))
+        elif spec.entity == "crm/contract" and pid is not None and "productPrice" not in line_payload:
+            pp_field = col_spec.resolve_field("productPrice")
+            if pp_field is not None:
+                rec = None
+                try:
+                    rec = self.read_record("crm/product", pid)
+                except (BusinessToolRequestError, BusinessToolUnavailableError):
+                    rec = None
+                if not isinstance(rec, dict) or rec.get("price") is None:
+                    try:
+                        _, _, rows, _ = self._list_ref_rows("crm/product")
+                        rec = next((r for r in rows if str(r.get("id")) == str(pid)), rec)
+                    except (BusinessToolRequestError, BusinessToolUnavailableError):
+                        pass
+                if isinstance(rec, dict) and rec.get("price") is not None:
+                    raw_price = rec["price"]
+                    if pp_field.unit_scale == 100 and isinstance(raw_price, (int, float)) and not isinstance(raw_price, bool):
+                        api_p = int(raw_price)
+                        disp_p = self._format_scaled(api_p, 100, "元")
+                    else:
+                        api_p = raw_price
+                        disp_p = str(raw_price)
+                    out.append(("productPrice", api_p, disp_p, None))
+        return out
 
     def dispatch_update(self, spec: ConventionUpdateSpec, record_id, payload: dict) -> None:
         self._require_crm_write_if_needed(spec.entity, record_id)
@@ -2034,27 +2157,30 @@ def _empty_compiled_catalog() -> dict:
     }
 
 
-def _store_cached_catalog(cache_key: tuple[int, int, int, str], docs: dict, source, catalog: dict) -> None:
+def _store_cached_catalog(cache_key: tuple[int, int, int, str, bool], docs: dict, source, catalog: dict) -> None:
     has_rich = source is not None
+    cat5_on = bool(cache_key[-1])
+    doc_key = (id(docs), cat5_on)
     with _CACHE_LOCK:
         _COMPILED_SPECS_CACHE[cache_key] = catalog
         _COMPILED_SPECS_CACHE.move_to_end(cache_key)
         while len(_COMPILED_SPECS_CACHE) > 8:
             _COMPILED_SPECS_CACHE.popitem(last=False)
-        existing = _DOCS_OBJECT_CACHE.get(id(docs))
+        existing = _DOCS_OBJECT_CACHE.get(doc_key)
         if existing is None or has_rich or not existing[1]:
-            _DOCS_OBJECT_CACHE[id(docs)] = (docs, has_rich, catalog)
-            _DOCS_OBJECT_CACHE.move_to_end(id(docs))
+            _DOCS_OBJECT_CACHE[doc_key] = (docs, has_rich, catalog)
+            _DOCS_OBJECT_CACHE.move_to_end(doc_key)
             while len(_DOCS_OBJECT_CACHE) > 8:
                 _DOCS_OBJECT_CACHE.popitem(last=False)
 
 
 def warm_yudao_write_catalog(*, docs: dict, source, ui=None) -> None:
-    """Precompile the 4-category write catalog outside live turns."""
+    """Precompile the write catalog outside live turns."""
     if not isinstance(docs, dict) or not docs.get("paths"):
         return
     rel = str(getattr(source, "release", "")) if source is not None else ""
-    cache_key = (id(docs), id(source), id(ui), rel)
+    cat5_on = bool(ENABLE_CAT5_MASTER_DETAIL_CREATES)
+    cache_key = (id(docs), id(source), id(ui), rel, cat5_on)
     with _CACHE_LOCK:
         if cache_key in _COMPILED_SPECS_CACHE:
             _COMPILED_SPECS_CACHE.move_to_end(cache_key)
@@ -2067,24 +2193,29 @@ def warm_yudao_write_catalog(*, docs: dict, source, ui=None) -> None:
         dedicated_updates=frozenset(_DEDICATED_UPDATES),
         dedicated_statuses=frozenset(_DEDICATED_STATUSES),
         ui_metadata_fn=_compile_ui_metadata,
+        enable_cat5_master_detail_creates=cat5_on,
     )
     _store_cached_catalog(cache_key, docs, source, catalog)
 
 
 def get_yudao_write_catalog(*, docs: dict | None = None, source=None, ui=None) -> dict:
-    """Return the pre-warmed (or lazily compiled) Yudao 4-category write catalog."""
+    """Return the pre-warmed (or lazily compiled) Yudao write catalog."""
+    cat5_on = bool(ENABLE_CAT5_MASTER_DETAIL_CREATES)
+    doc_key = (id(docs), cat5_on) if isinstance(docs, dict) else None
     with _CACHE_LOCK:
-        if isinstance(docs, dict):
-            entry = _DOCS_OBJECT_CACHE.get(id(docs))
+        if doc_key is not None:
+            entry = _DOCS_OBJECT_CACHE.get(doc_key)
             if entry is not None and entry[0] is docs and (source is None or entry[1]):
-                _DOCS_OBJECT_CACHE.move_to_end(id(docs))
+                _DOCS_OBJECT_CACHE.move_to_end(doc_key)
                 return entry[2]
         elif _COMPILED_SPECS_CACHE:
-            return next(reversed(_COMPILED_SPECS_CACHE.values()))
+            for ck in reversed(_COMPILED_SPECS_CACHE):
+                if ck[-1] is cat5_on:
+                    return _COMPILED_SPECS_CACHE[ck]
     if isinstance(docs, dict) and docs.get("paths"):
         warm_yudao_write_catalog(docs=docs, source=source, ui=ui)
         with _CACHE_LOCK:
-            entry = _DOCS_OBJECT_CACHE.get(id(docs))
+            entry = _DOCS_OBJECT_CACHE.get(doc_key)
             if entry is not None and entry[0] is docs:
                 return entry[2]
     return _empty_compiled_catalog()
@@ -2156,6 +2287,29 @@ def _format_create_req(spec: CompiledCreateSpec) -> tuple[list[str], list[str], 
     return req, fks, auto_defaults
 
 
+def _format_create_collections(spec: CompiledCreateSpec) -> tuple[list[str], list[str], list[str]]:
+    collections: list[str] = []
+    collection_details: list[str] = []
+    child_fks: list[str] = []
+    for col in spec.collections:
+        collections.append(col.name)
+        c_defaults = {d.field for d in col.defaults if col.resolve_field(d.field) is not None}
+        c_req: list[str] = []
+        for cf in col.fields:
+            if cf.reference_entity:
+                opt_mark = "" if (cf.required and cf.name not in c_defaults) else "(选填)"
+                child_fks.append(f"{col.name}.{cf.name}->{cf.reference_entity}{opt_mark}")
+            if cf.name == "productUnitId" and spec.entity.startswith("erp/"):
+                continue
+            if cf.required and cf.name not in col.server_computed_fields and cf.name not in c_defaults:
+                c_req.append(f"{cf.name}->{cf.reference_entity}" if cf.reference_entity else cf.name)
+        req_str = ",".join(c_req[:6]) or "无"
+        extra_sub = f"+{','.join(s.name for s in col.subcollections)}" if col.subcollections else ""
+        auto_unit = "(productUnitId随productId自动带出)" if (spec.entity.startswith("erp/") and col.resolve_field("productUnitId")) else ""
+        collection_details.append(f"{col.name}[min={col.min_items}](必填:{req_str}){extra_sub}{auto_unit}")
+    return collections, collection_details, child_fks
+
+
 def build_yudao_write_directory(*, docs: dict | None = None, source=None, ui=None) -> list[dict]:
     """Programmatically assemble all Yudao write tools and compiled entities from source/OpenAPI."""
     entries: list[dict] = []
@@ -2221,8 +2375,9 @@ def build_yudao_write_directory(*, docs: dict | None = None, source=None, ui=Non
     cat = get_yudao_write_catalog(docs=docs, source=source, ui=ui)
     for ent, spec in sorted(cat["creates"].items()):
         req, fks, auto_defaults = _format_create_req(spec)
+        cols, col_details, child_fks = _format_create_collections(spec)
         op_tag, op_sum = _openapi_op_label(docs, f"/admin-api/{ent}/create", "post")
-        entries.append({
+        entry_dict: dict[str, object] = {
             "tool": "create_record",
             "mode": "direct",
             "kind": "compiled_create",
@@ -2231,8 +2386,12 @@ def build_yudao_write_directory(*, docs: dict | None = None, source=None, ui=Non
             "tag": op_tag,
             "required": req,
             "defaults": auto_defaults,
-            "relations": fks,
-        })
+            "relations": list(dict.fromkeys([*fks, *child_fks])),
+        }
+        if cols:
+            entry_dict["collections"] = cols
+            entry_dict["collection_details"] = col_details
+        entries.append(entry_dict)
     for ent, spec in sorted(cat["aggregates"].items()):
         extra_lbl = " / 员工定薪调薪" if getattr(spec, "readback_strategy", "") == "change_record_id" else ""
         op_tag, op_sum = _openapi_op_label(docs, f"/admin-api/{ent}/update", "put")

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import re
 from threading import RLock
@@ -479,8 +479,38 @@ def _extract_brace_object_literal(text: str, marker_pos: int) -> str | None:
     return text[idx + 1:end]
 
 
-def _compile_vue_create_defaults(source, ui=None) -> dict[str, tuple[CompiledFieldDefault, ...]]:
-    """Extract D1 (current actor) and D2 (literal/constant) create defaults from ``*.vue`` forms."""
+def _extract_vue_child_defaults(vue_path: Path, text: str, ts_consts: dict) -> tuple[CompiledFieldDefault, ...]:
+    """Scan local child sub-form Vue components imported by a form for handleAdd/addRow defaults."""
+    blocks_text = [text]
+    for _alias, _named, mod in _API_IMPORT_RE.findall(text):
+        pass
+    for imp in re.findall(r"""import\s+\w+\s+from\s+['"](\.[^'"]+\.vue)['"]""", text):
+        cand = (vue_path.parent / imp).resolve()
+        if cand.is_file():
+            blocks_text.append(cand.read_text(encoding="utf-8", errors="ignore"))
+    out: dict[str, CompiledFieldDefault] = {}
+    row_triggers = (
+        re.compile(r"function\s+(?:handleAdd\w*|addRow\w*)\b[^{]*\{[\s\S]{0,200}?\bconst\s+row\s*=\s*(?=\{)"),
+        re.compile(r"const\s+(?:handleAdd\w*|addRow\w*)\s*=\s*\([^)]*\)\s*=>\s*\{[\s\S]{0,200}?\bconst\s+row\s*=\s*(?=\{)"),
+        re.compile(r"\bpush\s*\(\s*(?=\{)"),
+    )
+    for src_txt in blocks_text:
+        for pat in row_triggers:
+            for m in pat.finditer(src_txt):
+                block = _extract_brace_object_literal(src_txt, m.end())
+                if not block:
+                    continue
+                for k, expr in re.findall(r"^\s*([A-Za-z_]\w*)\s*:\s*([^,\n/]+)", block, re.M):
+                    if k == "id" or _SECRET.search(k):
+                        continue
+                    val = _eval_ts_literal(expr, ts_consts)
+                    if val is not None and val != "":
+                        out.setdefault(k, CompiledFieldDefault(field=k, kind="literal", value=val, display=str(val)))
+    return tuple(out.values())
+
+
+def _compile_vue_create_defaults(source, ui=None) -> tuple[dict[str, tuple[CompiledFieldDefault, ...]], dict[str, tuple[CompiledFieldDefault, ...]]]:
+    """Extract D1 (current actor) and D2 (literal/constant) parent & child create defaults from ``*.vue`` forms."""
     ui_src: Path | None = None
     if source is not None and getattr(source, "root", None):
         cand = Path(source.root) / "ui" / "src"
@@ -491,7 +521,7 @@ def _compile_vue_create_defaults(source, ui=None) -> dict[str, tuple[CompiledFie
         if (cand / "views").is_dir():
             ui_src = cand
     if ui_src is None:
-        return {}
+        return {}, {}
 
     ui_api = ui_src / "api"
     api_creates: dict[str, dict[str, str]] = {}
@@ -511,6 +541,7 @@ def _compile_vue_create_defaults(source, ui=None) -> dict[str, tuple[CompiledFie
 
     ts_consts = _load_ui_constants(ui_src)
     defaults_out: dict[str, tuple[CompiledFieldDefault, ...]] = {}
+    child_defaults_out: dict[str, tuple[CompiledFieldDefault, ...]] = {}
     for vue_path in sorted((ui_src / "views").rglob("*.vue")):
         text = vue_path.read_text(encoding="utf-8", errors="ignore")
         if "create" not in text and "Create" not in text:
@@ -564,7 +595,10 @@ def _compile_vue_create_defaults(source, ui=None) -> dict[str, tuple[CompiledFie
 
         if field_defaults:
             defaults_out[entity] = tuple(field_defaults.values())
-    return defaults_out
+        cdefs = _extract_vue_child_defaults(vue_path, text, ts_consts)
+        if cdefs:
+            child_defaults_out[entity] = cdefs
+    return defaults_out, child_defaults_out
 
 
 _DO_FIELD_RE = re.compile(r"(?:(?<=^)|(?<=[;{}\s]))private\s+(?!static\b|final\b)[\w<>\[\], ?]+\s+(\w+)\s*(?:=|;)", re.M)
@@ -777,14 +811,18 @@ def _infer_extended_reference(entity: str, prop: str, kind: str, desc: str, avai
         if prop in {
             "leaderUserId", "ownerUserId", "managerUserId", "moderatorUserId",
             "keeperUserId", "handoverUserId", "handlerUserId", "userId", "bindUserId",
+            "witnessUserId", "financeUserId", "saleUserId", "purchaseUserId",
         }:
             return "system/user"
         if prop in {"leaderEmployeeId", "employeeId", "interviewEmployeeId"}:
             return "hrm/employee"
         if prop == "areaId" and ("地区" in desc or "省" in desc or "区域" in desc):
             return "system/area"
-        if prop == "customerId" and "/admin-api/crm/customer/page" in available_paths:
-            return "crm/customer"
+        if prop == "customerId":
+            if entity.startswith("erp/") and "/admin-api/erp/customer/simple-list" in available_paths:
+                return "erp/customer"
+            if "/admin-api/crm/customer/page" in available_paths:
+                return "crm/customer"
         if prop == "contractId" and "/admin-api/crm/contract/page" in available_paths:
             return "crm/contract"
         if prop == "businessId" and "/admin-api/crm/business/page" in available_paths:
@@ -795,8 +833,32 @@ def _infer_extended_reference(entity: str, prop: str, kind: str, desc: str, avai
             return "erp/supplier"
         if prop == "accountId" and entity.startswith("erp/") and "/admin-api/erp/account/simple-list" in available_paths:
             return "erp/account"
-        if prop == "warehouseId" and "/admin-api/erp/warehouse/simple-list" in available_paths:
+        if prop in {"warehouseId", "sourceWarehouseId", "targetWarehouseId"} and entity.startswith("wms/") and "/admin-api/wms/warehouse/simple-list" in available_paths:
+            return "wms/warehouse"
+        if prop in {"warehouseId", "fromWarehouseId", "toWarehouseId"} and "/admin-api/erp/warehouse/simple-list" in available_paths:
             return "erp/warehouse"
+        if entity.startswith("wms/"):
+            if prop == "skuId" and "/admin-api/wms/item-sku/page" in available_paths:
+                return "wms/item-sku"
+            if prop == "categoryId" and "/admin-api/wms/item-category/simple-list" in available_paths:
+                return "wms/item-category"
+            if prop == "brandId" and "/admin-api/wms/item-brand/simple-list" in available_paths:
+                return "wms/item-brand"
+            if prop == "merchantId" and "/admin-api/wms/merchant/simple-list" in available_paths:
+                return "wms/merchant"
+        if prop == "orderId":
+            if entity in {"erp/purchase-in", "erp/purchase-return"} and "/admin-api/erp/purchase-order/page" in available_paths:
+                return "erp/purchase-order"
+            if entity in {"erp/sale-out", "erp/sale-return"} and "/admin-api/erp/sale-order/page" in available_paths:
+                return "erp/sale-order"
+        if prop == "itemId" and entity.startswith("oa/supply") and "/admin-api/oa/supply-item/page" in available_paths:
+            return "oa/supply-item"
+        if prop == "spuId" and entity.startswith(("product/", "promotion/")) and "/admin-api/product/spu/page" in available_paths:
+            return "product/spu"
+        if prop == "brandId" and entity.startswith("product/") and "/admin-api/product/brand/list" in available_paths:
+            return "product/brand"
+        if prop == "deliveryTemplateId" and entity.startswith("product/") and "/admin-api/trade/delivery/express-template/list-all-simple" in available_paths:
+            return "trade/delivery/express-template"
         if prop == "productId":
             if entity.startswith("erp/") and "/admin-api/erp/product/simple-list" in available_paths:
                 return "erp/product"
@@ -804,7 +866,10 @@ def _infer_extended_reference(entity: str, prop: str, kind: str, desc: str, avai
                 return "crm/product"
         if prop == "productUnitId" and "/admin-api/erp/product-unit/simple-list" in available_paths:
             return "erp/product-unit"
-        if prop == "accountSetId" and "/admin-api/fms/config/account-set/simple-list" in available_paths:
+        if prop == "accountSetId" and (
+            "/admin-api/fms/config/account-set/simple-list" in available_paths
+            or "/admin-api/fms/config/account-set/list" in available_paths
+        ):
             return "fms/config/account-set"
         if prop == "voucherWordId" and "/admin-api/fms/config/voucher-word/simple-list" in available_paths:
             return "fms/config/voucher-word"
@@ -1059,6 +1124,17 @@ def _compile_child_collection(
         computed.add("name")
     if entity == "product/spu" and col_name == "skus" and "name" in item_props:
         computed.add("name")
+    if entity == "promotion/point-activity" and col_name == "products":
+        for known_comp in ("activityId", "activityStatus"):
+            if known_comp in item_props:
+                computed.add(known_comp)
+        req_add = [r for r in req_add if r not in computed]
+    if entity == "crm/business-status" and col_name == "statuses" and "sort" in item_props:
+        computed.add("sort")
+        req_add = [r for r in req_add if r != "sort"]
+    if entity == "wms/item" and col_name == "skus" and "itemId" in item_props:
+        computed.add("itemId")
+        req_add = [r for r in req_add if r != "itemId"]
     lbl = _clean_desc_label(str(arr_schema.get("description") or raw_arr_prop.get("description") or "")) or col_name
     min_items = arr_schema.get("minItems") if type(arr_schema.get("minItems")) is int else (2 if col_name == "entries" and entity == "fms/voucher" else 0)
     return CompiledChildCollectionSpec(
@@ -1099,6 +1175,70 @@ def _synthesize_props_from_java_vo(java_vo: JavaVOAST, schemas: dict, fallback_p
     return out
 
 
+def _classify_nested_columns(req_props: dict, schemas: dict) -> tuple[bool, list[tuple[str, dict]]]:
+    has_opaque_object = False
+    nested_cols: list[tuple[str, dict]] = []
+    for fn, raw_fp in req_props.items():
+        fp = _deref(raw_fp, schemas)
+        if "$ref" in raw_fp or fp.get("type") == "object":
+            has_opaque_object = True
+            break
+        if fp.get("type") == "array":
+            it_raw = fp.get("items") or {}
+            it_d = _deref(it_raw, schemas)
+            if "$ref" in it_raw or it_d.get("type") == "object":
+                nested_cols.append((fn, raw_fp))
+    return has_opaque_object, nested_cols
+
+
+def _service_required_child_cols(
+    ep_ast: ControllerEndpointAST | None,
+    col_names: set[str],
+    parsed_svc_cache: dict[str, tuple[str, dict[str, str], dict[str, list[tuple[int, int, int]]]]],
+) -> set[str]:
+    """Detect child collections rejected when empty in Java create service or helper calls."""
+    if ep_ast is None or not col_names or not ep_ast.service_iface or ep_ast.service_iface not in parsed_svc_cache:
+        return set()
+    masked, _svc_fields, sigs = parsed_svc_cache[ep_ast.service_iface]
+    entry_spans = sigs.get(ep_ast.service_method) or ()
+    if not entry_spans:
+        return set()
+    chunks = [masked[bs:be] for _s, bs, be in entry_spans]
+    for mname, spans in sigs.items():
+        if mname != ep_ast.service_method and any(mname in c for c in chunks):
+            chunks.extend(masked[bs:be] for _s, bs, be in spans)
+    body = "\n".join(chunks)
+    required_cols: set[str] = set()
+    for cname in col_names:
+        cap = cname[0].upper() + cname[1:]
+        if re.search(rf"(?:CollUtil|CollectionUtils|ObjectUtil)\.isEmpty\([^)]*\.get{re.escape(cap)}\s*\(", body):
+            required_cols.add(cname)
+        elif cname == "skus" and re.search(r"\bvalidateSkuList\s*\(", body):
+            required_cols.add(cname)
+    return required_cols
+
+
+def _agg_server_computed_fields(entity: str, *, is_salary_special: bool = False) -> set[str]:
+    computed: set[str] = set()
+    if entity.startswith("erp/"):
+        computed |= {"totalCount", "totalPrice", "totalProductPrice", "totalTaxPrice"}
+        if entity not in {"erp/finance-receipt", "erp/finance-payment"}:
+            computed.add("discountPrice")
+    elif entity.startswith("wms/"):
+        computed |= {"totalQuantity", "totalPrice", "totalAmount"}
+    elif entity in {"oa/travel-reimbursement", "oa/reimbursement"}:
+        computed |= {"days", "totalPrice", "invoiceCount"}
+    elif entity == "crm/contract":
+        computed |= {"totalPrice", "totalProductPrice"}
+    elif entity == "fms/voucher":
+        computed |= {"debitAmount", "creditAmount", "total"}
+    elif entity == "product/spu":
+        computed |= {"price", "marketPrice", "costPrice", "stock"}
+    elif is_salary_special:
+        computed |= {"regularSalary", "probationSalary", "changeType", "recordType"}
+    return computed
+
+
 def compile_yudao_write_catalog(
     *,
     docs: dict,
@@ -1108,12 +1248,14 @@ def compile_yudao_write_catalog(
     dedicated_updates: frozenset[str],
     dedicated_statuses: frozenset[str],
     ui_metadata_fn,
+    enable_cat5_master_detail_creates: bool = True,
 ) -> dict:
-    """Compile all 4 write categories from Yudao OpenAPI + Java AST + Vue/TS form sources."""
+    """Compile all 4–5 write categories from Yudao OpenAPI + Java AST + Vue/TS form sources."""
     src_id = id(source) if source is not None else 0
     docs_id = id(docs)
     rel_key = str(getattr(source, "release", "")) if source is not None else ""
-    cache_key = (docs_id, src_id, rel_key)
+    cat5_flag = bool(enable_cat5_master_detail_creates)
+    cache_key = (docs_id, src_id, rel_key, cat5_flag)
     with _COMPILED_ALL_LOCK:
         cached = _COMPILED_ALL_CACHE.get(cache_key)
         if cached is not None:
@@ -1128,6 +1270,7 @@ def compile_yudao_write_catalog(
             dedicated_statuses=dedicated_statuses,
             ui_metadata_fn=ui_metadata_fn,
             cache_key=cache_key,
+            enable_cat5_master_detail_creates=cat5_flag,
         )
 
 
@@ -1140,7 +1283,8 @@ def _compile_yudao_write_catalog_locked(
     dedicated_updates: frozenset[str],
     dedicated_statuses: frozenset[str],
     ui_metadata_fn,
-    cache_key: tuple[int, int, str],
+    cache_key: tuple[int, int, str, bool],
+    enable_cat5_master_detail_creates: bool = True,
 ) -> dict:
     paths = docs.get("paths") or {}
     schemas = (docs.get("components") or {}).get("schemas") or {}
@@ -1197,7 +1341,7 @@ def _compile_yudao_write_catalog_locked(
     }
     parsed_svc_cache: dict[str, tuple[str, dict[str, str], dict[str, list[tuple[int, int, int]]]]] = {}
     known_java_enums = frozenset(k for k, v in enum_labels.items() if v)
-    form_defaults = _compile_vue_create_defaults(source, ui)
+    form_defaults, form_child_defaults = _compile_vue_create_defaults(source, ui)
 
     creates: dict[str, CompiledCreateSpec] = {}
     excluded_create_reasons: dict[str, str] = {}
@@ -1545,18 +1689,7 @@ def _compile_yudao_write_catalog_locked(
         req_required = set(req_schema.get("required") or ())
 
         # Detect nested object-array child collections vs opaque config objects
-        has_opaque_object = False
-        nested_cols: list[tuple[str, dict]] = []
-        for fn, raw_fp in req_props.items():
-            fp = _deref(raw_fp, schemas)
-            if "$ref" in raw_fp or fp.get("type") == "object":
-                has_opaque_object = True
-                break
-            if fp.get("type") == "array":
-                it_raw = fp.get("items") or {}
-                it_d = _deref(it_raw, schemas)
-                if "$ref" in it_raw or it_d.get("type") == "object":
-                    nested_cols.append((fn, raw_fp))
+        has_opaque_object, nested_cols = _classify_nested_columns(req_props, schemas)
         if has_opaque_object:
             continue
 
@@ -1685,21 +1818,7 @@ def _compile_yudao_write_catalog_locked(
                 if not comp_ids:
                     comp_ids = ("id",)
                 id_field = "employeeId" if is_salary_special else "id"
-                computed_parent: set[str] = set()
-                if entity.startswith("erp/"):
-                    computed_parent |= {"totalCount", "totalPrice", "totalProductPrice", "totalTaxPrice", "discountPrice"}
-                elif entity.startswith("wms/"):
-                    computed_parent |= {"totalQuantity", "totalPrice", "totalAmount"}
-                elif entity in {"oa/travel-reimbursement", "oa/reimbursement"}:
-                    computed_parent |= {"days", "totalPrice", "invoiceCount"}
-                elif entity == "crm/contract":
-                    computed_parent |= {"totalPrice", "totalProductPrice"}
-                elif entity == "fms/voucher":
-                    computed_parent |= {"debitAmount", "creditAmount", "total"}
-                elif entity == "product/spu":
-                    computed_parent |= {"price", "marketPrice", "costPrice", "stock"}
-                elif is_salary_special:
-                    computed_parent |= {"regularSalary", "probationSalary", "changeType", "recordType"}
+                computed_parent = _agg_server_computed_fields(entity, is_salary_special=is_salary_special)
                 aggregates[entity] = CompiledAggregateUpdateSpec(
                     entity=entity,
                     label=tag,
@@ -1715,7 +1834,7 @@ def _compile_yudao_write_catalog_locked(
                 )
 
     # ------------------------------------------------------------------
-    # Category 1: Flat POST .../create -> CommonResultLong + D1-D3 defaults
+    # Categories 1 & 5: Flat POST .../create + 1–2 Level Master-Detail POST .../create
     # ------------------------------------------------------------------
     for p, item in sorted(paths.items()):
         if not p.startswith("/admin-api/") or not p.endswith("/create") or not isinstance(item, dict):
@@ -1726,7 +1845,16 @@ def _compile_yudao_write_catalog_locked(
         entity = p[len("/admin-api/"):-len("/create")]
         if _blocked(entity) or entity in dedicated_creates:
             continue
-        get_op = (paths.get(f"/admin-api/{entity}/get") or {}).get("get")
+        get_path = (
+            "product/spu/get-detail"
+            if entity == "product/spu" and f"/admin-api/{entity}/get-detail" in paths
+            else (
+                f"{entity}/get"
+                if f"/admin-api/{entity}/get" in paths
+                else (f"{entity}/get-detail" if f"/admin-api/{entity}/get-detail" in paths else "")
+            )
+        )
+        get_op = (paths.get(f"/admin-api/{get_path}") or {}).get("get") if get_path else None
         if not isinstance(get_op, dict):
             continue
         try:
@@ -1743,12 +1871,17 @@ def _compile_yudao_write_catalog_locked(
             continue
         req_schema = _deref(req_raw, schemas)
         req_props = req_schema.get("properties") or {}
+        has_opaque_object, nested_cols = _classify_nested_columns(req_props, schemas)
+        if has_opaque_object:
+            continue
+        if nested_cols and not enable_cat5_master_detail_creates:
+            continue
         create_dropped: set[str] = set()
         if ep_ast is not None:
             safe_svc, _, create_dropped = _analyze_service_method(
                 source,
                 ep_ast,
-                allow_child_mappers=False,
+                allow_child_mappers=bool(nested_cols and enable_cat5_master_detail_creates),
                 do_fields=do_fields,
                 vo_field_names=tuple(req_props.keys()),
                 svc_by_iface=svc_by_iface,
@@ -1760,17 +1893,68 @@ def _compile_yudao_write_catalog_locked(
         resp_props = _resp_schema_props(get_op, schemas)
         req_required = set(req_schema.get("required") or ())
         java_fields = {f.name: f for f in java_vo.fields} if java_vo else {}
+        get_ep = ctrl_endpoints.get(f"Get:{get_path}") if nested_cols else None
+        resp_java_vo = vo_map.get(get_ep.response_type) if get_ep and get_ep.response_type else None
+        resp_java_fields = {f.name: f for f in resp_java_vo.fields} if resp_java_vo else {}
         ent_labels = ui_labels.get(entity, {})
         ent_dicts = ui_dicts.get(entity, {})
         ent_scales = ui_scales.get(entity, {})
+        col_names = {c for c, _ in nested_cols}
+        svc_req_cols = _service_required_child_cols(ep_ast, col_names, parsed_svc_cache)
+        raw_child_defaults = form_child_defaults.get(entity, ())
 
         field_specs: list[ConventionFieldSpec] = []
+        child_specs: list[CompiledChildCollectionSpec] = []
         disqualified = False
         req_pwd = False
         for fname, raw_fp in req_props.items():
-            if fname == "id" or fname in create_dropped:
+            if fname == "id":
                 continue
             jf = java_fields.get(fname)
+            if fname in col_names:
+                rjf = resp_java_fields.get(fname)
+                col_spec = _compile_child_collection(
+                    entity,
+                    fname,
+                    raw_fp,
+                    schemas=schemas,
+                    available_paths=available_paths,
+                    vo_map=vo_map,
+                    java_list_elem_vo=(jf.list_element_class if jf else ""),
+                    resp_list_elem_vo=(rjf.list_element_class if rjf else ""),
+                    resp_arr_prop=resp_props.get(fname) or {},
+                    ent_labels=ent_labels,
+                    ent_dicts=ent_dicts,
+                    ent_scales=ent_scales,
+                    depth=1,
+                    known_java_enums=known_java_enums,
+                )
+                if col_spec is None:
+                    disqualified = True
+                    break
+                col_field_map = {cf.name: cf for cf in col_spec.fields}
+                filtered_cdefs = tuple(
+                    cd
+                    for cd in raw_child_defaults
+                    if cd.field in col_field_map
+                    and (
+                        cd.kind == "actor"
+                        or not is_rejected_ui_sentinel(
+                            cd.value,
+                            is_fk_or_enum=bool(
+                                col_field_map[cd.field].reference_entity or col_field_map[cd.field].enum_type
+                            ),
+                            is_hierarchy_parent=(cd.field == "parentId"),
+                        )
+                    )
+                )
+                req_min = max(col_spec.min_items, 1 if (fname in req_required or (jf and jf.required) or fname in svc_req_cols) else 0)
+                if filtered_cdefs or req_min != col_spec.min_items:
+                    col_spec = replace(col_spec, defaults=filtered_cdefs, min_items=req_min)
+                child_specs.append(col_spec)
+                continue
+            if fname in create_dropped:
+                continue
             if _SECRET.search(fname):
                 if (jf and jf.required) or fname in req_required:
                     req_pwd = True
@@ -1790,7 +1974,9 @@ def _compile_yudao_write_catalog_locked(
         if req_pwd:
             excluded_create_reasons[entity] = "新建接口包含必填密码或密钥字段，禁止通过通用 API 代填"
             continue
-        if disqualified or not field_specs:
+        if disqualified or (not field_specs and not child_specs):
+            continue
+        if nested_cols and not child_specs:
             continue
 
         raw_defaults = form_defaults.get(entity, ())
@@ -1805,7 +1991,9 @@ def _compile_yudao_write_catalog_locked(
                 )
             )
         )
-        computed = frozenset(k for k in req_props if k != "id" and k not in resp_props)
+        computed = frozenset(k for k in req_props if k != "id" and k not in col_names and k not in resp_props)
+        if child_specs:
+            computed = computed | _agg_server_computed_fields(entity)
         if entity == "crm/receivable":
             computed = computed | frozenset({"customerId"})
         elif entity == "hrm/employee":
@@ -1816,6 +2004,10 @@ def _compile_yudao_write_catalog_locked(
             computed = computed | frozenset({"status", "startTime", "endTime"})
         elif entity == "ai/knowledge":
             computed = computed | frozenset({"embeddingModel"})
+        elif entity == "hrm/insurance/scheme":
+            computed = computed | frozenset({"areaId"})
+        elif entity == "product/spu":
+            computed = computed | frozenset({"status", "salesCount", "browseCount"})
         tag = ((post.get("tags") or [""])[0]).replace("管理后台 - ", "").strip() or entity
         name_fields = tuple(k for k in _NAME_CANDIDATES if k in resp_props) or ("name",)
         cond_req = _hrm_employee_conditional_required if entity == "hrm/employee" else None
@@ -1824,6 +2016,7 @@ def _compile_yudao_write_catalog_locked(
             label=tag,
             fields=tuple(field_specs),
             defaults=filtered_defaults,
+            collections=tuple(child_specs),
             id_field="id",
             name_fields=name_fields,
             server_computed_fields=computed,

@@ -14,12 +14,14 @@ from web_operation_agent.business.compiled_writes import (
     CompiledRelationHandler,
     CompiledRelationSpec,
     CompiledWriteEffects,
+    INHERENT_MASTER_ATTR_ANNOTATION,
     PAGE_DEFAULT_ANNOTATION,
     compiled_write_tool_definitions,
     is_rejected_ui_sentinel,
 )
-from web_operation_agent.business.convention_writes import ConventionFieldSpec
-from web_operation_agent.business.errors import BusinessToolRequestError
+from web_operation_agent.business.convention_writes import ConventionFieldSpec, normalize_create_arguments
+from web_operation_agent.business.errors import BusinessMutationIndeterminate, BusinessToolRequestError
+from web_operation_agent.business.tools.contracts import BusinessMutationProposal
 
 
 class _FakeCompiledPort:
@@ -53,6 +55,12 @@ class _FakeCompiledPort:
         self.created = {}
         self.relations = {11: [1]}
         self.invalidated = []
+        self.drop_child_readback = False
+
+    def derive_child_inherent_fields(self, spec, col_spec, line_payload, line_bindings, *, actor_id=""):
+        if spec.entity == "orders" and col_spec.name == "items" and line_payload.get("itemId") == 77:
+            return [("unitId", 9, "Box", None)]
+        return []
 
     def update_specs(self):
         return {}
@@ -77,7 +85,40 @@ class _FakeCompiledPort:
                     CompiledFieldDefault("probationMonths", "literal", value=0, display="0"),
                 ),
                 name_fields=("title",),
-            )
+            ),
+            "orders": CompiledCreateSpec(
+                entity="orders",
+                label="Order",
+                fields=(
+                    ConventionFieldSpec("code", "string", label="Code", required=True),
+                ),
+                collections=(
+                    CompiledChildCollectionSpec(
+                        name="items",
+                        label="Items",
+                        min_items=1,
+                        fields=(
+                            ConventionFieldSpec("itemId", "integer", label="Item", required=True, reference_entity="catalog"),
+                            ConventionFieldSpec("unitId", "integer", label="Unit", required=True),
+                            ConventionFieldSpec("qty", "number", label="Qty", required=True),
+                            ConventionFieldSpec("taxRate", "number", label="TaxRate", required=False),
+                        ),
+                        defaults=(
+                            CompiledFieldDefault("taxRate", "literal", value=0, display="0"),
+                        ),
+                        subcollections=(
+                            CompiledChildCollectionSpec(
+                                name="tags",
+                                label="Tags",
+                                fields=(
+                                    ConventionFieldSpec("tag", "string", label="Tag", required=True),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+                name_fields=("code",),
+            ),
         }
 
     def aggregate_update_specs(self):
@@ -145,8 +186,11 @@ class _FakeCompiledPort:
         return {"id": 11, "name": target}
 
     def read_record(self, entity: str, record_id):
-        if entity == "tasks":
-            return self.created.get(record_id)
+        if entity in {"tasks", "orders"}:
+            rec = self.created.get(record_id)
+            if entity == "orders" and rec and self.drop_child_readback:
+                return {"id": rec["id"], "code": rec["code"], "items": []}
+            return rec
         return dict(self.vouchers[(10, 501)])
 
     def read_aggregate_record(self, spec, record_id, *, composite_id=None):
@@ -259,14 +303,84 @@ class CompiledWritesTests(unittest.TestCase):
         self.assertEqual(after["entries"][1]["creditAmount"], 100)
 
     def test_tool_definitions_validate_under_strict_registry_schema(self):
+        import json
+        from web_operation_agent.business.tools.registry import ToolRegistry, validate_input
+
         port = _FakeCompiledPort()
         defs = compiled_write_tool_definitions(port, scope="sample:write")
         self.assertEqual([d.name for d in defs], ["create_record", "update_record", "toggle_record_status", "assign_record_relations"])
+        registry = ToolRegistry(defs)
+        self.assertIn("create_record", {d.name for d in registry.definitions})
+        validate_input(
+            json.loads(defs[0].input_json),
+            {"entity": "orders", "fields": [{"field": "tagIds", "value": [1, 2]}]},
+        )
         rel = CompiledRelationHandler(port)
         r_spec = rel.prepare({"entity": "users", "target": "u1", "relation": "roleIds", "items": ["Admin", "Auditor"]})
         r_res = rel.dispatch(r_spec.args)
         self.assertTrue(r_res.content["verified"])
         self.assertEqual(port.relations[11], [1, 2])
+
+    def test_cat5_two_level_master_detail_create_provenance_and_readback(self):
+        port = _FakeCompiledPort()
+        handler = CompiledCreateHandler(port)
+        raw_inputs = normalize_create_arguments({
+            "entity": "orders",
+            "fields": {"code": "ORD-9"},
+            "lines": [
+                {
+                    "fields": {"itemId": 77, "qty": 3},
+                    "sublines": [{"fields": {"tag": "urgent"}}],
+                }
+            ],
+        })
+        spec = handler.prepare(raw_inputs)
+        expected = CompiledWriteEffects("create_record", port).project_inputs(raw_inputs)
+        spec.effect_projection.require(expected)
+        details_text = "\n".join(d.text for d in spec.details)
+        self.assertIn(f"Box{INHERENT_MASTER_ATTR_ANNOTATION}", details_text)
+        self.assertIn(f"0{PAGE_DEFAULT_ANNOTATION}", details_text)
+        proposal = BusinessMutationProposal(
+            tool="create_record",
+            args=spec.args,
+            effect=spec.effect,
+            targets=spec.targets,
+            nonce="0" * 32,
+            details=spec.details,
+            effect_projection=spec.effect_projection,
+        )
+        # Child scalar qty=3 supplied by prompt, FK itemId=77 in catalog candidates, subline tag='urgent' in prompt
+        handler.validate_provenance(
+            raw_inputs,
+            ("新建 ORD-9，数量 3，加 urgent 标签",),
+            proposal,
+            existing_values={"catalog": ("77",), "orders": ("999",)},
+        )
+        # Cross-record scalar qty='999' only found in candidate ledger must fail closed
+        bad_inputs = normalize_create_arguments({
+            "entity": "orders",
+            "fields": {"code": "ORD-9"},
+            "lines": [{"fields": {"itemId": 77, "qty": 999}}],
+        })
+        with self.assertRaises(BusinessToolRequestError):
+            handler.validate_provenance(
+                bad_inputs,
+                ("新建 ORD-9",),
+                proposal,
+                existing_values={"catalog": ("77",), "orders": ("999",)},
+            )
+
+        res = handler.dispatch(spec.args)
+        self.assertTrue(res.content["verified"])
+        rec = port.created[int(res.content["record_id"])]
+        self.assertEqual(rec["items"][0]["unitId"], 9)
+        self.assertEqual(rec["items"][0]["taxRate"], 0)
+        self.assertEqual(rec["items"][0]["tags"][0]["tag"], "urgent")
+
+        # Child readback mismatch raises BusinessMutationIndeterminate
+        port.drop_child_readback = True
+        with self.assertRaises(BusinessMutationIndeterminate):
+            handler.dispatch(spec.args)
 
 
 if __name__ == "__main__":

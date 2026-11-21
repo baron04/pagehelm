@@ -109,10 +109,6 @@ _ENTITY_READ_SUFFIXES = (
     "/get",
 )
 _REF_CELL_KEYS = frozenset({"id", "name", "title", "no", "code", "period", "stage", "installment", "nickname", "username"})
-_NON_METRIC_COL_RE = re.compile(
-    r"^(?:id|period|stage|sort|status|auditStatus|type|creator|updater)$|Id$|Time$|Date$",
-    re.I,
-)
 
 
 def _entity_slug_for_path(path: str) -> str:
@@ -122,55 +118,6 @@ def _entity_slug_for_path(path: str) -> str:
             rel = rel[: -len(suffix)]
             break
     return rel.strip("/")
-
-
-def _inline_small_table_ties_note(rows: list, col_labels: dict[str, str] | None = None) -> str:
-    """Non-imperative extremum tie statistics for inline complete small tables (2..30 rows)."""
-    dict_rows = [r for r in rows or () if isinstance(r, dict)]
-    if len(dict_rows) < 2 or len(dict_rows) > 30:
-        return ""
-    labels = col_labels or {}
-    keys = list(dict.fromkeys(k for r in dict_rows[:10] for k in r))
-    parts: list[str] = []
-    for key in keys:
-        if _NON_METRIC_COL_RE.search(key) or _NOT_A_QUANTITY.search(key) or _SENSITIVE_COL_KEY.search(key):
-            continue
-        vals = []
-        ok = True
-        for row in dict_rows:
-            v = row.get(key)
-            if v is None:
-                continue
-            if isinstance(v, bool) or not isinstance(v, (int, float)):
-                ok = False
-                break
-            vals.append(v)
-        if not ok or len(vals) < 2:
-            continue
-        distinct = set(vals)
-        lbl = labels.get(key)
-        col_disp = f"{key}（{lbl}）" if lbl and lbl != key else key
-        if len(distinct) == 1:
-            parts.append(f"{col_disp}：全表 {len(vals)} 行数值完全相同，均为 {vals[0]}（最大值与最小值均为 {vals[0]}，{len(vals)} 行全并列）")
-        else:
-            hi = max(vals)
-            lo = min(vals)
-            hi_cnt = sum(1 for v in vals if v == hi)
-            lo_cnt = sum(1 for v in vals if v == lo)
-            if hi_cnt < 2 and lo_cnt < 2:
-                continue
-            sub = []
-            if hi_cnt >= 2:
-                sub.append(f"最大值 {hi} 共 {hi_cnt} 行同值")
-            if lo_cnt >= 2 and lo != hi:
-                sub.append(f"最小值 {lo} 共 {lo_cnt} 行同值")
-            if sub:
-                parts.append(f"{col_disp}：" + "、".join(sub))
-        if len(parts) >= 3:
-            break
-    if not parts:
-        return ""
-    return f"内联全表同值统计（共 {len(dict_rows)} 行）：" + "；".join(parts) + "。"
 
 
 def _cell_values(rows, column_names=None, cap=400, *, entity_slug: str = ""):
@@ -1091,11 +1038,6 @@ class ActorKnowledge:
                 if inline and len(inline) <= 9000:
                     out.append(f"全部行（共 {len(observed)} 行，已读完所有页；内联时间字段已按本应用时区换算为 YYYY-MM-DD HH:MM:SS，单表原样字段或名单可直接引用上方读取回执交付，"
                                f"无需再调 tables/sql 重复取行；若需分转元÷100.0 等单位换算、子集计数、多行聚合、差额、分组或排序极值，须调 sql 计算，注意 SQL 行表内时间列仍存原始毫秒整数）：" + inline)
-                    ties_note = _inline_small_table_ties_note(
-                        observed, prepared["row_sink_payload"].get("column_labels") or {}
-                    )
-                    if ties_note:
-                        out.append(ties_note)
                 else:
                     out.append("样例（不是全表）：" + json.dumps(shown_rows[:3], ensure_ascii=False)[:2600])
             else:

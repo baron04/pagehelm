@@ -170,13 +170,26 @@ def normalize_field_items(raw: object) -> object:
     return converted
 
 
+def _normalize_create_line(line: object) -> object:
+    if not isinstance(line, dict):
+        return line
+    out_line = dict(line)
+    if isinstance(out_line.get("fields"), dict):
+        out_line["fields"] = normalize_field_items(out_line["fields"])
+    if isinstance(out_line.get("sublines"), list):
+        out_line["sublines"] = [_normalize_create_line(sub) for sub in out_line["sublines"]]
+    return out_line
+
+
 def normalize_create_arguments(args: dict) -> dict:
-    """Allow models to pass ``fields`` either as ``[{field, value}]`` or ``{field: value}``."""
+    """Allow models to pass ``fields`` and nested ``lines`` as item lists or dicts."""
     if not isinstance(args, dict):
         return args
     out = dict(args)
     if "fields" in out and isinstance(out.get("fields"), dict):
         out["fields"] = normalize_field_items(out["fields"])
+    if isinstance(out.get("lines"), list):
+        out["lines"] = [_normalize_create_line(item) for item in out["lines"]]
     return out
 
 

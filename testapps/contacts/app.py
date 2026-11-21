@@ -902,6 +902,54 @@ class MinimalContactsApplication:
                         notes.append(rec)
                     self._reply(201, _json_bytes({"note": dict(rec)}), "application/json")
                     return
+                if path == "/api/contact-dossiers":
+                    if resolved is None or resolved[1] != "delegated_api":
+                        self._refuse_write(401, "delegated_token_required")
+                        return
+                    actor = resolved[0]
+                    if "contacts:write" not in actor.permissions:
+                        self._refuse_write(403, "forbidden")
+                        return
+                    try:
+                        payload = json.loads(body or b"{}")
+                    except (ValueError, OSError):
+                        self._reply(400, _json_bytes({"error": "invalid_json"}), "application/json")
+                        return
+                    dname = str(payload.get("name") or "").strip()
+                    downer = str(payload.get("owner") or "").strip()
+                    raw_items = payload.get("items")
+                    if not dname or not downer or not isinstance(raw_items, list) or not raw_items:
+                        self._reply(400, _json_bytes({"error": "invalid_dossier"}), "application/json")
+                        return
+                    norm_items = []
+                    for i, it in enumerate(raw_items, 1):
+                        if not isinstance(it, dict):
+                            self._reply(400, _json_bytes({"error": "invalid_dossier_item"}), "application/json")
+                            return
+                        lbl = str(it.get("label") or "").strip()
+                        val = str(it.get("value") or "").strip()
+                        if not lbl or not val:
+                            self._reply(400, _json_bytes({"error": "invalid_dossier_item"}), "application/json")
+                            return
+                        row = {"id": f"item-{i}", "label": lbl, "value": val}
+                        for extra_k in ("contact_id", "contact_email", "category"):
+                            if it.get(extra_k) not in (None, ""):
+                                row[extra_k] = it[extra_k]
+                        norm_items.append(row)
+                    with owner._lock:
+                        dossiers = owner.contact_dossiers.setdefault(actor.workspace, [])
+                        did = f"dossier-{len(dossiers) + 1}"
+                        rec = {
+                            "id": did,
+                            "name": dname,
+                            "owner": downer,
+                            "items": norm_items,
+                        }
+                        if payload.get("note"):
+                            rec["note"] = str(payload["note"]).strip()
+                        dossiers.append(rec)
+                    self._reply(201, _json_bytes({"dossier": json.loads(json.dumps(rec))}), "application/json")
+                    return
                 if path != "/api/contacts":
                     self._refuse_write(404, "not_found")
                     return

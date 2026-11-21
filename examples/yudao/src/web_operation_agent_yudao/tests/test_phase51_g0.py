@@ -531,14 +531,12 @@ class Phase51G0Tests(unittest.TestCase):
             {"id": 3, "no": "S3", "amount": 100},
         ]), docs)
         text = know.call_api("erp/sale/page", {"pageNo": 1, "pageSize": 20}, row_sink=tables.add)
-        self.assertIn("内联全表同值统计（共 3 行）：amount：最大值 500 共 2 行同值。", text)
-        self.assertNotIn("必须", text)
+        self.assertNotIn("内联全表同值统计", text)
 
         proc = YudaoLoopProcedures(know, NS(capabilities=lambda: frozenset()), "https://app.test")
         proc.turn_context.turn_tables = (tables, "2026-10-25", "Asia/Shanghai")
         sql_res = proc._tool(NS(operation=NS(require_live=lambda **_k: None)), "sql", {"query": "SELECT id, amount FROM t1 ORDER BY amount DESC"}, {})
-        self.assertIn("排序首键统计：", sql_res.feedback)
-        self.assertIn("前 2 行同为 500", sql_res.feedback)
+        self.assertNotIn("排序首键统计：", sql_res.feedback)
 
         know_empty = ActorKnowledge(ReadClient([]), docs)
         tables2 = TurnTables(BASELINE_SESSION_HANDOFFS)
@@ -1320,7 +1318,7 @@ class Phase51G0Tests(unittest.TestCase):
         self.addCleanup(tables.close)
         know = ActorKnowledge(AllZeroArticleClient(), docs)
         text = know.call_api("promotion/article/page", {"pageNo": 1, "pageSize": 20}, row_sink=tables.add)
-        self.assertIn("全表 4 行数值完全相同，均为 0（最大值与最小值均为 0，4 行全并列）", text)
+        self.assertNotIn("内联全表同值统计", text)
         zero_text = know.call_api("promotion/article/page", {"status": 0, "pageNo": 1, "pageSize": 20}, row_sink=tables.add)
         self.assertIn("精确过滤已核实为 0 条记录", zero_text)
         self.assertIn("精确绑定空集核实（complete=True，0 行）", zero_text)
@@ -2043,6 +2041,472 @@ class Phase51G0Tests(unittest.TestCase):
         hrm_pack = resolve_domain_pack(YUDAO_DOMAIN_PACKS, "hrm")
         self.assertIsNotNone(hrm_pack)
         self.assertIn("hrm/salary/change-record", hrm_pack.write_contract_text)
+
+    def test_cat5_erp_po_auto_derives_unit_and_blocks_scalar_borrow(self):
+        from web_operation_agent.business.compiled_writes import CompiledCreateHandler
+        from web_operation_agent.business.tools.contracts import BusinessMutationProposal
+        from web_operation_agent.state.identity import OperationContext
+        from web_operation_agent_yudao.executor.domain_toolpacks import format_write_entry_line
+        from web_operation_agent_yudao.writes.convention_writes import build_yudao_write_directory
+
+        principal = _make_principal()
+        op_ctx = OperationContext.create(
+            principal,
+            session_id="p51-cat5-unit",
+            turn_id="turn-1",
+            operation_id="op-1",
+            deadline_ms=int(time.time() * 1000) + 60_000,
+        )
+        docs = {
+            "paths": {
+                "/admin-api/erp/purchase-order/create": {
+                    "post": {
+                        "tags": ["管理后台 - ERP 采购订单"],
+                        "summary": "创建采购订单",
+                        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErpPurchaseOrderSaveReqVO"}}}},
+                        "responses": {"200": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                    }
+                },
+                "/admin-api/erp/purchase-order/get": {
+                    "get": {"responses": {"200": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommonResultErpPurchaseOrderRespVO"}}}}}}
+                },
+                "/admin-api/erp/supplier/simple-list": {"get": {"responses": {"200": {"description": "ok"}}}},
+                "/admin-api/erp/product/simple-list": {"get": {"responses": {"200": {"description": "ok"}}}},
+                "/admin-api/erp/product-unit/simple-list": {"get": {"responses": {"200": {"description": "ok"}}}},
+                "/admin-api/wms/warehouse/simple-list": {"get": {"responses": {"200": {"description": "ok"}}}},
+                "/admin-api/erp/warehouse/simple-list": {"get": {"responses": {"200": {"description": "ok"}}}},
+                "/admin-api/wms/item-sku/page": {"get": {"responses": {"200": {"description": "ok"}}}},
+                "/admin-api/wms/receipt-order/create": {
+                    "post": {
+                        "tags": ["管理后台 - WMS 入库单"],
+                        "summary": "创建入库单",
+                        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/WmsReceiptOrderSaveReqVO"}}}},
+                        "responses": {"200": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                    }
+                },
+                "/admin-api/wms/receipt-order/get": {
+                    "get": {"responses": {"200": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommonResultWmsReceiptOrderRespVO"}}}}}}
+                },
+            },
+            "components": {
+                "schemas": {
+                    "CommonResultLong": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "integer"}}},
+                    "CommonResultErpPurchaseOrderRespVO": {"type": "object", "properties": {"data": {"$ref": "#/components/schemas/ErpPurchaseOrderRespVO"}}},
+                    "CommonResultWmsReceiptOrderRespVO": {"type": "object", "properties": {"data": {"$ref": "#/components/schemas/WmsReceiptOrderRespVO"}}},
+                    "ErpPurchaseOrderItemVO": {
+                        "type": "object",
+                        "required": ["productId", "productUnitId", "count"],
+                        "properties": {
+                            "productId": {"type": "integer", "description": "产品编号"},
+                            "productUnitId": {"type": "integer", "description": "产品单位编号"},
+                            "count": {"type": "number", "description": "数量"},
+                        },
+                    },
+                    "ErpPurchaseOrderSaveReqVO": {
+                        "type": "object",
+                        "required": ["supplierId", "orderTime"],
+                        "properties": {
+                            "supplierId": {"type": "integer", "description": "供应商编号"},
+                            "orderTime": {"type": "string", "format": "date-time", "description": "采购时间"},
+                            "items": {"type": "array", "minItems": 1, "description": "采购订单明细", "items": {"$ref": "#/components/schemas/ErpPurchaseOrderItemVO"}},
+                        },
+                    },
+                    "ErpPurchaseOrderRespVO": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "integer"},
+                            "supplierId": {"type": "integer"},
+                            "orderTime": {"type": "string", "format": "date-time"},
+                            "items": {"type": "array", "items": {"$ref": "#/components/schemas/ErpPurchaseOrderItemVO"}},
+                        },
+                    },
+                    "WmsReceiptDetailVO": {
+                        "type": "object",
+                        "required": ["skuId", "quantity"],
+                        "properties": {
+                            "skuId": {"type": "integer", "description": "物料规格"},
+                            "warehouseId": {"type": "integer", "description": "仓库编号"},
+                            "quantity": {"type": "number", "description": "数量"},
+                        },
+                    },
+                    "WmsReceiptOrderSaveReqVO": {
+                        "type": "object",
+                        "required": ["no", "warehouseId"],
+                        "properties": {
+                            "no": {"type": "string", "description": "单号"},
+                            "warehouseId": {"type": "integer", "description": "仓库编号"},
+                            "details": {"type": "array", "description": "入库明细", "items": {"$ref": "#/components/schemas/WmsReceiptDetailVO"}},
+                        },
+                    },
+                    "WmsReceiptOrderRespVO": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "integer"},
+                            "no": {"type": "string"},
+                            "warehouseId": {"type": "integer"},
+                            "details": {"type": "array", "items": {"$ref": "#/components/schemas/WmsReceiptDetailVO"}},
+                        },
+                    },
+                }
+            },
+        }
+
+        class _Cat5Client:
+            def __init__(self):
+                self.tenant = "1"
+                self.read_generation = 1
+                self.created = {}
+
+            def read_window(self, _check):
+                return nullcontext()
+
+            def write_window(self, _check):
+                return nullcontext()
+
+            def get(self, path, **params):
+                if path == "system/auth/get-permission-info":
+                    return {"user": {"id": 257, "nickname": "芋道源码", "deptId": 100}, "roles": ["super_admin"], "menus": []}
+                if path == "erp/supplier/simple-list":
+                    return [{"id": 11, "name": "华为供应商"}]
+                if path == "erp/product/simple-list":
+                    return [{"id": 21, "name": "M6螺丝", "unitId": 31, "unitName": "盒"}]
+                if path == "erp/product/get":
+                    return {"id": 21, "name": "M6螺丝", "unitId": 31, "unitName": "盒"}
+                if path == "erp/product-unit/simple-list":
+                    return [{"id": 31, "name": "盒"}]
+                if path == "erp/purchase-order/get":
+                    return dict(self.created[int(params["id"])])
+                return []
+
+            def write_once(self, method, path, *, body=None, params=None, operation="", expect_result="bool"):
+                self.created[501] = {"id": 501, **body}
+                return 501
+
+        client = _Cat5Client()
+        port = YudaoConventionWritePort(client, NS(_documents=docs, _source=None, _ui=None, invalidate_reads=lambda _e: None))
+        wms_spec = port.create_specs()["wms/receipt-order"]
+        wms_wh = next(f for f in wms_spec.fields if f.name == "warehouseId")
+        self.assertEqual(wms_wh.reference_entity, "wms/warehouse")
+        wms_sku = next(f for f in wms_spec.collections[0].fields if f.name == "skuId")
+        self.assertEqual(wms_sku.reference_entity, "wms/item-sku")
+
+        directory = build_yudao_write_directory(docs=docs, source=None, ui=None)
+        po_entry = next(e for e in directory if e["kind"] == "compiled_create" and e["entity"] == "erp/purchase-order")
+        self.assertIn("items", po_entry["collections"])
+        contract_line = format_write_entry_line(po_entry)
+        self.assertIn("lines=[", contract_line)
+        self.assertIn("productUnitId随productId自动带出", contract_line)
+
+        handler = CompiledCreateHandler(port)
+        bad_inputs = {
+            "entity": "erp/purchase-order",
+            "fields": [{"field": "supplierId", "value": "华为供应商"}, {"field": "orderTime", "value": "2026-10-25"}],
+            "lines": [{"collection": "items", "fields": [{"field": "productId", "value": "M6螺丝"}, {"field": "count", "value": 9}]}],
+        }
+        bad_spec = handler.prepare(bad_inputs, context=op_ctx)
+        bad_proposal = BusinessMutationProposal(
+            tool="create_record",
+            args=bad_spec.args,
+            effect=bad_spec.effect,
+            targets=bad_spec.targets,
+            nonce="0" * 32,
+            details=bad_spec.details,
+            effect_projection=bad_spec.effect_projection,
+        )
+        with self.assertRaises(BusinessToolRequestError) as ctx_borrow:
+            handler.validate_provenance(
+                bad_inputs,
+                ("给华为供应商新建采购订单，采购日期 2026-10-25，明细要 M6螺丝 5",),
+                bad_proposal,
+                existing_values={"erp/supplier": ("华为供应商",), "erp/product": ("M6螺丝",), "erp/purchase-order": ("9",)},
+            )
+        self.assertIn("9", str(ctx_borrow.exception))
+
+        good_inputs = {
+            "entity": "erp/purchase-order",
+            "fields": [{"field": "supplierId", "value": "华为供应商"}, {"field": "orderTime", "value": "2026-10-25"}],
+            "lines": [{"collection": "items", "fields": [{"field": "productId", "value": "M6螺丝"}, {"field": "count", "value": 5}]}],
+        }
+        spec = handler.prepare(good_inputs, context=op_ctx)
+        good_proposal = BusinessMutationProposal(
+            tool="create_record",
+            args=spec.args,
+            effect=spec.effect,
+            targets=spec.targets,
+            nonce="1" * 32,
+            details=spec.details,
+            effect_projection=spec.effect_projection,
+        )
+        handler.validate_provenance(
+            good_inputs,
+            ("给华为供应商新建采购订单，采购日期 2026-10-25，明细要 M6螺丝 5",),
+            good_proposal,
+            existing_values={"erp/supplier": ("华为供应商",), "erp/product": ("M6螺丝",), "erp/purchase-order": ("9",)},
+        )
+        self.assertTrue(any("（主数据属性）" in d.text for d in spec.details))
+        self.assertEqual(spec.args["payload"]["items"][0]["productUnitId"], 31)
+        res = handler.dispatch(spec.args, context=op_ctx)
+        self.assertTrue(res.content["verified"])
+
+    def test_fill_fields_expands_collapsed_filter_once_and_settles_after_search(self):
+        from dataclasses import replace
+        from web_operation_agent.execution.model_loop_contracts import LoopToolResult
+        from web_operation_agent.privacy import SessionHandoffPolicy
+        from web_operation_agent_yudao.executor.page_prompts import SlimTurnContext
+        from web_operation_agent_yudao.tests.slim_loop_support import element, observation
+
+        proc = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        proc.knowledge = NS(handoffs=SessionHandoffPolicy.extending(()))
+        proc.goal_port = NS(data=NS(choice_label=lambda route, label, value: value))
+        proc.turn_context = SlimTurnContext(current_request="筛选客户名称为测试客户并搜索")
+        turn_state = {"touched": [], "trace": []}
+        proc._ctx = lambda: NS(executor_turn=turn_state, write_intent=None, current_request=proc.turn_context.current_request, earlier_requests=())
+        proc._note = lambda *a, **kw: None
+        proc.form_fill = None
+
+        expand_btn = element(1, "button", "展开", "button", page_control="query")
+        search_btn = element(2, "button", "搜索", "button", page_control="query")
+        obs_collapsed = replace(
+            observation(),
+            page_route="/crm/customer",
+            render_state="ready",
+            elements=[expand_btn, search_btn],
+            content="[1]<button>展开</button>\n[2]<button>搜索</button>",
+        )
+        hidden_input = element(3, "textbox", "客户名称", "input", page_control="query", field_label="客户名称")
+        obs_expanded = replace(
+            obs_collapsed,
+            epoch=2,
+            elements=[replace(e, epoch=2) for e in (expand_btn, search_btn, hidden_input)],
+            content="[1]<button>展开</button>\n[2]<button>搜索</button>\n[3]<input field_label=客户名称 />",
+        )
+
+        actions = []
+        settled_calls = []
+        state = NS(obs=obs_collapsed, terminal_reason="", operation=None, page=NS())
+
+        def fake_act(s, action, args, **kw):
+            actions.append((action, args, kw))
+            if action == "click" and args.get("ref") == "e1":
+                s.obs = obs_expanded
+                return None
+            if action == "type" and args.get("ref") == "e3":
+                return None
+            if action == "click" and args.get("ref") == "e2":
+                return LoopToolResult("查询动作已核验。", kind="page", dispatch="acknowledged", completion_command="cmd-search")
+            return None
+
+        proc._act = fake_act
+        proc._settled = lambda s, **kw: settled_calls.append((s.obs.epoch, kw)) or "still"
+
+        out = proc._fill_fields(
+            state,
+            [{"label": "客户名称", "value": "测试客户"}],
+            "搜索",
+            turn_state,
+            query_only=True,
+        )
+        self.assertEqual(out.completion_command, "cmd-search")
+        self.assertEqual([(a, ar.get("ref")) for a, ar, _ in actions], [("click", "e1"), ("fill", "e3"), ("click", "e2")])
+        self.assertGreaterEqual(len(settled_calls), 2)
+
+    def test_step1b_erp_customer_fk_spu_computed_and_scaled_create_default(self):
+        from web_operation_agent.business.compiled_writes import (
+            CompiledChildCollectionSpec,
+            CompiledCreateSpec,
+            CompiledFieldDefault,
+        )
+        from web_operation_agent.business.convention_writes import ConventionFieldSpec
+        from web_operation_agent_yudao.rules.compiled_write_source import compile_yudao_write_catalog
+
+        docs = {
+            "paths": {
+                "/admin-api/erp/sale-order/create": {
+                    "post": {
+                        "tags": ["管理后台 - ERP 销售订单"],
+                        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/SaleSaveReqVO"}}}},
+                        "responses": {"200": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                    }
+                },
+                "/admin-api/erp/sale-order/get": {
+                    "get": {"responses": {"200": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommonResultSaleRespVO"}}}}}}
+                },
+                "/admin-api/erp/finance-receipt/create": {
+                    "post": {
+                        "tags": ["管理后台 - ERP 收款单"],
+                        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/ReceiptSaveReqVO"}}}},
+                        "responses": {"200": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                    }
+                },
+                "/admin-api/erp/finance-receipt/get": {
+                    "get": {"responses": {"200": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommonResultReceiptRespVO"}}}}}}
+                },
+                "/admin-api/product/spu/create": {
+                    "post": {
+                        "tags": ["管理后台 - 商品 SPU"],
+                        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/SpuSaveReqVO"}}}},
+                        "responses": {"200": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                    }
+                },
+                "/admin-api/product/spu/get-detail": {
+                    "get": {"responses": {"200": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommonResultSpuRespVO"}}}}}}
+                },
+                "/admin-api/erp/customer/simple-list": {"get": {"responses": {"200": {"description": "ok"}}}},
+                "/admin-api/crm/customer/page": {"get": {"responses": {"200": {"description": "ok"}}}},
+                "/admin-api/fms/config/account-set/list": {"get": {"responses": {"200": {"description": "ok"}}}},
+            },
+            "components": {
+                "schemas": {
+                    "CommonResultLong": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "integer"}}},
+                    "CommonResultSaleRespVO": {"type": "object", "properties": {"data": {"$ref": "#/components/schemas/SaleSaveReqVO"}}},
+                    "CommonResultReceiptRespVO": {"type": "object", "properties": {"data": {"$ref": "#/components/schemas/ReceiptSaveReqVO"}}},
+                    "CommonResultSpuRespVO": {"type": "object", "properties": {"data": {"$ref": "#/components/schemas/SpuRespVO"}}},
+                    "SaleItemVO": {
+                        "type": "object",
+                        "required": ["productId"],
+                        "properties": {"productId": {"type": "integer"}, "remark": {"type": "string"}},
+                    },
+                    "SaleSaveReqVO": {
+                        "type": "object",
+                        "required": ["customerId", "saleUserId", "items"],
+                        "properties": {
+                            "customerId": {"type": "integer"},
+                            "saleUserId": {"type": "integer"},
+                            "items": {"type": "array", "items": {"$ref": "#/components/schemas/SaleItemVO"}},
+                        },
+                    },
+                    "ReceiptItemVO": {
+                        "type": "object",
+                        "required": ["bizType"],
+                        "properties": {"bizType": {"type": "integer"}},
+                    },
+                    "ReceiptSaveReqVO": {
+                        "type": "object",
+                        "required": ["customerId", "discountPrice", "items"],
+                        "properties": {
+                            "customerId": {"type": "integer"},
+                            "discountPrice": {"type": "number"},
+                            "financeUserId": {"type": "integer"},
+                            "items": {"type": "array", "items": {"$ref": "#/components/schemas/ReceiptItemVO"}},
+                        },
+                    },
+                    "SpuSkuVO": {
+                        "type": "object",
+                        "required": ["price", "picUrl", "stock"],
+                        "properties": {
+                            "price": {"type": "integer", "description": "价格 单位：分"},
+                            "picUrl": {"type": "string"},
+                            "stock": {"type": "integer"},
+                        },
+                    },
+                    "SpuSaveReqVO": {
+                        "type": "object",
+                        "required": ["name", "skus"],
+                        "properties": {
+                            "name": {"type": "string"},
+                            "accountSetId": {"type": "integer"},
+                            "salesCount": {"type": "integer"},
+                            "browseCount": {"type": "integer"},
+                            "skus": {"type": "array", "items": {"$ref": "#/components/schemas/SpuSkuVO"}},
+                        },
+                    },
+                    "SpuRespVO": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "status": {"type": "integer"},
+                            "salesCount": {"type": "integer"},
+                            "browseCount": {"type": "integer"},
+                            "skus": {"type": "array", "items": {"$ref": "#/components/schemas/SpuSkuVO"}},
+                        },
+                    },
+                }
+            },
+        }
+        cat = compile_yudao_write_catalog(
+            docs=docs,
+            source=None,
+            ui=None,
+            dedicated_creates=frozenset(),
+            dedicated_updates=frozenset(),
+            dedicated_statuses=frozenset(),
+            ui_metadata_fn=lambda *_a: ({}, {}, {}),
+            enable_cat5_master_detail_creates=True,
+        )
+        sale_spec = cat["creates"]["erp/sale-order"]
+        sale_fields = {f.name: f for f in sale_spec.fields}
+        self.assertEqual(sale_fields["customerId"].reference_entity, "erp/customer")
+        self.assertEqual(sale_fields["saleUserId"].reference_entity, "system/user")
+
+        receipt_spec = cat["creates"]["erp/finance-receipt"]
+        receipt_fields = {f.name: f for f in receipt_spec.fields}
+        self.assertEqual(receipt_fields["customerId"].reference_entity, "erp/customer")
+        self.assertEqual(receipt_fields["financeUserId"].reference_entity, "system/user")
+        self.assertNotIn("discountPrice", receipt_spec.server_computed_fields)
+
+        spu_spec = cat["creates"]["product/spu"]
+        self.assertTrue({"status", "salesCount", "browseCount"} <= spu_spec.server_computed_fields)
+        self.assertEqual({f.name: f for f in spu_spec.fields}["accountSetId"].reference_entity, "fms/config/account-set")
+
+        # encode_create_default scales nonzero numeric UI literal defaults for fen/zhe fields
+        dict_rows = [{"dictType": "pms_work_item_type", "label": "需求", "value": "2"}, {"dictType": "pms_work_item_type", "label": "缺陷", "value": "4"}]
+        port = YudaoConventionWritePort(
+            NS(tenant="1", read_generation=1, get=lambda path, **kw: dict_rows if path == "system/dict-data/simple-list" else None),
+            NS(_documents=docs, _source=None, _ui=None, invalidate_reads=lambda _e: None),
+        )
+        self.assertEqual(port._ref_endpoint_for("fms/config/account-set"), ("fms/config/account-set/list", ("companyName", "name")))
+        item_types_field = ConventionFieldSpec(name="itemTypes", kind="id_array", label="工作项类型", required=True, enum_type="pms_work_item_type")
+        arr_codes, _old, arr_disp, arr_bind = port.encode_field(
+            CompiledCreateSpec(entity="pms/pm/project-template", label="项目模板", fields=(item_types_field,)),
+            item_types_field,
+            ["需求", 4],
+            {},
+        )
+        self.assertEqual(arr_codes, [2, 4])
+        self.assertIn("需求", arr_disp)
+        self.assertEqual(arr_bind["kind"], "batch")
+        self.assertEqual([item["code"] for item in arr_bind["items"]], [2, 4])
+        dummy_spec = CompiledCreateSpec(
+            entity="trade/delivery/express-template",
+            label="运费模板",
+            fields=(ConventionFieldSpec(name="name", kind="string", label="模板名称", required=True),),
+            collections=(
+                CompiledChildCollectionSpec(
+                    name="charges",
+                    label="计费",
+                    fields=(ConventionFieldSpec(name="startPrice", kind="integer", label="首费", required=True, unit_scale=100, display_unit="元"),),
+                ),
+            ),
+        )
+        api_val, disp, _binding = port.encode_create_default(
+            dummy_spec,
+            dummy_spec.collections[0].fields[0],
+            CompiledFieldDefault(field="startPrice", value=1, kind="literal", display="1"),
+            actor_id="1",
+        )
+        self.assertEqual(api_val, 100)
+        self.assertIn("1", str(disp))
+
+    def test_step1c_domain_packs_read_contracts_and_zero_case_hardcoding(self):
+        import re
+        from web_operation_agent_yudao.executor.domain_toolpacks import YUDAO_DOMAIN_PACKS
+
+        self.assertEqual(len(YUDAO_DOMAIN_PACKS), 8)
+        for pack in YUDAO_DOMAIN_PACKS:
+            self.assertGreater(len(pack.read_contract_text.strip()), 0, pack.domain_id)
+            self.assertLessEqual(len(pack.read_contract_text), 350, f"{pack.domain_id}: {len(pack.read_contract_text)}")
+            self.assertGreater(len(pack.write_contract_text.strip()), 0, pack.domain_id)
+
+        wt_root = Path(__file__).resolve().parents[4]
+        case_pat = re.compile(r"\b[A-Z]\d-\d{2}\b")
+        offenders: list[str] = []
+        for scan_root in (wt_root / "src", wt_root / "examples" / "yudao" / "src"):
+            for py in sorted(scan_root.rglob("*.py")):
+                if "tests" in py.parts or "__pycache__" in py.parts:
+                    continue
+                if case_pat.search(py.read_text(encoding="utf-8", errors="ignore")):
+                    offenders.append(str(py.relative_to(wt_root)))
+        self.assertEqual(offenders, [], f"Unexpected benchmark case IDs in reusable/adapter code: {offenders}")
 
 
 if __name__ == "__main__":

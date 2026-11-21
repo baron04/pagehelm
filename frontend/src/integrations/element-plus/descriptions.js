@@ -21,39 +21,42 @@ export function collectElDescriptionPairs(root = document, {maxPairs = 40} = {})
   if (!root?.querySelectorAll) return []
   const pairs = []
   const seen = new Set()
+  const pushPair = (label, value) => {
+    if (!label || !value || label.length > 60 || value.length > 200 || SENSITIVE_LABEL.test(label) || /[\r\n]/.test(value)) {
+      return
+    }
+    const key = `${label}\0${value}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      pairs.push([label, value])
+    }
+  }
   for (const block of descriptionsFromContainer(root)) {
     if (pairs.length >= maxPairs) break
     const rows = Array.from(block.querySelectorAll('tr'))
     if (rows.length) {
-      for (const tr of rows) {
-        if (pairs.length >= maxPairs) break
-        const cells = Array.from(tr.children || [])
+      for (let r = 0; r < rows.length && pairs.length < maxPairs; r++) {
+        const cells = Array.from(rows[r].children || [])
+        if (r + 1 < rows.length && cells.length &&
+            cells.every(c => c.matches('.el-descriptions__label') && !c.matches('.el-descriptions__content'))) {
+          const nextCells = Array.from(rows[r + 1].children || [])
+          if (nextCells.length &&
+              nextCells.every(c => c.matches('.el-descriptions__content') && !c.matches('.el-descriptions__label'))) {
+            for (let k = 0; k < Math.min(cells.length, nextCells.length) && pairs.length < maxPairs; k++) {
+              pushPair(cleanText(cells[k]), cleanText(nextCells[k]))
+            }
+            r += 1
+            continue
+          }
+        }
         for (let i = 0; i < cells.length && pairs.length < maxPairs; i++) {
           const cell = cells[i]
           if (cell.matches('.el-descriptions__label') && i + 1 < cells.length &&
               cells[i + 1].matches('.el-descriptions__content')) {
-            const label = cleanText(cell)
-            const value = cleanText(cells[i + 1])
+            pushPair(cleanText(cell), cleanText(cells[i + 1]))
             i += 1
-            if (label && value && label.length <= 60 && value.length <= 200 &&
-                !SENSITIVE_LABEL.test(label) && !/[\r\n]/.test(value)) {
-              const key = `${label}\0${value}`
-              if (!seen.has(key)) {
-                seen.add(key)
-                pairs.push([label, value])
-              }
-            }
           } else if (cell.matches('.el-descriptions__cell')) {
-            const label = cleanText(cell.querySelector('.el-descriptions__label'))
-            const value = cleanText(cell.querySelector('.el-descriptions__content'))
-            if (label && value && label.length <= 60 && value.length <= 200 &&
-                !SENSITIVE_LABEL.test(label) && !/[\r\n]/.test(value)) {
-              const key = `${label}\0${value}`
-              if (!seen.has(key)) {
-                seen.add(key)
-                pairs.push([label, value])
-              }
-            }
+            pushPair(cleanText(cell.querySelector('.el-descriptions__label')), cleanText(cell.querySelector('.el-descriptions__content')))
           }
         }
       }
@@ -61,16 +64,7 @@ export function collectElDescriptionPairs(root = document, {maxPairs = 40} = {})
     for (const cell of Array.from(block.querySelectorAll('.el-descriptions__cell'))) {
       if (pairs.length >= maxPairs) break
       if (cell.closest('tr')) continue
-      const label = cleanText(cell.querySelector('.el-descriptions__label'))
-      const value = cleanText(cell.querySelector('.el-descriptions__content'))
-      if (label && value && label.length <= 60 && value.length <= 200 &&
-          !SENSITIVE_LABEL.test(label) && !/[\r\n]/.test(value)) {
-        const key = `${label}\0${value}`
-        if (!seen.has(key)) {
-          seen.add(key)
-          pairs.push([label, value])
-        }
-      }
+      pushPair(cleanText(cell.querySelector('.el-descriptions__label')), cleanText(cell.querySelector('.el-descriptions__content')))
     }
   }
   return pairs

@@ -144,33 +144,6 @@ class CoreTurnTablesTests(unittest.TestCase):
         with self.assertRaises(TurnReadError):
             self.tables.query("SELECT * FROM json_each('[1,2]')")
 
-    def test_unbounded_order_summary_for_projected_key_without_limit(self):
-        self.tables.add(
-            path="/api/scores",
-            params={},
-            rows=[
-                {"id": 1, "name": "A", "score": 95},
-                {"id": 2, "name": "B", "score": 95},
-                {"id": 3, "name": "C", "score": 80},
-                {"id": 4, "name": "D", "score": 60},
-                {"id": 5, "name": "E", "score": 60},
-            ],
-            total=5,
-            complete=True,
-        )
-        tied = self.tables.query("SELECT id, name, score FROM t1 ORDER BY score DESC, id ASC")
-        summary = tied.get("order_summary", "")
-        self.assertIn("前 2 行同为 95", summary)
-        self.assertIn("末 2 行同为 60", summary)
-        self.assertNotIn("必须", summary)
-        self.assertNotIn("须", summary)
-
-        limited = self.tables.query("SELECT id, name, score FROM t1 ORDER BY score DESC LIMIT 2")
-        self.assertNotIn("order_summary", limited)
-
-        unprojected = self.tables.query("SELECT id, name FROM t1 ORDER BY score DESC")
-        self.assertNotIn("order_summary", unprojected)
-
 
 if __name__ == "__main__":
     unittest.main()

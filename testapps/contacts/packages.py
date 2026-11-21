@@ -34,6 +34,7 @@ from web_operation_agent.business.tools.contracts import ToolOperation
 from web_operation_agent.business.tools.registry import ToolDefinition, ToolRegistry
 from web_operation_agent.business.write_pipeline import ProposalDiff, create_detail
 from web_operation_agent.composition.business_operations import RegisteredOperations
+from web_operation_agent.goal.domain_packs import DomainToolpack
 from web_operation_agent.skills import SkillArtifact, SkillRegistry
 
 
@@ -128,6 +129,62 @@ _DOSSIER_AGG_SPEC = CompiledAggregateUpdateSpec(
     ),
 )
 
+_DOSSIER_CREATE_SPEC = CompiledCreateSpec(
+    entity="contact-dossiers",
+    label="Contact dossier",
+    fields=(
+        ConventionFieldSpec("name", "string", label="Name", required=True, max_length=120),
+        ConventionFieldSpec("owner", "string", label="Owner", required=True, max_length=80),
+        ConventionFieldSpec("note", "string", label="Note", required=False, max_length=500),
+    ),
+    defaults=(
+        CompiledFieldDefault("owner", "actor", display="当前登录账号"),
+    ),
+    collections=(
+        CompiledChildCollectionSpec(
+            name="items",
+            label="Dossier items",
+            min_items=1,
+            fields=(
+                ConventionFieldSpec("contact_id", "string", label="Contact", required=False, reference_entity="contacts"),
+                ConventionFieldSpec("contact_email", "string", label="Contact Email", required=False, max_length=200),
+                ConventionFieldSpec("category", "string", label="Category", required=True, max_length=40),
+                ConventionFieldSpec("label", "string", label="Label", required=True, max_length=80),
+                ConventionFieldSpec("value", "string", label="Value", required=True, max_length=200),
+            ),
+            defaults=(
+                CompiledFieldDefault("category", "literal", value="contact-card", display="contact-card"),
+            ),
+            name_fields=("label", "value"),
+        ),
+    ),
+    name_fields=("name",),
+)
+
+CONTACTS_DOMAIN_PACKS: tuple[DomainToolpack, ...] = (
+    DomainToolpack(
+        domain_id="directory",
+        label="Contacts Directory & Notes",
+        aliases=("directory", "contacts", "contact-notes", "contact-groups", "联系人", "名录", "备注"),
+        route_prefixes=("/contacts", "/contacts/new"),
+        write_contract_text="contacts update & contact-notes create.",
+        read_contract_text="Read /api/contacts & /api/contact-notes.",
+        default_priority=2,
+    ),
+    DomainToolpack(
+        domain_id="dossiers_subscriptions",
+        label="Dossiers & Subscriptions",
+        aliases=("dossiers_subscriptions", "dossiers", "dossier", "contact-dossiers", "subscriptions", "workflows", "档案", "订阅"),
+        route_prefixes=("/contacts/workflows",),
+        write_contract_text="contact-dossiers master-detail create/update & contact-subscriptions toggle.",
+        read_contract_text="Read /api/contact-dossiers & /api/contact-subscriptions.",
+        default_priority=1,
+        co_activate_domains=("directory",),
+    ),
+)
+
+CONTACTS_HUB_ROUTES = frozenset({"/contacts/workflows", "/contacts/help"})
+
 _CONTACT_GROUP_RELATION = CompiledRelationSpec(
     entity="contacts",
     label="Contact",
@@ -160,7 +217,10 @@ class ContactsConventionWritePort:
         return {"contact-subscriptions": _SUBSCRIPTION_STATUS_SPEC}
 
     def create_specs(self) -> dict[str, CompiledCreateSpec]:
-        return {"contact-notes": _NOTE_CREATE_SPEC}
+        return {
+            "contact-notes": _NOTE_CREATE_SPEC,
+            "contact-dossiers": _DOSSIER_CREATE_SPEC,
+        }
 
     def aggregate_update_specs(self) -> dict[str, CompiledAggregateUpdateSpec]:
         return {"contact-dossiers": _DOSSIER_AGG_SPEC}
@@ -276,6 +336,20 @@ class ContactsConventionWritePort:
         return payload.get(key) if isinstance(payload, dict) else None
 
     def encode_field(self, spec, field: ConventionFieldSpec, raw_value, current_record: dict):
+        if field.reference_entity == "contacts":
+            wanted = str(raw_value or "").strip()
+            if not wanted:
+                raise BusinessToolRequestError(f"{field.name} must not be empty")
+            rows = self.executor._contact_rows()
+            exact = [r for r in rows if r["name"].casefold() == wanted.casefold() or r["id"] == wanted]
+            if len(exact) != 1:
+                raise BusinessToolReferenceError(
+                    "related contact is missing or ambiguous",
+                    entity="contacts",
+                    choices=tuple(f"{r['name']}（ID={r['id']}）" for r in rows)[:6],
+                )
+            hit = exact[0]
+            return hit["id"], str(current_record.get(field.name) or ""), f"{hit['name']}（ID={hit['id']}）", {"kind": "relation", "id": hit["id"], "name": hit["name"]}
         if not isinstance(raw_value, str) or not raw_value.strip():
             raise BusinessToolRequestError(f"{field.name} must be a non-empty string")
         val = raw_value.strip()
@@ -285,6 +359,15 @@ class ContactsConventionWritePort:
             val = val.casefold()
         old_val = str(current_record.get(field.name) or "")
         return val, old_val, val, None
+
+    def derive_child_inherent_fields(self, spec, col_spec, line_payload, line_bindings, *, actor_id=""):
+        if spec.entity == "contact-dossiers" and col_spec.name == "items":
+            cid = line_payload.get("contact_id")
+            if cid:
+                contact = self.read_record("contacts", cid)
+                if isinstance(contact, dict) and contact.get("email"):
+                    return [("contact_email", contact["email"], str(contact["email"]), None)]
+        return []
 
     def recheck_bindings(self, bindings: list[dict], *, actor_id: str) -> None:
         return None
@@ -319,7 +402,8 @@ class ContactsConventionWritePort:
 
     def dispatch_create(self, spec: CompiledCreateSpec, payload: dict) -> str:
         res = self._request_once("POST", f"/api/{spec.entity}", payload)
-        return str((res.get("note") or {}).get("id") or "")
+        rec = res.get("note") or res.get("dossier") or {}
+        return str(rec.get("id") or "")
 
     def dispatch_aggregate_update(self, spec: CompiledAggregateUpdateSpec, record_id, payload: dict, *, current_record: dict):
         return self._request_once("PUT", f"/api/contact-dossiers/{record_id}", payload)

@@ -668,15 +668,6 @@ class TurnTables:
             extremum_note = self._scalar_extremum_note(conn, statement, sources, result, authorize, deadline)
             if extremum_note:
                 out["tie_note"] = extremum_note
-            order_summary = self._unbounded_order_summary(
-                statement,
-                columns,
-                result,
-                truncated=truncated,
-                sources_complete=out["sources_complete"],
-            )
-            if order_summary:
-                out["order_summary"] = order_summary
         source_paths = [str(self.tables[name].get("path") or name) for name in sorted(sources)]
         title = " / ".join(dict.fromkeys(source_paths)) if source_paths else qname
         self.queries[qname] = {
@@ -729,80 +720,6 @@ class TurnTables:
             f"该极值对应的记录在本轮行表中共有 {count} 行同值并列；若需列出对应记录，须完整给出全部 {count} 行并列项。"
             if isinstance(count, int) and count >= 2
             else ""
-        )
-
-    @staticmethod
-    def _unbounded_order_summary(
-        statement: str,
-        columns: list[str],
-        rows_out: list[list],
-        *,
-        truncated: bool,
-        sources_complete: bool,
-    ) -> str:
-        """Non-imperative statistical header for untruncated ORDER BY queries without LIMIT."""
-        if truncated or not rows_out or not columns:
-            return ""
-        stmt = _strip_comments(statement).rstrip().rstrip(";").rstrip()
-        marks = _top_level(stmt)
-        order = next((m for m in reversed(marks) if m[0] == "ORDER"), None)
-        if order is None:
-            return ""
-        if any(m[0] == "LIMIT" and m[1] > order[1] for m in marks):
-            return ""
-        order_text = stmt[order[2] :].strip()
-        terms = [t.strip() for t in _split_top(order_text) if t.strip()]
-        if not terms:
-            return ""
-        core, _direction = _split_direction(terms[0])
-        col_idx: int | None = None
-        if re.fullmatch(r"[0-9]+", core.strip()):
-            pos = int(core.strip()) - 1
-            if 0 <= pos < len(columns):
-                col_idx = pos
-        else:
-            key = _order_key(core).casefold()
-            lowered = {col.casefold(): i for i, col in enumerate(columns)}
-            col_idx = lowered.get(key)
-        if col_idx is None:
-            return ""
-
-        def _fmt_val(val: object) -> str:
-            if val is None:
-                return "NULL"
-            text = str(val)
-            return text if len(text) <= 40 else text[:37] + "..."
-
-        first_val = rows_out[0][col_idx]
-        lead_ties = 0
-        for row in rows_out:
-            if row[col_idx] == first_val:
-                lead_ties += 1
-            else:
-                break
-        last_val = rows_out[-1][col_idx]
-        tail_ties = 0
-        if last_val != first_val:
-            for row in reversed(rows_out):
-                if row[col_idx] == last_val:
-                    tail_ties += 1
-                else:
-                    break
-        col_name = columns[col_idx]
-        src_note = "来源行表已读全" if sources_complete else "来源行表未读全（仅统计已读取行）"
-        if len(rows_out) == 1:
-            return f"共返回 1 行（{src_note}）；排序首键 {col_name} 值为 {_fmt_val(first_val)}。"
-        tail_note = f"末 {tail_ties} 行同为 {_fmt_val(last_val)}。" if tail_ties >= 2 else ""
-        if lead_ties >= 2:
-            return (
-                f"共返回 {len(rows_out)} 行（{src_note}）；"
-                f"按排序首键 {col_name}，前 {lead_ties} 行同为 {_fmt_val(first_val)}。"
-                + tail_note
-            )
-        return (
-            f"共返回 {len(rows_out)} 行（{src_note}）；"
-            f"按排序首键 {col_name}，首行值为 {_fmt_val(first_val)}，与第 2 行不同。"
-            + tail_note
         )
 
     def _tie_boundary(self, conn, statement, authorize, deadline):

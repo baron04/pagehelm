@@ -64,7 +64,7 @@ YUDAO_DOMAIN_PACKS: tuple[DomainToolpack, ...] = (
             "回款新建调 create_record(entity='crm/receivable')；仅当用户未指定具体期次时，planId 为选填字段可直接省略并在 contractId 名下直接 create_record；"
             "若用户已指定具体回款期次或计划而该计划无权读取、不存在或已关联回款，禁止在同一轮静默省略 planId 或擅自改绑其他期次，更严禁擅自调 crm_receivable_plan_create 代建计划，应如实说明（cannot）或 need_input 请用户确认。"
         ),
-        read_contract_text="实体前缀 crm/customer、crm/contact、crm/clue、crm/business、crm/contract、crm/receivable-plan、crm/receivable。",
+        read_contract_text="/crm/{customer,clue,business,contract,receivable,receivable-plan,contact,product}/{page,get}。customer:pool=true公海/否私海(contactStatus不传pool),sceneType=1负责2参与3下属;时间分dealTime/returnTime与createTime。follow-up-record/page必bizType+bizId;tab:permission/list,operate-log/page,page-by-customer,products仅get。statistics-*必deptId,rank/performance必times[]。元;0-40。",
         default_priority=3,
     ),
     DomainToolpack(
@@ -77,7 +77,7 @@ YUDAO_DOMAIN_PACKS: tuple[DomainToolpack, ...] = (
         ),
         route_prefixes=("/erp", "/wms"),
         write_contract_text="ERP 单据审批/反审批优先用 propose_operation('erp_document_status', {document_type,no,action})；计量单位与主数据按契约工具办理。",
-        read_contract_text="实体前缀 erp/supplier、erp/customer、erp/warehouse、erp/account、erp/product、erp/product-unit、erp/purchase-*、erp/sale-*、erp/stock-*、wms/*。",
+        read_contract_text="/erp/{product,warehouse,account,supplier,customer,stock*,{purchase,sale,finance}-*}/{page,get},stock/get-count,stock-record/page(createTime异于inTime/outTime),*-statistics/*。/wms/{inventory/{page(必type=warehouse|item),list(必warehouseId)},inventory-history/page,{receipt,shipment,movement,check}-order/{page,get}(details仅get)}。ERP10/20,WMS0/4/5,元。",
         default_priority=2,
     ),
     DomainToolpack(
@@ -90,7 +90,7 @@ YUDAO_DOMAIN_PACKS: tuple[DomainToolpack, ...] = (
         ),
         route_prefixes=("/mall", "/product", "/trade", "/promotion", "/member", "/statistics"),
         write_contract_text="已停用支付/退款网关高危动作如实说明安全围栏；品牌/分类/营销状态用契约专用操作或编译写。",
-        read_contract_text="实体前缀 product/brand、product/category、product/spu、trade/order、trade/after-sale、promotion/*、member/*。",
+        read_contract_text="/product/spu/{page(必tabType:0售1仓2空3警4回收),get-detail,get-count};/trade/{order,after-sale}/{page,get-detail},/trade/brokerage-*/{page,get};/promotion/{coupon,coupon-template,*-activity}/{page,get};/member/user/{page,get};/statistics/{trade,member,product}/*(order-count-trend必type,汇总0勿异口径覆盖)。会员tab:wallet,point,address,favorite。分(/100),单0/10/20/30/40。",
         default_priority=1,
     ),
     DomainToolpack(
@@ -99,7 +99,7 @@ YUDAO_DOMAIN_PACKS: tuple[DomainToolpack, ...] = (
         aliases=("fms_pay", "fms", "pay", "fms-accounting", "财务", "会计", "凭证", "账套", "科目", "资产负债", "利润表", "现金流", "结账", "支付", "商户", "渠道", "钱包"),
         route_prefixes=("/fms", "/pay"),
         write_contract_text="fms/voucher 等明细修改用 update_record；注意区分日历月与账套当前会计期（year/period）。",
-        read_contract_text="实体前缀 fms/config/*、fms/voucher、fms/ledger/*、fms/report/*、pay/*。",
+        read_contract_text="FMS(除/fms/config/account-set/list)全必accountSetId:/fms/{voucher/{page,get},home/*,closing/*,config/*,{ledger/*/list,report/*/{get,check}}(必startMonth,endMonth=YYYY-MM;auxiliary-*必auxiliaryTypeId)}。元,凭0-8。Pay:/pay/{order,notify}/{page,get-detail},/pay/{refund,transfer}/{page,get},/pay/wallet/{page,get(必userId)},wallet-transaction/page。分(/100),0-30。",
         default_priority=1,
         co_activate_domains=("erp_wms",),
     ),
@@ -115,7 +115,7 @@ YUDAO_DOMAIN_PACKS: tuple[DomainToolpack, ...] = (
             "（regularSalary/probationSalary 为汇总只读列，勿放 changes；算得目标金额须先调 sql 留回执；"
             "未来日期生效的调薪写入 hrm/salary/change-record（到期前 employee-info 仍显示当前生效薪资，勿误判为未生效））。"
         ),
-        read_contract_text="实体前缀 hrm/employee、hrm/salary/employee-info、hrm/salary/*、hrm/attendance/*、hrm/recruit/*。",
+        read_contract_text="无/hrm/dept/*，组织查/system/dept/simple-list+/hrm/employee/dept-statistics。员工page用statusCategory(1-8,11-15)/deptId/deptIds/search；子资源与salary/employee-info/get、change-record/list、insurance/employee-info/get传employeeId非id。月薪/社保明细page与option-summary必传monthRecordId；考勤统计必传year+month(detail加employeeId)，按deptIds数组筛。金额元非分；考勤分Days/Minutes；pageSize<=200。",
         default_priority=1,
         co_activate_domains=("system_infra", "oa_bpm"),
     ),
@@ -125,7 +125,7 @@ YUDAO_DOMAIN_PACKS: tuple[DomainToolpack, ...] = (
         aliases=("oa_bpm", "bpm_oa", "oa", "bpm", "pms", "im", "oa-bpm-system", "审批", "流程", "报销", "用车", "出差", "外出", "印章", "公告", "日程", "公文", "督办", "会议", "任务", "工作流", "项目"),
         route_prefixes=("/oa", "/bpm", "/pms", "/im"),
         write_contract_text="未入审批流扁平记录可用 create_record/update_record；流程发起与多行申请草稿走页面表单预填交接。",
-        read_contract_text="实体前缀 oa/*、bpm/*、pms/*、im/*（具体实体/必填项可用 search_api 关键词查询）。",
+        read_contract_text="BPM:task含todo/done/manager-page(无my-todo)及list-by-process-instance-id，id/processInstanceId为String；status在instance(-1,1-4)与task(done用,-2..7)不同；list-by-return后端绑id(Swagger标taskId)；formFieldsParams为JSON串。OA:报销元，file-node必传scope，attendance周月报必传startDate或year+month。PMS:work-item/page|board必传projectId，工时小时。IM:聊天list/pull游标分页且content为JSON。",
         default_priority=1,
         co_activate_domains=("hrm", "system_infra"),
     ),
@@ -135,7 +135,7 @@ YUDAO_DOMAIN_PACKS: tuple[DomainToolpack, ...] = (
         aliases=("mes_iot", "mes", "iot", "制造", "生产工单", "工单", "质检", "点检", "检验", "工艺路线", "报工", "物料", "车间", "排产", "物联", "物联网", "物联设备"),
         route_prefixes=("/mes", "/iot"),
         write_contract_text="扁平主数据与草稿/待检计划按实体契约用 create_record/update_record；复杂多行工单草稿走页面表单预填。",
-        read_contract_text="实体前缀 mes/md/*、mes/pro/*、mes/qc/*、mes/dv/*、mes/wm/*、iot/*（可用 search_api 关键词定位实体）。",
+        read_contract_text="IoT未入pom缺api-docs；/iot/device/page筛status返state(0未激活/1在线/2离线)，detail有tab=model|subDevice|log；property/get-latest与message/page|pair-page必传deviceId，history-list加identifier，updateTime为ms；thing-model/get-tsl必传productId。MES:material-stock有virtualFilter(exclude|only)；cal/calendar/list必传startDay+endDay+queryType(TYPE|TEAM|USER)；工单完成=2而任务=4。",
         default_priority=0,
     ),
     DomainToolpack(
@@ -144,10 +144,7 @@ YUDAO_DOMAIN_PACKS: tuple[DomainToolpack, ...] = (
         aliases=("system_infra", "system", "infra", "ai", "mp", "系统", "部门", "岗位", "用户", "角色", "菜单", "字典", "通知", "日志", "定时任务", "租户", "配置", "公众号"),
         route_prefixes=("/system", "/infra", "/ai", "/mp"),
         write_contract_text="system/user 新建含密码硬排除（direct=cannot；仅草稿预填可填非密码项），用户分配角色用 assign_record_relations。",
-        read_contract_text=(
-            "实体前缀 system/dept、system/post、system/user、system/role、system/menu、system/notice、system/notify-message、system/login-log、infra/*；"
-            "注意 system/login-log/page 与 operate-log/page 的 username 按登录账号（如 scale*/admin）而非中文姓名过滤，由人名查日志须先查 system/user/page 取 username。"
-        ),
+        read_contract_text="system:user/page筛username/mobile/deptId，昵称list-by-nickname；dept/list无分页(同名双查dept/user)；notice无发送人而notify-message含templateNickname；login/operate-log的username按账号非姓名(查user/page)，login-log.status布尔。infra:get_next_times，duration毫秒，size字节。mp/account/page筛name/account/appId，余必accountId。ai:list-by-conversation-id，segment/search必knowledgeId+content。",
         default_priority=2,
     ),
 )
@@ -313,13 +310,17 @@ def format_write_entry_line(entry: dict) -> str:
     if kind == "compiled_create":
         req = ", ".join(entry.get("required") or ()) or "无（均有默认值或均为选填）"
         extra = ""
+        cols = entry.get("collection_details") or entry.get("collections") or ()
+        if cols:
+            extra += f" | 明细(lines): {'、'.join(cols[:4])}"
         defaults = entry.get("defaults") or ()
         if defaults:
             extra += f" | 默认自动补齐(未指明可省略): {', '.join(defaults[:6])}"
         fks = entry.get("relations") or ()
         if fks:
             extra += f" | 外键: {', '.join(fks[:6])}"
-        return f"[写入契约] create_record(entity=\"{entity}\", fields=[...]) — {label} | 必填: {req}{extra}（其余未列字段均为选填）"
+        lines_sig = ', lines=[{"collection":"...","fields":[...]}]' if cols else ""
+        return f"[写入契约] create_record(entity=\"{entity}\", fields=[...]{lines_sig}) — {label} | 必填: {req}{extra}（其余未列字段均为选填）"
     if kind == "compiled_aggregate_update":
         cols = "、".join(entry.get("collection_details") or entry.get("collections") or ())
         id_note = f" [id={entry['id_field']}]" if entry.get("id_field") and entry["id_field"] != "id" else ""
@@ -377,9 +378,10 @@ def _compact_domain_writes(
     def _format_item(e: dict, *, show_req: bool) -> str:
         ent = e["entity"]
         id_note = f"[id={e['id_field']}]" if e.get("id_field") and e["id_field"] != "id" else ""
+        col_note = "+lines" if e.get("collections") else ""
         if show_req and e.get("required"):
-            return f"{ent}{id_note}({','.join(e['required'][:6])})"
-        return f"{ent}{id_note}"
+            return f"{ent}{id_note}{col_note}({','.join(e['required'][:6])})"
+        return f"{ent}{id_note}{col_note}"
 
     def _summarize_list(tag: str, items: list[dict], *, show_req: bool = False) -> None:
         if not items:
