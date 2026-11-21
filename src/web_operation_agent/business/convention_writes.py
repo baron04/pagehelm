@@ -665,7 +665,9 @@ def validate_single_field_provenance(
     if f_spec.kind in {"integer", "number"} and raw_val is not None and not isinstance(raw_val, bool):
         if not _entry_provenance_ok(Entry(label, scalar_text(raw_val), kind="text"), scoped_cands, texts, receipts=receipt_vals):
             raise BusinessToolRequestError(
-                f"字段「{label}」的数值「{raw_val}」未在用户原话或本轮计算中找到依据，请向用户确认。"
+                f"字段「{label}」的数值「{raw_val}」未在用户原话或本轮 SQL 计算回执中找到依据"
+                "（若该数值由本轮已读原值与用户给定的增减额/比例计算得出，请先调用 sql 执行算式如 "
+                "SELECT 原值 + 变动值 留存计算回执后再重新调用写工具；若确系用户未提供的数值，请用 need_input 向用户确认）。"
             )
 
 
@@ -1032,7 +1034,10 @@ def _verify_scaled_number_provenance(
                 if (check_entries(SourceLedger(entries=[Entry(label, yuan_clean, kind="text")]), texts)[0].ok
                         and not re.search(r"(?<![\d.])" + re.escape(yuan_clean) + r"\s*分", joined)):
                     return
-                raise BusinessToolRequestError(f"字段「{label}」的金额「{s_raw}」未在用户原话中找到同单位依据。")
+                raise BusinessToolRequestError(
+                    f"字段「{label}」的金额「{s_raw}」未在用户原话或本轮 SQL 计算回执中找到同单位依据"
+                    "（若由原值按增减额算得，请先调 sql 执行算式留存计算回执后再提交）。"
+                )
             # unit == "分"
             fen_clean = scalar_text(int(dec))
             yuan_clean = scalar_text(dec / Decimal(100))
@@ -1041,7 +1046,10 @@ def _verify_scaled_number_provenance(
             if (re.search(r"(?<![\d.])" + re.escape(fen_clean) + r"\s*分", joined)
                     or re.search(r"(?<![\d.])" + re.escape(yuan_clean) + r"\s*(?:元|块)", joined)):
                 return
-            raise BusinessToolRequestError(f"字段「{label}」的金额「{s_raw}」未在用户原话中找到依据。")
+            raise BusinessToolRequestError(
+                f"字段「{label}」的金额「{s_raw}」未在用户原话或本轮 SQL 计算回执中找到依据"
+                "（若由原值按增减额算得，请先调 sql 执行算式留存计算回执后再提交）。"
+            )
         raise BusinessToolRequestError(
             f"字段「{label}」在接口中按分存储，请传带明确单位的字符串（如 '25元' 或 '2500分'），并确保数值来自用户原话。"
         )

@@ -319,6 +319,7 @@ def structured_write_routing_rules(
                 "含 hrm/salary/employee-info 等 1–2 层明细修改）或专用操作 propose_operation(operation, inputs)"
                 "（程序自动加载 Skill）；缺失必填值调 finish(status='need_input') 追问，"
                 "修改备注除非明示追加否则按用户给定新文本写入，**在用户未明示草稿预填时严禁滑向网页表单预填冒充完成**。"
+                "若写入的目标金额或数量需由本轮已读原值按用户给定增减量算得，须先调 sql 算出结果留回执后再提案。"
                 "关联外键允许绑定本轮同账号已核实读取的目标实体记录（确切业务名称、父名称/第N期 或已读候选ID）；"
                 "非外键标量属性严禁跨记录借用；若所引用的前置计划或父记录（如回款计划、合同等）缺失或无权限，应直接如实说明原因或调 finish(status='need_input') 追问，**严禁在未获请求时擅自新建前置实体（如登记实际回款时擅自调用 crm_receivable_plan_create）**；只问流程或仅要求预填时禁止提出写入提案。"
             )

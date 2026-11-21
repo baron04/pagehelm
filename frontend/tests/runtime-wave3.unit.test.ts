@@ -574,3 +574,35 @@ describe('ACC-13 + UX-03 + UX-05: form fill tracking, undoFormFill, restricted c
     })
   })
 })
+
+describe('hidden overlay ancestors and zero-rect browser dialogs', () => {
+  it('excludes dialogs inside display:none overlay ancestors and 0x0 dialogs when root has layout', () => {
+    document.documentElement.getBoundingClientRect = () => ({width: 1280, height: 800} as DOMRect)
+
+    const overlay = document.createElement('div')
+    overlay.style.display = 'none'
+    const hiddenDialog = document.createElement('div')
+    hiddenDialog.setAttribute('role', 'dialog')
+    hiddenDialog.setAttribute('aria-label', '菜单搜索')
+    hiddenDialog.getBoundingClientRect = () => ({width: 600, height: 400} as DOMRect)
+    overlay.appendChild(hiddenDialog)
+    document.body.appendChild(overlay)
+
+    const afterObs = makeObservation(2).observation
+    const summaryHidden = summarizeObservation(null, afterObs, redactor, document)
+    expect(summaryHidden.dialog_title).toBe('')
+
+    const zeroDialog = document.createElement('div')
+    zeroDialog.setAttribute('role', 'dialog')
+    zeroDialog.setAttribute('aria-label', '隐藏空弹窗')
+    zeroDialog.getBoundingClientRect = () => ({width: 0, height: 0} as DOMRect)
+    document.body.appendChild(zeroDialog)
+
+    const summaryZero = summarizeObservation(null, afterObs, redactor, document)
+    expect(summaryZero.dialog_title).toBe('')
+
+    overlay.style.display = 'block'
+    const summaryVisible = summarizeObservation(null, afterObs, redactor, document)
+    expect(summaryVisible.dialog_title).toBe('菜单搜索')
+  })
+})

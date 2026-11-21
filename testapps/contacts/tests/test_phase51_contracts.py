@@ -536,6 +536,11 @@ class Phase51ContractTests(unittest.TestCase):
             def resolve_target(self, entity, target, *, spec):
                 return {"employeeId": 112, "remark": "old", "salaryOptions": [{"id": 1, "name": "Base", "value": 10000}]}
 
+            def encode_field(self, spec, f_spec, raw_val, cur_row):
+                val = int(raw_val) if f_spec.kind == "integer" else (float(raw_val) if f_spec.kind == "number" else str(raw_val))
+                old_v = cur_row.get(f_spec.name, "")
+                return val, str(old_v), str(val), None
+
         rich_port = _RichPort()
         c_handler = CompiledCreateHandler(rich_port)
         with self.assertRaises(BusinessToolRequestError) as multi_ctx:
@@ -577,6 +582,39 @@ class Phase51ContractTests(unittest.TestCase):
         self.assertIn("line_changes", msg)
         self.assertIn("salaryOptions", msg)
         self.assertIn("Amount", msg)
+
+        # Arithmetic derivation without SQL receipt gives clear SQL calculation guidance
+        agg_args = {
+            "entity": "salary/info",
+            "target": "Ada（employeeId=112）",
+            "line_changes": [{"collection": "salaryOptions", "match": "Base", "changes": [{"field": "value", "value": 11500}]}],
+        }
+        agg_spec = agg_handler.prepare(agg_args)
+        agg_prop = BusinessMutationProposal(
+            tool="update_record",
+            args=agg_args,
+            effect="Update",
+            targets=("salary/info",),
+            nonce="0" * 32,
+            operation_context_digest="a" * 64,
+            details=(),
+            effect_projection=agg_spec.effect_projection,
+        )
+        with self.assertRaises(BusinessToolRequestError) as arith_prov:
+            agg_handler.validate_provenance(
+                agg_prop.args,
+                ("给员工调薪，基本工资加 1500",),
+                agg_prop,
+                existing_values={"__receipt__": ()},
+            )
+        self.assertIn("SQL 计算回执", str(arith_prov.exception))
+        # Succeeds once SQL computation receipt contains 11500
+        agg_handler.validate_provenance(
+            agg_prop.args,
+            ("给员工调薪，基本工资加 1500",),
+            agg_prop,
+            existing_values={"__receipt__": ("11500",)},
+        )
 
 
 if __name__ == "__main__":

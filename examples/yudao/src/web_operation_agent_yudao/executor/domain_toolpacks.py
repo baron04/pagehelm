@@ -61,8 +61,8 @@ YUDAO_DOMAIN_PACKS: tuple[DomainToolpack, ...] = (
         aliases=("crm", "crm-sales", "客户", "线索", "联系人", "商机", "合同", "回款", "回款计划", "公海", "跟进"),
         route_prefixes=("/crm",),
         write_contract_text=(
-            "回款新建调 create_record(entity='crm/receivable')，期次外键支持「父名称/第N期」或已读候选ID；"
-            "若回款计划缺失或无权读取，应直接说明或 need_input，严禁擅自调 crm_receivable_plan_create 代建计划。"
+            "回款新建调 create_record(entity='crm/receivable')；若用户未指定具体期次，planId 为选填字段可直接省略并在 contractId 名下直接 create_record；"
+            "仅当用户明确点名某期回款计划而该计划缺失或无权读取时，应直接说明或 need_input，严禁擅自调 crm_receivable_plan_create 代建计划。"
         ),
         read_contract_text="实体前缀 crm/customer、crm/contact、crm/clue、crm/business、crm/contract、crm/receivable-plan、crm/receivable。",
         default_priority=3,
@@ -109,10 +109,10 @@ YUDAO_DOMAIN_PACKS: tuple[DomainToolpack, ...] = (
         aliases=("hrm", "hrm-org-salary", "hrm-salary", "人事", "员工", "入职", "在职", "离职", "花名册", "档案", "薪资", "薪酬", "调薪", "定薪", "工资", "考勤", "打卡", "请假", "排班", "假期", "招聘", "候选人"),
         route_prefixes=("/hrm",),
         write_contract_text=(
-            "员工新建用 create_record(entity='hrm/employee')；"
+            "员工新建用 create_record(entity='hrm/employee')（有页面默认值的字段如 type/entryStatus 未指明可省略自动补齐；在职需 jobNumber）；"
             "调薪/定薪改薪资项用 update_record(entity='hrm/salary/employee-info', target='姓名或姓名(employeeId=编号)', "
             "changes=[主表字段], line_changes=[{'collection':'salaryOptions','match':'薪资项名称或编码','changes':[{'field':'value','value':金额}]}])"
-            "（regularSalary/probationSalary 为汇总只读列，勿放 changes）。"
+            "（regularSalary/probationSalary 为汇总只读列，勿放 changes；算得目标金额须先调 sql 留回执）。"
         ),
         read_contract_text="实体前缀 hrm/employee、hrm/salary/employee-info、hrm/salary/*、hrm/attendance/*、hrm/recruit/*。",
         default_priority=1,
@@ -143,7 +143,10 @@ YUDAO_DOMAIN_PACKS: tuple[DomainToolpack, ...] = (
         aliases=("system_infra", "system", "infra", "ai", "mp", "系统", "部门", "岗位", "用户", "角色", "菜单", "字典", "通知", "日志", "定时任务", "租户", "配置", "公众号"),
         route_prefixes=("/system", "/infra", "/ai", "/mp"),
         write_contract_text="system/user 新建含密码硬排除（direct=cannot；仅草稿预填可填非密码项），用户分配角色用 assign_record_relations。",
-        read_contract_text="实体前缀 system/dept、system/post、system/user、system/role、system/menu、system/notice、system/dict-*、infra/*。",
+        read_contract_text=(
+            "实体前缀 system/dept、system/post、system/user、system/role、system/menu、system/notice、system/notify-message、system/login-log、infra/*；"
+            "注意 system/login-log/page 与 operate-log/page 的 username 按登录账号（如 scale*/admin）而非中文姓名过滤，由人名查日志须先查 system/user/page 取 username。"
+        ),
         default_priority=2,
     ),
 )
@@ -307,12 +310,15 @@ def format_write_entry_line(entry: dict) -> str:
             return f"[写入契约] propose_operation(\"{tool}\", {{\"document_type\": <单据类型>, \"no\": <单号>, \"action\": \"审批|反审批\"}}) — {label}"
         return f"[写入契约] propose_operation(\"{tool}\", {{{req}}}) — {label}（{entity}）"
     if kind == "compiled_create":
-        req = ", ".join(entry.get("required") or ()) or "见实体字段"
+        req = ", ".join(entry.get("required") or ()) or "无（均有默认值或均为选填）"
         extra = ""
+        defaults = entry.get("defaults") or ()
+        if defaults:
+            extra += f" | 默认自动补齐(未指明可省略): {', '.join(defaults[:6])}"
         fks = entry.get("relations") or ()
         if fks:
-            extra = f" | 外键: {', '.join(fks[:5])}"
-        return f"[写入契约] create_record(entity=\"{entity}\", fields=[...]) — {label} | 必填: {req}{extra}"
+            extra += f" | 外键: {', '.join(fks[:6])}"
+        return f"[写入契约] create_record(entity=\"{entity}\", fields=[...]) — {label} | 必填: {req}{extra}（其余未列字段均为选填）"
     if kind == "compiled_aggregate_update":
         cols = "、".join(entry.get("collection_details") or entry.get("collections") or ())
         id_note = f" [id={entry['id_field']}]" if entry.get("id_field") and entry["id_field"] != "id" else ""

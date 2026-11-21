@@ -133,7 +133,7 @@ def _inline_small_table_ties_note(rows: list, col_labels: dict[str, str] | None 
     keys = list(dict.fromkeys(k for r in dict_rows[:10] for k in r))
     parts: list[str] = []
     for key in keys:
-        if _NON_METRIC_COL_RE.search(key) or _SENSITIVE_COL_KEY.search(key):
+        if _NON_METRIC_COL_RE.search(key) or _NOT_A_QUANTITY.search(key) or _SENSITIVE_COL_KEY.search(key):
             continue
         vals = []
         ok = True
@@ -148,23 +148,24 @@ def _inline_small_table_ties_note(rows: list, col_labels: dict[str, str] | None 
         if not ok or len(vals) < 2:
             continue
         distinct = set(vals)
-        if len(distinct) < 2:
-            continue
-        hi = max(vals)
-        lo = min(vals)
-        hi_cnt = sum(1 for v in vals if v == hi)
-        lo_cnt = sum(1 for v in vals if v == lo)
-        if hi_cnt < 2 and lo_cnt < 2:
-            continue
         lbl = labels.get(key)
         col_disp = f"{key}（{lbl}）" if lbl and lbl != key else key
-        sub = []
-        if hi_cnt >= 2:
-            sub.append(f"最大值 {hi} 共 {hi_cnt} 行同值")
-        if lo_cnt >= 2 and lo != hi:
-            sub.append(f"最小值 {lo} 共 {lo_cnt} 行同值")
-        if sub:
-            parts.append(f"{col_disp}：" + "、".join(sub))
+        if len(distinct) == 1:
+            parts.append(f"{col_disp}：全表 {len(vals)} 行数值完全相同，均为 {vals[0]}（最大值与最小值均为 {vals[0]}，{len(vals)} 行全并列）")
+        else:
+            hi = max(vals)
+            lo = min(vals)
+            hi_cnt = sum(1 for v in vals if v == hi)
+            lo_cnt = sum(1 for v in vals if v == lo)
+            if hi_cnt < 2 and lo_cnt < 2:
+                continue
+            sub = []
+            if hi_cnt >= 2:
+                sub.append(f"最大值 {hi} 共 {hi_cnt} 行同值")
+            if lo_cnt >= 2 and lo != hi:
+                sub.append(f"最小值 {lo} 共 {lo_cnt} 行同值")
+            if sub:
+                parts.append(f"{col_disp}：" + "、".join(sub))
         if len(parts) >= 3:
             break
     if not parts:
@@ -357,7 +358,7 @@ class ActorKnowledge:
             return "没有匹配的菜单页面。换一个更短的业务词再试。"
         return "\n".join(f"{m['path']}  {m['name']}" for m in hits)
 
-    def search_api(self, keyword: str, *, include_writes: bool = False) -> str:
+    def search_api(self, keyword: str, *, include_writes: bool = False, source=None, ui=None) -> str:
         self._load()
         ranked = sorted(((_score(keyword, (2, o["summary"]), (2, o["tag"]), (1, o["path"])), o)
                          for o in self._ops), key=lambda pair: -pair[0])
@@ -368,7 +369,7 @@ class ActorKnowledge:
             docs = self._loaded_docs if isinstance(self._loaded_docs, dict) else (
                 self._docs if isinstance(self._docs, dict) else None
             )
-            write_hits = search_write_directory(keyword, docs=docs, limit=6)
+            write_hits = search_write_directory(keyword, docs=docs, source=source, ui=ui, limit=6)
             lines.extend(format_write_entry_line(entry) for entry in write_hits)
         return "\n".join(lines) or "没有匹配的只读接口。换一个业务词再试。"
 
@@ -1102,8 +1103,8 @@ class ActorKnowledge:
                 if info.get("complete") and filters_used and not prepared.get("has_unbound_filter"):
                     cond_desc = json.dumps(filters_used, ensure_ascii=False)[:300]
                     out.append(
-                        f"精确绑定空集核实（complete=True，0 行）：在已绑定筛选参数 {cond_desc} 下已读取全部结果共 0 行；"
-                        "若筛选条件已准确对应用户范围，权威空集已核实，无需为凑记录反复放宽或更换无关查询。"
+                        f"[精确过滤已核实为 0 条记录] 精确绑定空集核实（complete=True，0 行）：在已绑定筛选参数 {cond_desc} 下当前账号可见记录确为 0 条；"
+                        "若主体对象已核实存在，关联子集为 0 条即完整事实结论（可用 completed 如实回答暂无记录/0 条，勿误报无法执行 cannot 或臆测权限受限，也无需反复尝试无关查询）。"
                     )
             out.extend(prepared["clock_notes"])
             sib = prepared.get("sib_prepared")

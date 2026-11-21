@@ -28,6 +28,7 @@ from web_operation_agent.business.compiled_writes import (
     CompiledFieldDefault,
     CompiledRelationSpec,
     compiled_write_tool_definitions,
+    is_rejected_ui_sentinel,
 )
 from web_operation_agent.business.convention_writes import (
     ConventionFieldSpec,
@@ -1903,15 +1904,35 @@ def _merge_label(base_label: str, tag_text: str, summary: str) -> str:
     return " / ".join(parts)
 
 
-def _format_create_req(spec: CompiledCreateSpec) -> tuple[list[str], list[str]]:
+def _valid_create_default_fields(spec: CompiledCreateSpec) -> tuple[set[str], list[str]]:
+    default_fields: set[str] = set()
+    auto_defaults: list[str] = []
+    for d in spec.defaults:
+        f = spec.resolve_field(d.field)
+        if f is None:
+            continue
+        if d.kind == "actor" or not is_rejected_ui_sentinel(
+            d.value,
+            is_fk_or_enum=bool(f.reference_entity or f.enum_type),
+            is_hierarchy_parent=(f.name == "parentId"),
+        ):
+            if d.field not in default_fields:
+                default_fields.add(d.field)
+                auto_defaults.append(d.field)
+    return default_fields, auto_defaults
+
+
+def _format_create_req(spec: CompiledCreateSpec) -> tuple[list[str], list[str], list[str]]:
+    default_fields, auto_defaults = _valid_create_default_fields(spec)
     req: list[str] = []
     fks: list[str] = []
     for f in spec.fields:
         if f.reference_entity:
-            fks.append(f"{f.name}->{f.reference_entity}")
-        if f.required and f.name not in spec.server_computed_fields:
+            opt_mark = "" if (f.required and f.name not in default_fields) else "(选填)"
+            fks.append(f"{f.name}->{f.reference_entity}{opt_mark}")
+        if f.required and f.name not in spec.server_computed_fields and f.name not in default_fields:
             req.append(f"{f.name}->{f.reference_entity}" if f.reference_entity else f.name)
-    return req, fks
+    return req, fks, auto_defaults
 
 
 def build_yudao_write_directory(*, docs: dict | None = None, source=None, ui=None) -> list[dict]:
@@ -1978,7 +1999,7 @@ def build_yudao_write_directory(*, docs: dict | None = None, source=None, ui=Non
 
     cat = get_yudao_write_catalog(docs=docs, source=source, ui=ui)
     for ent, spec in sorted(cat["creates"].items()):
-        req, fks = _format_create_req(spec)
+        req, fks, auto_defaults = _format_create_req(spec)
         op_tag, op_sum = _openapi_op_label(docs, f"/admin-api/{ent}/create", "post")
         entries.append({
             "tool": "create_record",
@@ -1988,6 +2009,7 @@ def build_yudao_write_directory(*, docs: dict | None = None, source=None, ui=Non
             "label": _merge_label(spec.label, op_tag, op_sum),
             "tag": op_tag,
             "required": req,
+            "defaults": auto_defaults,
             "relations": fks,
         })
     for ent, spec in sorted(cat["aggregates"].items()):

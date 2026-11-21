@@ -654,7 +654,15 @@ class YudaoProceduresBase:
             return LoopToolResult(text, answer_targets=targets)
         if name == "search_api":
             self._note(s, stage="search", what="source", term=args["keyword"], tool=name, arguments=said)
-            return LoopToolResult(know.search_api(args["keyword"], include_writes=self._writes_active(s.operation)))
+            _docs, cat_src, cat_ui = self._compiled_catalog_inputs()
+            return LoopToolResult(
+                know.search_api(
+                    args["keyword"],
+                    include_writes=self._writes_active(s.operation),
+                    source=cat_src,
+                    ui=cat_ui,
+                )
+            )
         if name == "entity_rules":
             self._note(s, stage="search", what="rules", term=args["target"], tool=name, arguments=said)
             return LoopToolResult(self._entity_rules(s, args["target"], args.get("operation", "")), kind="read")
@@ -1283,7 +1291,7 @@ class YudaoProceduresBase:
             else:
                 continue
             scored.append((score, entity))
-        if not scored:
+        if not scored and not self._writes_active(getattr(s, "operation", None)):
             if not any(e.rules for e in index.entities):
                 return "当前部署未附带编译期源码规则。"
             return f"未找到与“{target}”匹配的源码规则。"
@@ -1305,10 +1313,70 @@ class YudaoProceduresBase:
             for rule in rules[:15]:
                 subj = f" [{rule.subject}]" if rule.subject else ""
                 lines.append(f"- ({rule.kind}) {rule.about}{subj}: {rule.text}")
+        if self._writes_active(getattr(s, "operation", None)):
+            write_lines = self._entity_compiled_write_lines(
+                target,
+                operation,
+                matched_entities=[e.key for _, e in scored[:3]],
+            )
+            lines.extend(write_lines)
+        if not lines:
+            if not any(e.rules for e in index.entities):
+                return "当前部署未附带编译期源码规则。"
+            return f"未找到与“{target}”匹配的源码规则。"
         output = "\n".join(lines)
         if len(output) > 12_000:
             output = output[:11_900].rsplit("\n", 1)[0] + "\n…（其余规则已省略，请指定更具体的 target 或 operation 缩小范围）"
         return output
+
+    def _entity_compiled_write_lines(
+        self,
+        target: str,
+        operation: str = "",
+        *,
+        matched_entities: list[str] | None = None,
+    ) -> list[str]:
+        docs, source, ui = self._compiled_catalog_inputs()
+        if not isinstance(docs, dict):
+            return []
+        from ..writes.convention_writes import build_yudao_write_directory, get_yudao_write_catalog
+        from .domain_toolpacks import format_write_entry_line, search_write_directory
+
+        cat = get_yudao_write_catalog(docs=docs, source=source, ui=ui)
+        directory = build_yudao_write_directory(docs=docs, source=source, ui=ui)
+        q = str(target or "").strip().casefold()
+        matched_set = set(matched_entities or ())
+        hits: list[dict] = []
+        for entry in directory:
+            ent = str(entry.get("entity") or "")
+            lbl = str(entry.get("label") or "").casefold()
+            if ent in matched_set or (q and (q == ent.casefold() or q in ent.casefold() or q in lbl)):
+                hits.append(entry)
+        if not hits:
+            hits = search_write_directory(f"{target} {operation}".strip(), docs=docs, source=source, ui=ui, limit=4)
+        if not hits:
+            return []
+        out = ["", "【编译写契约（API 写入优先级高于页面表单，有默认值的必填项未指明时自动补齐）】"]
+        for entry in hits[:6]:
+            out.append(format_write_entry_line(entry))
+            ent = str(entry.get("entity") or "")
+            kind = str(entry.get("kind") or "")
+            if kind == "compiled_create" and ent in cat["creates"]:
+                spec = cat["creates"][ent]
+                if spec.defaults:
+                    d_parts = [f"{d.field}={d.display or d.value or '当前账号'}" for d in spec.defaults[:10]]
+                    out.append("  默认自动补齐（用户未指明可省略，自动标「（页面默认值）」上批准卡）: " + "、".join(d_parts))
+                opt_names = [f"{f.name}({f.label})" if f.label else f.name for f in spec.fields if not f.required and f.name not in spec.server_computed_fields]
+                if opt_names:
+                    out.append("  选填字段: " + "、".join(opt_names[:16]))
+            elif kind == "compiled_aggregate_update" and ent in cat["aggregates"]:
+                spec = cat["aggregates"][ent]
+                p_fields = [f"{f.name}({f.label})" if f.label else f.name for f in spec.fields if f.name not in spec.server_computed_fields]
+                out.append("  主表 changes 可改字段: " + ("、".join(p_fields[:16]) or "无"))
+                for col in spec.collections:
+                    c_fields = [f"{f.name}({f.label})" if f.label else f.name for f in col.fields[:16]]
+                    out.append(f"  子表 line_changes[collection='{col.name}'] ({col.label}): " + "、".join(c_fields))
+        return out
 
     def _find_record(self, s, name: str, kind: str = "", *,
                      answer_targets: list[AnswerTarget] | None = None,
@@ -1574,6 +1642,11 @@ class YudaoProceduresBase:
         docs = loaded if isinstance(loaded, dict) else None
         if docs is None:
             raw_docs = getattr(self.knowledge, "_docs", None)
+            if callable(raw_docs):
+                try:
+                    raw_docs = raw_docs()
+                except Exception:
+                    raw_docs = None
             if isinstance(raw_docs, dict):
                 docs = raw_docs
         data = getattr(getattr(self, "goal_port", None), "data", None)
@@ -1701,11 +1774,14 @@ class YudaoProceduresBase:
             return {"domain": domain, "guide": domain_playbooks().get(domain)}
         with self._worker_read_scope(operation):
             if name == "search_api":
+                _docs, cat_src, cat_ui = self._compiled_catalog_inputs()
                 return {
                     "keyword": arguments["keyword"],
                     "text": self.knowledge.search_api(
                         arguments["keyword"],
                         include_writes=self._writes_active(operation),
+                        source=cat_src,
+                        ui=cat_ui,
                     ),
                 }
             if name == "entity_rules":

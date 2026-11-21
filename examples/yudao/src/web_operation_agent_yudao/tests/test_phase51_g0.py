@@ -1237,6 +1237,151 @@ class Phase51G0Tests(unittest.TestCase):
         }, context=actor_ctx)
         self.assertEqual(ok_spec.args["payload"]["salaryOptions"][0]["value"], 15000)
 
+    def test_g0r4_defaults_omission_all_equal_small_table_entity_rules_and_sql_receipt(self):
+        from web_operation_agent.business.compiled_writes import CompiledCreateSpec, CompiledFieldDefault
+        from web_operation_agent.business.convention_writes import ConventionFieldSpec
+        from web_operation_agent_yudao.executor.domain_toolpacks import format_write_entry_line
+        from web_operation_agent_yudao.writes.convention_writes import _format_create_req
+
+        spec = CompiledCreateSpec(
+            entity="hrm/employee",
+            label="HRM 员工档案",
+            fields=(
+                ConventionFieldSpec("name", "string", "姓名", required=True),
+                ConventionFieldSpec("mobile", "string", "手机", required=True),
+                ConventionFieldSpec("entryStatus", "integer", "入职状态", required=True, enum_type="__java_enum__:HrmEmployeeEntryStatusEnum"),
+                ConventionFieldSpec("type", "integer", "聘用形式", required=True, enum_type="__java_enum__:HrmEmployeeTypeEnum"),
+                ConventionFieldSpec("entryTime", "integer", "入职时间", required=True, date_kind="epoch_ms"),
+                ConventionFieldSpec("deptId", "integer", "部门", required=False, reference_entity="system/dept"),
+            ),
+            defaults=(
+                CompiledFieldDefault("entryStatus", "literal", 1, display="在职"),
+                CompiledFieldDefault("type", "literal", 1, display="正式"),
+            ),
+        )
+        req, fks, auto_defaults = _format_create_req(spec)
+        self.assertEqual(req, ["name", "mobile", "entryTime"])
+        self.assertEqual(auto_defaults, ["entryStatus", "type"])
+        self.assertEqual(fks, ["deptId->system/dept(选填)"])
+        line = format_write_entry_line({
+            "kind": "compiled_create",
+            "tool": "create_record",
+            "entity": "hrm/employee",
+            "label": "HRM 员工档案",
+            "required": req,
+            "defaults": auto_defaults,
+            "relations": fks,
+        })
+        self.assertIn("必填: name, mobile, entryTime", line)
+        self.assertIn("默认自动补齐(未指明可省略): entryStatus, type", line)
+        self.assertIn("deptId->system/dept(选填)", line)
+        self.assertIn("其余未列字段均为选填", line)
+
+        # Inline complete small table where ALL rows share identical numeric value (e.g. browseCount=0)
+        class AllZeroArticleClient:
+            tenant = "1"
+
+            def get(self, path, **params):
+                if path == "system/auth/get-permission-info":
+                    return {"user": {"id": 257, "nickname": "芋道源码", "deptId": 100}, "menus": [], "permissions": []}
+                if path == "promotion/article/page":
+                    if params.get("status") == 0:
+                        return {"list": [], "total": 0}
+                    return {"list": [{"id": i, "title": f"文章{i}", "browseCount": 0} for i in range(1, 5)], "total": 4}
+                return {"list": [], "total": 0}
+
+            def read_window(self, _check):
+                return nullcontext()
+
+        docs = {
+            "paths": {
+                "/admin-api/promotion/article/page": {
+                    "get": {
+                        "summary": "文章分页",
+                        "tags": ["文章"],
+                        "parameters": [
+                            {"name": "status", "in": "query"},
+                            {"name": "pageNo", "in": "query", "required": True},
+                            {"name": "pageSize", "in": "query", "required": True},
+                        ],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/ArtPageResp"}}}}},
+                    }
+                }
+            },
+            "components": {
+                "schemas": {
+                    "ArtPageResp": {"properties": {"data": {"$ref": "#/components/schemas/ArtPage"}}},
+                    "ArtPage": {"properties": {"list": {"type": "array", "items": {"$ref": "#/components/schemas/ArtItem"}}}},
+                    "ArtItem": {"properties": {"id": {}, "title": {"description": "标题"}, "browseCount": {"description": "浏览量"}}},
+                }
+            },
+        }
+        tables = TurnTables(BASELINE_SESSION_HANDOFFS)
+        self.addCleanup(tables.close)
+        know = ActorKnowledge(AllZeroArticleClient(), docs)
+        text = know.call_api("promotion/article/page", {"pageNo": 1, "pageSize": 20}, row_sink=tables.add)
+        self.assertIn("全表 4 行数值完全相同，均为 0（最大值与最小值均为 0，4 行全并列）", text)
+        zero_text = know.call_api("promotion/article/page", {"status": 0, "pageNo": 1, "pageSize": 20}, row_sink=tables.add)
+        self.assertIn("精确过滤已核实为 0 条记录", zero_text)
+        self.assertIn("精确绑定空集核实（complete=True，0 行）", zero_text)
+
+        # entity_rules under writes_enabled surfaces compiled write contracts & auto-defaults
+        from web_operation_agent.goal.index import ApplicationIndex, IndexEntity
+
+        write_docs = {
+            **BASE_DOCS,
+            "paths": {
+                **BASE_DOCS["paths"],
+                "/admin-api/hrm/employee/get": {
+                    "get": {
+                        "tags": ["管理后台 - HRM 员工档案"],
+                        "summary": "获取员工详情",
+                        "parameters": [{"name": "id", "in": "query", "required": True}],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/EmpResp"}}}}},
+                    }
+                },
+                "/admin-api/hrm/employee/create": {
+                    "post": {
+                        "tags": ["管理后台 - HRM 员工档案"],
+                        "summary": "创建员工档案",
+                        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/EmpCreateReq"}}}},
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                    }
+                },
+            },
+            "components": {
+                **BASE_DOCS.get("components", {}),
+                "schemas": {
+                    **BASE_DOCS.get("components", {}).get("schemas", {}),
+                    "EmpResp": {"properties": {"data": {"$ref": "#/components/schemas/EmpVO"}}},
+                    "EmpVO": {"properties": {"id": {"type": "integer"}, "name": {"type": "string"}, "mobile": {"type": "string"}, "remark": {"type": "string"}}},
+                    "EmpCreateReq": {
+                        "required": ["name", "mobile"],
+                        "properties": {
+                            "name": {"type": "string", "description": "员工姓名"},
+                            "mobile": {"type": "string", "description": "手机号"},
+                            "remark": {"type": "string", "description": "备注"},
+                        },
+                    },
+                },
+            },
+        }
+        proc_w = YudaoLoopProcedures(
+            ActorKnowledge(AllZeroArticleClient(), write_docs),
+            NS(
+                capabilities=lambda: frozenset(),
+                data=NS(_source=None, _ui=None),
+                rules_index=lambda context=None: ApplicationIndex(entities=(IndexEntity("hrm/employee", "HRM 员工档案", rules=()),)),
+            ),
+            "https://app.test",
+        )
+        proc_w.writes_enabled = True
+        rules_out = proc_w._entity_rules(NS(operation=NS(principal=_make_principal())), "hrm/employee")
+        self.assertIn("编译写契约", rules_out)
+        self.assertIn("create_record(entity=\"hrm/employee\"", rules_out)
+        self.assertIn("必填: name, mobile", rules_out)
+        self.assertIn("选填字段: remark(备注)", rules_out)
+
 
 if __name__ == "__main__":
     unittest.main()

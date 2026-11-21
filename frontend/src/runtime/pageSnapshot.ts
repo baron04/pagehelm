@@ -381,9 +381,8 @@ export function collectScrollContainerHints(
     if (tag === 'TEXTAREA' || tag === 'SELECT') return
     if (node.getAttribute('role') === 'listbox' || node.getAttribute('role') === 'tree') return
     if (!(node.scrollHeight > node.clientHeight + 1 && node.clientHeight > 0)) return
+    if (!isVisibleSnapshotNode(node, view, panelContainer)) return
     const style = view?.getComputedStyle ? view.getComputedStyle(node) : null
-    if (style && (style.display === 'none' || style.visibility === 'hidden')) return
-    if (node.closest('[hidden],[aria-hidden="true"]')) return
     const isDocRoot = node === doc.scrollingElement || node === doc.documentElement || node === doc.body
     if (!isDocRoot) {
       if (style && !/(auto|scroll|overlay)/.test(style.overflowY)) return
@@ -397,6 +396,7 @@ export function collectScrollContainerHints(
   for (const dialog of doc.querySelectorAll('[role="dialog"], dialog')) {
     if (panelContainer && panelContainer.contains(dialog)) continue
     if (dialog.tagName === 'DIALOG' && !dialog.hasAttribute('open')) continue
+    if (!isVisibleSnapshotNode(dialog, view, panelContainer)) continue
     tryContainer(dialog, 'dialog')
     for (const candidate of dialog.querySelectorAll('*')) {
       if (hints.length >= 4) break
@@ -407,7 +407,8 @@ export function collectScrollContainerHints(
   if (doc.body && doc.body !== doc.scrollingElement) tryContainer(doc.body, 'page')
   for (const candidate of doc.querySelectorAll('main, section, [role="main"], div')) {
     if (hints.length >= 4) break
-    if (candidate.closest('[role="dialog"], dialog')) continue
+    const enclosingDialog = candidate.closest('[role="dialog"], dialog')
+    if (enclosingDialog && isVisibleSnapshotNode(enclosingDialog, view, panelContainer)) continue
     tryContainer(candidate, 'page')
   }
   return hints.slice(0, 4)
@@ -418,8 +419,10 @@ function isVisibleSnapshotNode(node: Element, view: Window | null, panelContaine
   if (panelContainer && (node === panelContainer || panelContainer.contains(node))) return false
   if (node.closest('[hidden],[aria-hidden="true"]')) return false
   if (view?.getComputedStyle) {
-    const style = view.getComputedStyle(node)
-    if (style.display === 'none' || style.visibility === 'hidden') return false
+    for (let cur: Element | null = node; cur; cur = cur.parentElement) {
+      const style = view.getComputedStyle(cur)
+      if (style.display === 'none' || style.visibility === 'hidden') return false
+    }
   }
   return true
 }
@@ -435,10 +438,12 @@ function readOpenDialogTitle(
     if (dialog.tagName === 'DIALOG' && !dialog.hasAttribute('open')) return false
     if (!isVisibleSnapshotNode(dialog, view, panelContainer)) return false
     const rect = dialog.getBoundingClientRect()
-    // Allow jsdom tests where rects are unmocked if not display:none, or non-zero rects in browsers.
-    return rect.width > 0 || rect.height > 0 || !view?.getComputedStyle
-      ? true
-      : view.getComputedStyle(dialog).display !== 'none'
+    if (rect.width > 0 || rect.height > 0) return true
+    const rootEl = doc.documentElement ?? doc.body
+    const rootRect = rootEl ? rootEl.getBoundingClientRect() : null
+    if (rootRect && (rootRect.width > 0 || rootRect.height > 0)) return false
+    // Allow jsdom tests where all rects are 0x0 if dialog and ancestors are not display:none.
+    return !view?.getComputedStyle || view.getComputedStyle(dialog).display !== 'none'
   })
   const active = dialogs.at(-1)
   if (!active) return ''
