@@ -66,6 +66,7 @@ from ..business.draft_steps import DraftStepAdmission
 from .model_sources import TurnSources, SOURCE_TOOLS, SOURCE_NAMES, SOURCE_INSTRUCTIONS, source_finish_tool
 from .native_submit import NativeSubmitMixin, REQUEST_SUBMIT_TOOL
 from .value_source import note_candidates
+from .submit_contract import scalar_text
 from .draft_handoff import unrestorable_form
 from ..transport.browser import TransportError, TurnCancelled
 from .product import AgentTurnError, AgentTurnErrorCode, AgentTurnExecution, page_observation_failure
@@ -2495,14 +2496,19 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
         existing_map: dict[str, list[str]] = {}
         if source_ledger is not None:
             for cand in getattr(source_ledger, "candidates", ()):
-                if cand.binding and isinstance(cand.value, str) and cand.value.strip():
-                    existing_map.setdefault(cand.binding, []).append(cand.value)
+                raw_cand = getattr(cand, "value", None)
+                if cand.binding and not isinstance(raw_cand, bool) and isinstance(raw_cand, (str, int, float)):
+                    cand_text = scalar_text(raw_cand).strip()
+                    if cand_text:
+                        existing_map.setdefault(cand.binding, []).append(cand_text)
             for rec in getattr(source_ledger, "receipts", ()):
-                val = getattr(rec, "value", "")
-                if isinstance(val, str) and val.strip():
-                    existing_map.setdefault("__receipt__", []).append(val.strip())
-                    if getattr(rec, "field", ""):
-                        existing_map.setdefault(rec.field, []).append(val.strip())
+                raw_rec = getattr(rec, "value", None)
+                if not isinstance(raw_rec, bool) and isinstance(raw_rec, (str, int, float)):
+                    val = scalar_text(raw_rec).strip()
+                    if val:
+                        existing_map.setdefault("__receipt__", []).append(val)
+                        if getattr(rec, "field", ""):
+                            existing_map.setdefault(rec.field, []).append(val)
         existing_values = {k: tuple(dict.fromkeys(v)) for k, v in existing_map.items()} or None
         with s.receipt.stage('business'):
             outcome = writes.propose(operation, inputs, step=s.step,

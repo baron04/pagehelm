@@ -78,6 +78,19 @@ _FMS_DUAL_MONTH_TRIGGER = re.compile(
 )
 
 
+def _found_candidate_pairs(found: list) -> list[tuple[str, object]]:
+    pairs: list[tuple[str, object]] = []
+    for item in found or ():
+        if isinstance(item, tuple) and len(item) == 2:
+            ent_slug, val = item
+            if ent_slug:
+                pairs.append((ent_slug, val))
+            pairs.append(("", val))
+        else:
+            pairs.append(("", item))
+    return pairs
+
+
 def _attach_fms_dual_month_receipt(store, note: str, vals: tuple[str, ...], *, policy_turn=None) -> str:
     bucket = getattr(store, "precomputed_date_values", None)
     if bucket is None:
@@ -689,7 +702,7 @@ class YudaoProceduresBase:
                 return LoopToolResult("查找未完成：" + str(exc) + "。用 search_api 核对接口，再用 call_api 读取。",
                                       kind="read", state="refused", error_code="invalid_arguments")
             if policy_turn is not None:
-                note_candidates(policy_turn, (("", value) for value in found))
+                note_candidates(policy_turn, _found_candidate_pairs(found))
             return LoopToolResult(text, kind="read", answer_targets=tuple(targets))
         if name == "call_api":
             self._note(s, stage="tool", tool=name, arguments=said)
@@ -1424,7 +1437,8 @@ class YudaoProceduresBase:
         told, lists, several = [], [], False
         for entity, records in hits:
             if found_values is not None:
-                found_values += [value for rid, display, _address in records
+                slug = str(entity or "").strip("/")
+                found_values += [(slug, value) for rid, display, _address in records
                                  for value in (rid, display) if value]
             page = pages.get(entity, "")
             path = self.knowledge.page_path(page) if page else ""
@@ -1801,7 +1815,7 @@ class YudaoProceduresBase:
                     kind="read", state="refused", error_code="invalid_arguments",
                 )
             if policy_turn is not None:
-                note_candidates(policy_turn, (("", value) for value in prepared["found"]))
+                note_candidates(policy_turn, _found_candidate_pairs(prepared["found"]))
             return LoopToolResult(prepared["text"], kind="read", answer_targets=tuple(prepared["targets"]))
         if name == "call_api":
             know = self.knowledge

@@ -564,8 +564,11 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
         handoffs = getattr(self.knowledge, "handoffs", BASELINE_SESSION_HANDOFFS)
         date_override = getattr(self, "_date_override", getattr(self, "today", ""))
         time_zone = getattr(self, "_time_zone", "Asia/Shanghai")
+        today_val = _today(date_override, time_zone)
         tables = TurnTables(handoffs)
-        ctx.turn_tables = (tables, _today(date_override, time_zone), time_zone)
+        ctx.today = today_val
+        self.knowledge.session_today = today_val
+        ctx.turn_tables = (tables, today_val, time_zone)
         try:
             with turn_actor_reads(self.knowledge.client, turn_context=ctx, knowledge=self.knowledge):
                 return super()._run(state)
@@ -1210,7 +1213,8 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
         return result
 
     def __init__(self, *, knowledge, actor_name="", today="", time_zone="Asia/Shanghai", conventions=(),
-                 draft_steps=None, mutation_prefill=None, location_bindings=False, native_submit=None, page_reads=None, **kwargs):
+                 draft_steps=None, mutation_prefill=None, location_bindings=False, native_submit=None, page_reads=None,
+                 enable_domain_packs: bool = True, **kwargs):
         self._date_override, self._time_zone = today, time_zone
         kwargs.setdefault("model_steps", MODEL_STEPS)
         application, goal_port = kwargs["application"], kwargs["goal_port"]
@@ -1229,7 +1233,7 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
         )
         owner.page_reads = page_reads
         review = getattr(goal_port, "review", None)
-        schemas = _table_tool_schemas(review)
+        schemas = _table_tool_schemas(review, include_domain_switch=bool(enable_domain_packs))
         if location_bindings:
             from ..reads.location import location_schemas
             schemas = location_schemas(schemas)
@@ -1267,7 +1271,7 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
         ops_port = getattr(getattr(application, "ports", None), "operations", None)
         ops_available = bool(ops_port is not None and getattr(getattr(ops_port, "tools", None), "definitions", ()))
         owner.writes_enabled = bool(ops_available and native_submit is not None)
-        owner.enable_domain_packs = True
+        owner.enable_domain_packs = bool(enable_domain_packs)
         if native_submit is not None:
             self.native_submit = native_submit
             if hasattr(self.channel, "read_only_mode"):

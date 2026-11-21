@@ -64,7 +64,9 @@ PAGE_DEFAULT_ANNOTATION = "（页面默认值）"
 DefaultValueKind = Literal["actor", "literal"]
 _SECRET_FIELD = DEFAULT_SECRET_FIELD_PATTERN
 _INDEX_MATCH = re.compile(r"^(?:#|第\s*)(\d+)(?:\s*[行条项])?$")
-_CANDIDATE_ID_SUFFIX = re.compile(r"^(.+?)\s*[（(](?:ID\s*=|编号\s*|#)\s*([^）)]+)\s*[）)]$")
+_CANDIDATE_ID_SUFFIX = re.compile(
+    r"^(.+?)\s*[（(](?:[A-Za-z][A-Za-z0-9_]*Id\s*[=：:]|ID\s*[=：:]|id\s*[=：:]|编号\s*[=：:]?|#)\s*([^）)]+)\s*[）)]$"
+)
 
 
 def is_rejected_ui_sentinel(
@@ -466,6 +468,13 @@ class CompiledCreateHandler:
     def __init__(self, port: CompiledWritePort):
         self.port = port
 
+    def validate_intent_alignment(self, inputs: dict, texts: tuple[str, ...]) -> None:
+        """Run optional adapter guard rejecting unrequested prerequisite/upstream creates."""
+        align_fn = getattr(self.port, "check_create_intent_alignment", None)
+        if callable(align_fn):
+            entity = str(inputs.get("entity") or "").strip().strip("/")
+            align_fn(entity, tuple(texts))
+
     def execute(self, args: dict, *, context=None) -> BusinessToolResult:
         raise BusinessToolRequestError("create_record is a write proposal tool")
 
@@ -499,6 +508,8 @@ class CompiledCreateHandler:
         details = []
         default_lookup = spec.default_map()
         indexed_items: list[tuple[int, ConventionFieldSpec, object]] = []
+        errors: list[str] = []
+        ref_errors: list[BusinessToolReferenceError] = []
 
         for idx, item in enumerate(raw_fields):
             raw_field = str(item.get("field") or "").strip()
@@ -507,18 +518,20 @@ class CompiledCreateHandler:
                 supported = "、".join(
                     f"{f.name}({f.label})" if f.label else f.name for f in spec.fields[:25]
                 )
-                raise BusinessToolRequestError(
+                errors.append(
                     f"实体「{entity}」不支持在新建时传入字段「{raw_field}」（支持字段：{supported}）；"
                     f"如需其他表单专属字段，请{cap.form_fallback_phrase()}。"
                 )
+                continue
             if f_spec.name in seen_fields:
-                raise BusinessToolRequestError(f"字段「{f_spec.name}」在同一次新建中重复出现。")
+                errors.append(f"字段「{f_spec.name}」在同一次新建中重复出现。")
+                continue
             seen_fields.add(f_spec.name)
             raw_val = item.get("value")
             if raw_val is None or raw_val == "":
                 if f_spec.required:
                     shown = f"{f_spec.label}（{f_spec.name}）" if f_spec.label else f_spec.name
-                    raise BusinessToolRequestError(f"新建{spec.label}必填字段「{shown}」不能为空或 null，请向用户确认后再提交。")
+                    errors.append(f"新建{spec.label}必填字段「{shown}」不能为空或 null，请向用户确认后再提交。")
                 continue
             indexed_items.append((idx, f_spec, raw_val))
 
@@ -554,12 +567,19 @@ class CompiledCreateHandler:
         for pos, (idx, f_spec, raw_val) in enumerate(indexed_items):
             try:
                 api_val, disp, binding = _encode_one(f_spec, raw_val)
-            except (BusinessToolRequestError, BusinessToolReferenceError):
+                _check_explicit_bounds(f_spec, api_val)
+            except BusinessToolReferenceError as exc:
                 if f_spec.reference_entity and pos + 1 < len(indexed_items):
                     deferred.append((idx, f_spec, raw_val))
-                    continue
-                raise
-            _check_explicit_bounds(f_spec, api_val)
+                else:
+                    ref_errors.append(exc)
+                continue
+            except BusinessToolRequestError as exc:
+                if f_spec.reference_entity and pos + 1 < len(indexed_items):
+                    deferred.append((idx, f_spec, raw_val))
+                else:
+                    errors.append(str(exc))
+                continue
             resolved_fields[f_spec.name] = api_val
             resolved_entries.append((idx, f_spec, api_val, disp, binding))
 
@@ -569,16 +589,23 @@ class CompiledCreateHandler:
             for idx, f_spec, raw_val in deferred:
                 try:
                     api_val, disp, binding = _encode_one(f_spec, raw_val)
+                    _check_explicit_bounds(f_spec, api_val)
                 except (BusinessToolRequestError, BusinessToolReferenceError):
                     next_deferred.append((idx, f_spec, raw_val))
                     continue
-                _check_explicit_bounds(f_spec, api_val)
                 resolved_fields[f_spec.name] = api_val
                 resolved_entries.append((idx, f_spec, api_val, disp, binding))
                 progress = True
             if not progress:
-                # Re-run first unresolved item to surface its original typed error cleanly.
-                _encode_one(next_deferred[0][1], next_deferred[0][2])
+                for _idx, f_spec, raw_val in next_deferred:
+                    try:
+                        api_val, _d, _b = _encode_one(f_spec, raw_val)
+                        _check_explicit_bounds(f_spec, api_val)
+                    except BusinessToolReferenceError as exc:
+                        ref_errors.append(exc)
+                    except BusinessToolRequestError as exc:
+                        errors.append(str(exc))
+                break
             deferred = next_deferred
 
         for _idx, f_spec, api_val, disp, binding in sorted(resolved_entries, key=lambda entry: entry[0]):
@@ -624,19 +651,23 @@ class CompiledCreateHandler:
         # Fail closed when required fields (or conditional required form rules) remain missing
         missing: list[str] = []
         for f_spec in spec.fields:
-            if not f_spec.required or f_spec.name in payload or f_spec.name in spec.server_computed_fields:
+            if not f_spec.required or f_spec.name in payload or f_spec.name in seen_fields or f_spec.name in spec.server_computed_fields:
                 continue
             lbl = f"{f_spec.label}（{f_spec.name}）" if f_spec.label else f_spec.name
             hint = "（页面为占位值，不静默代填）" if f_spec.name in default_lookup else ""
             missing.append(lbl + hint)
-        if spec.conditional_required_fn is not None:
+        if spec.conditional_required_fn is not None and not errors and not ref_errors:
             for req_field, reason in spec.conditional_required_fn(payload):
                 if payload.get(req_field) in (None, ""):
                     missing.append(reason)
         if missing:
-            raise BusinessToolRequestError(
-                f"新建{spec.label}还缺少以下必填信息，请先向用户确认：{'、'.join(missing)}。"
-            )
+            errors.append(f"新建{spec.label}还缺少以下必填信息，请先向用户确认：{'、'.join(missing)}。")
+
+        if not errors and len(ref_errors) == 1:
+            raise ref_errors[0]
+        combined_errors = list(dict.fromkeys([*errors, *(str(e) for e in ref_errors)]))
+        if combined_errors:
+            raise BusinessToolRequestError("；".join(combined_errors))
 
         diff = ProposalDiff.from_details((f"新建{spec.label}",), details)
         change = RequestedEffect(
@@ -692,24 +723,52 @@ class CompiledCreateHandler:
         joined_words = "\n".join(texts)
         ledger, receipt_vals = collect_provenance_context(existing_values)
 
+        actor_tokens_fn = getattr(self.port, "actor_provenance_tokens", None)
+        actor_entities_fn = getattr(self.port, "actor_reference_entities", None)
+        if callable(actor_tokens_fn):
+            actor_tokens = tuple(str(t).strip() for t in (actor_tokens_fn() or ()) if str(t).strip())
+            if actor_tokens:
+                actor_ents = set(actor_entities_fn() or ()) if callable(actor_entities_fn) else set()
+                for d_spec in spec.defaults:
+                    if d_spec.kind == "actor":
+                        df = spec.resolve_field(d_spec.field)
+                        if df is not None and df.reference_entity:
+                            actor_ents.add(df.reference_entity)
+                if actor_ents:
+                    ledger.add_candidates([(ent, tok) for ent in sorted(actor_ents) for tok in actor_tokens])
+
+        anchor_dates_fn = getattr(self.port, "session_anchor_dates", None)
+        if callable(anchor_dates_fn):
+            extra_dates = tuple(str(d).strip() for d in (anchor_dates_fn() or ()) if str(d).strip())
+            if extra_dates:
+                receipt_vals = tuple(dict.fromkeys([*receipt_vals, *extra_dates]))
+
+        enum_tokens_fn = getattr(self.port, "enum_provenance_tokens", None)
+        prov_errors: list[str] = []
         for item in inputs.get("fields") or ():
             f_spec = spec.resolve_field(str(item.get("field") or "").strip())
             if f_spec is None:
                 continue
-            validate_single_field_provenance(
-                f_spec,
-                item.get("value"),
-                old_val=None,
-                texts=texts,
-                prompt=prompt,
-                joined_words=joined_words,
-                ledger=ledger,
-                receipt_vals=receipt_vals,
-                existing_values=existing_values,
-                allow_append=False,
-                allow_existing_candidates=False,
-                allow_fk_candidates=bool(f_spec.reference_entity),
-            )
+            try:
+                validate_single_field_provenance(
+                    f_spec,
+                    item.get("value"),
+                    old_val=None,
+                    texts=texts,
+                    prompt=prompt,
+                    joined_words=joined_words,
+                    ledger=ledger,
+                    receipt_vals=receipt_vals,
+                    existing_values=existing_values,
+                    allow_append=False,
+                    allow_existing_candidates=False,
+                    allow_fk_candidates=bool(f_spec.reference_entity),
+                    enum_tokens_fn=enum_tokens_fn,
+                )
+            except BusinessToolRequestError as exc:
+                prov_errors.append(str(exc))
+        if prov_errors:
+            raise BusinessToolRequestError("；".join(dict.fromkeys(prov_errors)))
 
     def dispatch(self, args: dict, *, context=None) -> BusinessToolResult:
         entity = args["entity"]
@@ -910,7 +969,16 @@ class CompiledAggregateUpdateHandler:
             f_spec = spec.resolve_field(raw_field)
             if f_spec is None:
                 supported = "、".join(f"{f.name}({f.label})" if f.label else f.name for f in spec.fields[:20])
-                raise BusinessToolRequestError(cap.unsupported_field_message(entity, raw_field, supported))
+                col_desc = "；".join(
+                    f"{c.name}({c.label})[{', '.join(f'{cf.name}({cf.label})' if cf.label else cf.name for cf in c.fields[:15])}]"
+                    for c in spec.collections
+                )
+                raise BusinessToolRequestError(
+                    f"实体「{entity}」主表 changes 不支持字段「{raw_field}」（主表支持：{supported}）。"
+                    f"此实体支持通过同一 update_record 工具修改子表/明细项，请先读取目标记录现有明细行，再在参数 line_changes 中传"
+                    f"[{{\"collection\": \"<集合名>\", \"match\": \"<明细行名或#行号>\", \"mode\": \"update|add|remove\", \"changes\": [{{\"field\": \"<子字段>\", \"value\": ...}}]}}]："
+                    f"可用子集合：{col_desc}。"
+                )
             if f_spec.name in seen_parent:
                 raise BusinessToolRequestError(f"主表字段「{f_spec.name}」在同一次修改中重复出现。")
             seen_parent.add(f_spec.name)
@@ -1180,6 +1248,7 @@ class CompiledAggregateUpdateHandler:
                 existing_values=existing_values,
                 allow_append=True,
                 allow_existing_candidates=True,
+                enum_tokens_fn=getattr(self.port, "enum_provenance_tokens", None),
             )
 
         for lc in inputs.get("line_changes") or ():
@@ -1206,6 +1275,7 @@ class CompiledAggregateUpdateHandler:
                     existing_values=existing_values,
                     allow_append=False,
                     allow_existing_candidates=True,
+                    enum_tokens_fn=getattr(self.port, "enum_provenance_tokens", None),
                 )
 
     def _verify_collection_match(
@@ -1366,8 +1436,11 @@ class CompiledAggregateUpdateHandler:
                 {"effect": "record", "verified": True, "id": record_id},
                 {"effect": "unrelated_field_preservation", "verified": True, "id": record_id},
             ]
+            content_payload = {"verified": True, "record_id": str(record_id), "entity": entity, "reference": reference, "effects": effects}
+            if spec.readback_strategy == "change_record_id" and dispatch_result not in (None, ""):
+                content_payload["change_record_id"] = str(dispatch_result)
             return BusinessToolResult(
-                {"verified": True, "record_id": str(record_id), "entity": entity, "reference": reference, "effects": effects},
+                content_payload,
                 {"verified": True, "operation": "update_record", "effects": effects},
             )
 

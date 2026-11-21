@@ -4,8 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
-_ENUM_CONSTANT = re.compile(r'\b([A-Z][A-Z0-9_]+)\(\s*-?\d+\s*,\s*"([^"]+)"')
-_ENUM_CODE_VALUE = re.compile(r'\b[A-Z][A-Z0-9_]+\(\s*(-?\d+)\s*,\s*"([^"]+)"')
+_ENUM_CONSTANT = re.compile(r'\b([A-Z][A-Z0-9_]+)\(\s*-?\d+\s*,(?:[^"()]*\([^()]*\)[^"()]*,|[^"();]+,)?\s*"([^"]+)"')
+_ENUM_CODE_VALUE = re.compile(r'\b[A-Z][A-Z0-9_]+\(\s*(-?\d+)\s*,(?:[^"()]*\([^()]*\)[^"()]*,|[^"();]+,)?\s*"([^"]+)"')
 _ENUM_STR_CODE_VALUE = re.compile(r'\b[A-Z][A-Z0-9_]+\(\s*"([^"]+)"\s*,\s*"([^"]+)"')
 _ENUM_NAME = re.compile(r"\b(\w+Enum)\.([A-Z][A-Z0-9_]+)\.getName\(\)")
 _DICT_CONST_DECL = re.compile(r'\bString\s+([A-Z][A-Z0-9_]+)\s*=\s*"([^"]+)"')

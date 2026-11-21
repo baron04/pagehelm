@@ -61,7 +61,8 @@ YUDAO_DOMAIN_PACKS: tuple[DomainToolpack, ...] = (
         aliases=("crm", "crm-sales", "客户", "线索", "联系人", "商机", "合同", "回款", "回款计划", "公海", "跟进"),
         route_prefixes=("/crm",),
         write_contract_text=(
-            "回款新建调 create_record(entity='crm/receivable')，期次外键支持「父名称/第N期」或已读候选ID。"
+            "回款新建调 create_record(entity='crm/receivable')，期次外键支持「父名称/第N期」或已读候选ID；"
+            "若回款计划缺失或无权读取，应直接说明或 need_input，严禁擅自调 crm_receivable_plan_create 代建计划。"
         ),
         read_contract_text="实体前缀 crm/customer、crm/contact、crm/clue、crm/business、crm/contract、crm/receivable-plan、crm/receivable。",
         default_priority=3,
@@ -107,7 +108,12 @@ YUDAO_DOMAIN_PACKS: tuple[DomainToolpack, ...] = (
         label="HRM 人事档案考勤与薪酬",
         aliases=("hrm", "hrm-org-salary", "hrm-salary", "人事", "员工", "入职", "在职", "离职", "花名册", "档案", "薪资", "薪酬", "调薪", "定薪", "工资", "考勤", "打卡", "请假", "排班", "假期", "招聘", "候选人"),
         route_prefixes=("/hrm",),
-        write_contract_text="员工新建用 create_record(entity='hrm/employee')；调薪/薪资项用 update_record(entity='hrm/salary/employee-info', target='姓名或ID', line_changes=...) [id=employeeId]。",
+        write_contract_text=(
+            "员工新建用 create_record(entity='hrm/employee')；"
+            "调薪/定薪改薪资项用 update_record(entity='hrm/salary/employee-info', target='姓名或姓名(employeeId=编号)', "
+            "changes=[主表字段], line_changes=[{'collection':'salaryOptions','match':'薪资项名称或编码','changes':[{'field':'value','value':金额}]}])"
+            "（regularSalary/probationSalary 为汇总只读列，勿放 changes）。"
+        ),
         read_contract_text="实体前缀 hrm/employee、hrm/salary/employee-info、hrm/salary/*、hrm/attendance/*、hrm/recruit/*。",
         default_priority=1,
         co_activate_domains=("system_infra", "oa_bpm"),
@@ -308,9 +314,9 @@ def format_write_entry_line(entry: dict) -> str:
             extra = f" | 外键: {', '.join(fks[:5])}"
         return f"[写入契约] create_record(entity=\"{entity}\", fields=[...]) — {label} | 必填: {req}{extra}"
     if kind == "compiled_aggregate_update":
-        cols = ", ".join(entry.get("collections") or ())
+        cols = "、".join(entry.get("collection_details") or entry.get("collections") or ())
         id_note = f" [id={entry['id_field']}]" if entry.get("id_field") and entry["id_field"] != "id" else ""
-        return f"[写入契约] update_record(entity=\"{entity}\", target=..., changes/line_changes=[...]){id_note} — {label} | 子表: {cols}"
+        return f"[写入契约] update_record(entity=\"{entity}\", target=..., changes/line_changes=[...]){id_note} — {label} | 子表(line_changes): {cols}"
     if kind == "compiled_update":
         return f"[写入契约] update_record(entity=\"{entity}\", target=..., changes=[...]) — {label}"
     if kind == "compiled_status":

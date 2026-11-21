@@ -476,6 +476,7 @@ def validate_single_field_provenance(
     allow_append: bool = True,
     allow_existing_candidates: bool = True,
     allow_fk_candidates: bool = True,
+    enum_tokens_fn=None,
 ) -> None:
     """Validate provenance for one field input against user texts, scoped candidates, and receipts."""
     label = f_spec.label or f_spec.name
@@ -617,8 +618,15 @@ def validate_single_field_provenance(
             "开启": ("开启", "启用", "正常", "有效"),
             "关闭": ("关闭", "停用", "禁用"),
         }
-        accepted = synonyms.get(s_tok, (s_tok,))
-        if any(literal_supplied(w, texts) for w in accepted) or s_tok in field_cands:
+        accepted_list: list[str] = [s_tok, *synonyms.get(s_tok, ())]
+        if callable(enum_tokens_fn):
+            for tok in enum_tokens_fn(f_spec, raw_val) or ():
+                tok_s = str(tok).strip()
+                if tok_s:
+                    accepted_list.append(tok_s)
+                    accepted_list.extend(synonyms.get(tok_s, ()))
+        accepted = tuple(dict.fromkeys(accepted_list))
+        if any(literal_supplied(w, texts) for w in accepted) or any(w in field_cands for w in accepted):
             return
         raise BusinessToolRequestError(
             f"枚举字段「{label}」的选项「{s_tok[:60]}」未在用户原话中找到依据。"
@@ -629,13 +637,15 @@ def validate_single_field_provenance(
         _verify_scaled_number_provenance(f_spec, raw_val, texts, receipts=receipt_vals)
         return
 
-    # 7. Date / datetime string inputs (for both string dates and epoch-ms timestamps)
-    if f_spec.date_kind and isinstance(raw_val, str) and raw_val:
-        if not _entry_provenance_ok(Entry(label, raw_val, kind="text"), scoped_cands, texts, receipts=receipt_vals):
-            raise BusinessToolRequestError(
-                f"字段「{label}」的日期时间值「{raw_val}」未在用户原话或本轮时间换算中找到依据，请向用户确认。"
-            )
-        return
+    # 7. Date / datetime inputs (both string dates and integer epoch-ms timestamps)
+    if f_spec.date_kind and raw_val is not None and not isinstance(raw_val, bool):
+        val_str = raw_val.strip() if isinstance(raw_val, str) else scalar_text(raw_val).strip()
+        if val_str:
+            if not _entry_provenance_ok(Entry(label, val_str, kind="text"), scoped_cands, texts, receipts=receipt_vals):
+                raise BusinessToolRequestError(
+                    f"字段「{label}」的日期时间值「{val_str}」未在用户原话或本轮时间换算中找到依据，请向用户确认。"
+                )
+            return
 
     # 8. Plain strings: literal in user text, safe append over old_val, or scoped candidate
     if f_spec.kind == "string" and isinstance(raw_val, str) and raw_val:
@@ -882,6 +892,7 @@ class ConventionUpdateHandler:
                 existing_values=existing_values,
                 allow_append=True,
                 allow_existing_candidates=True,
+                enum_tokens_fn=getattr(self.port, "enum_provenance_tokens", None),
             )
 
     def dispatch(self, args: dict, *, context=None) -> BusinessToolResult:

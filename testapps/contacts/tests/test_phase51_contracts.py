@@ -389,6 +389,195 @@ class Phase51ContractTests(unittest.TestCase):
                     existing_values={"child_plans": ("501",), "parents": ("Parent-A",), "memo": ("leaked-scalar",)},
                 )
 
+    def test_intent_alignment_multi_error_d1_d2_enum_and_aggregate_guidance(self):
+        from dataclasses import dataclass as _dc
+        from web_operation_agent.business.compiled_writes import (
+            CompiledAggregateUpdateHandler,
+            CompiledAggregateUpdateSpec,
+            CompiledChildCollectionSpec,
+            CompiledFieldDefault,
+            _CANDIDATE_ID_SUFFIX,
+        )
+        from web_operation_agent.business.tools.contracts import BusinessMutationProposal
+
+        m = _CANDIDATE_ID_SUFFIX.fullmatch("Ada Lovelace（employeeId=112）")
+        self.assertIsNotNone(m)
+        self.assertEqual((m.group(1), m.group(2)), ("Ada Lovelace", "112"))
+
+        class _GateHandler:
+            def validate_intent_alignment(self, inputs, texts):
+                joined = "\n".join(texts)
+                if "downstream" in joined and "prerequisite" not in joined:
+                    raise BusinessToolRequestError("cannot create prerequisite on downstream request")
+
+            def execute(self, args, *, context=None):
+                raise BusinessToolRequestError("write only")
+
+            def prepare(self, inputs, *, context=None):
+                return BusinessMutationSpec(
+                    {"ok": True},
+                    "Create prerequisite",
+                    ("prereq",),
+                    reconcile_key="k1",
+                    reconciliation={"entity": "prereq"},
+                )
+
+            def dispatch(self, args, *, context=None):
+                return {"id": 1}
+
+            def verify_readback(self, args, result):
+                return None
+
+        with tempfile.TemporaryDirectory() as td:
+            now = 1_700_000_000_000
+            principal = PrincipalContext(1, "demo", "1", "7", "9", "synthetic", now - 1000, now + 60000, ("demo.write",))
+            ledger = SessionLedger(Path(td) / "gate.jsonl", "run")
+            asked_calls: list[str] = []
+            approvals = ApprovalWatch(
+                ledger=ledger,
+                run_id="run",
+                principal=principal,
+                session_id="s",
+                turn_id="t",
+                business_approval=lambda *a, **kw: asked_calls.append("asked"),
+                cancelled=lambda: False,
+            )
+            gate_tool = ToolDefinition(
+                "prereq_create",
+                "Create prerequisite",
+                json.dumps({"type": "object", "properties": {"note": {"type": "string"}}, "required": ["note"], "additionalProperties": False}),
+                "write",
+                "demo.write",
+                ToolOperation("prereq", "create"),
+                _GateHandler(),
+            )
+            tools = ToolRegistry((gate_tool,))
+            skills = SkillRegistry((SkillArtifact.from_files("demo", {
+                "SKILL.md": b"---\nname: prereq\ndescription: prereq\n---\nBody\n",
+                "agents/woa.toml": b'schema_version = 1\nwrite_operations = ["prereq_create"]\n',
+            }),))
+            from web_operation_agent.business.runtime import BusinessToolRuntime
+            from web_operation_agent.composition.business_operations import RegisteredOperations
+            from types import SimpleNamespace as NS
+
+            runtime = BusinessToolRuntime.from_registry(tools, application_id="demo", skill_registry=skills, require_skill_for_writes=True)
+            app = NS(
+                business_tools=runtime,
+                ports=NS(operations=RegisteredOperations(tools, skills, lambda _e: None, default_loaded_skill_ids=frozenset({"demo.prereq"}))),
+            )
+            writes = SkillWrites(app, approvals)
+            out = writes.propose("prereq_create", {"note": "downstream missing plan"}, step=1, texts=("handle downstream missing plan",))
+            self.assertEqual(out.state, "refused")
+            self.assertFalse(out.asked)
+            self.assertEqual(asked_calls, [])
+            refused_evs = [e for e in ledger.events if e.get("event") == "skill_operation_refused"]
+            self.assertTrue(refused_evs)
+            self.assertFalse(refused_evs[-1].get("asked", False))
+
+        class _RichPort(_DummyPort):
+            def create_specs(self):
+                return {
+                    "employees": CompiledCreateSpec(
+                        entity="employees",
+                        label="Employee",
+                        fields=(
+                            ConventionFieldSpec("name", "string", "Name", required=True),
+                            ConventionFieldSpec("ownerId", "integer", "Owner", reference_entity="actors"),
+                            ConventionFieldSpec("status", "integer", "Status", required=True, enum_type="emp_status"),
+                            ConventionFieldSpec("entryDate", "integer", "EntryDate", date_kind="epoch_ms"),
+                        ),
+                        defaults=(CompiledFieldDefault("ownerId", "actor", None),),
+                    )
+                }
+
+            def aggregate_update_specs(self):
+                return {
+                    "salary/info": CompiledAggregateUpdateSpec(
+                        entity="salary/info",
+                        label="Salary Info",
+                        fields=(ConventionFieldSpec("remark", "string", "Remark"),),
+                        collections=(
+                            CompiledChildCollectionSpec(
+                                "salaryOptions",
+                                "Salary Options",
+                                (ConventionFieldSpec("name", "string", "Option Name"), ConventionFieldSpec("value", "number", "Amount")),
+                            ),
+                        ),
+                        id_field="employeeId",
+                    )
+                }
+
+            def actor_provenance_tokens(self):
+                return ("DemoOwner",)
+
+            def actor_reference_entities(self):
+                return ("actors",)
+
+            def session_anchor_dates(self):
+                return ("2026-10-25", "1792886400000")
+
+            def enum_provenance_tokens(self, f_spec, raw_val):
+                if f_spec.enum_type == "emp_status" and str(raw_val) in {"1", "Formal"}:
+                    return ("1", "Formal")
+                return ()
+
+            def encode_create_field(self, spec, f_spec, raw_val, *, actor_id, resolved_fields=None):
+                if f_spec.name == "status":
+                    return 1, "Formal", {"kind": "enum"}
+                if f_spec.name == "ownerId":
+                    return 7, "DemoOwner (ID=7)", None
+                if f_spec.name == "entryDate":
+                    return 1792886400000, "2026-10-25 00:00:00", None
+                return str(raw_val), str(raw_val), None
+
+            def encode_create_default(self, spec, f_spec, d_spec, *, actor_id):
+                return 7, "DemoOwner (ID=7)", None
+
+            def resolve_target(self, entity, target, *, spec):
+                return {"employeeId": 112, "remark": "old", "salaryOptions": [{"id": 1, "name": "Base", "value": 10000}]}
+
+        rich_port = _RichPort()
+        c_handler = CompiledCreateHandler(rich_port)
+        with self.assertRaises(BusinessToolRequestError) as multi_ctx:
+            c_handler.prepare({"entity": "employees", "fields": [{"field": "badCol", "value": "x"}]})
+        self.assertIn("badCol", str(multi_ctx.exception))
+        self.assertIn("Name", str(multi_ctx.exception))
+        self.assertIn("Status", str(multi_ctx.exception))
+
+        create_inputs = {
+            "entity": "employees",
+            "fields": [
+                {"field": "name", "value": "Ada"},
+                {"field": "ownerId", "value": "DemoOwner"},
+                {"field": "status", "value": "1"},
+                {"field": "entryDate", "value": 1792886400000},
+            ],
+        }
+        cspec = c_handler.prepare(create_inputs)
+        cprop = BusinessMutationProposal(
+            tool="create_record",
+            args=create_inputs,
+            effect="Create",
+            targets=("employees",),
+            nonce="0" * 32,
+            operation_context_digest="a" * 64,
+            details=(),
+            effect_projection=cspec.effect_projection,
+        )
+        c_handler.validate_provenance(create_inputs, ("Create Formal employee Ada today",), cprop)
+
+        agg_handler = CompiledAggregateUpdateHandler(rich_port)
+        with self.assertRaises(BusinessToolRequestError) as agg_ctx:
+            agg_handler.prepare({
+                "entity": "salary/info",
+                "target": "Ada（employeeId=112）",
+                "changes": [{"field": "regularSalary", "value": 15000}],
+            })
+        msg = str(agg_ctx.exception)
+        self.assertIn("line_changes", msg)
+        self.assertIn("salaryOptions", msg)
+        self.assertIn("Amount", msg)
+
 
 if __name__ == "__main__":
     unittest.main()

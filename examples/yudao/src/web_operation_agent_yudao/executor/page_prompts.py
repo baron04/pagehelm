@@ -51,6 +51,7 @@ class SlimTurnContext:
     turn_tables: tuple[Any, str, str] | None = None
     executor_turn: dict | None = None
     actor_reads: dict[str, Any] | None = None
+    today: str = ""
 
 
 # -- tools ------------------------------------------------------------------------------
@@ -233,9 +234,15 @@ TABLE_TOOLS = (
 _TABLE_TOOLS = frozenset(tool["function"]["name"] for tool in TABLE_TOOLS)
 
 
-def _table_tool_schemas(review):
-    yield from scoped_page_tools(review)
-    yield from TABLE_TOOLS
+def _table_tool_schemas(review, *, include_domain_switch: bool = True):
+    for schema in scoped_page_tools(review):
+        if not include_domain_switch and schema["function"]["name"] == "switch_domain":
+            continue
+        yield schema
+    for schema in TABLE_TOOLS:
+        if not include_domain_switch and schema["function"]["name"] == "switch_domain":
+            continue
+        yield schema
 
 
 SYSTEM_PAGE = """2. 页面请求用search_menu/goto，记录有详情地址就直接goto；否则定位唯一行。没有详情可交接唯一列表行，不用编辑代替查看。名称跨模块按部署用语约定；不明确就问。
@@ -313,7 +320,7 @@ def structured_write_routing_rules(
                 "（程序自动加载 Skill）；缺失必填值调 finish(status='need_input') 追问，"
                 "修改备注除非明示追加否则按用户给定新文本写入，**在用户未明示草稿预填时严禁滑向网页表单预填冒充完成**。"
                 "关联外键允许绑定本轮同账号已核实读取的目标实体记录（确切业务名称、父名称/第N期 或已读候选ID）；"
-                "非外键标量属性严禁跨记录借用；只问流程或仅要求预填时禁止提出写入提案。"
+                "非外键标量属性严禁跨记录借用；若所引用的前置计划或父记录（如回款计划、合同等）缺失或无权限，应直接如实说明原因或调 finish(status='need_input') 追问，**严禁在未获请求时擅自新建前置实体（如登记实际回款时擅自调用 crm_receivable_plan_create）**；只问流程或仅要求预填时禁止提出写入提案。"
             )
         else:
             lines.append(
@@ -365,6 +372,7 @@ def apply_write_route_capability(
             )
             new_partial = (
                 "若 API 写入拒绝或缺失必填值，先用 finish(status=\"need_input\") 向用户确认或如实说明边界（cannot）；"
+                "若所引用的前置计划/父记录缺失或无权限，禁止在未获用户明示时擅自新建该前置实体（如登记回款时不得代建回款计划）；"
                 f"仅当部分字段/动作确属未覆盖表单或行内场景时才改走用户页表单预填交接{partial_row}，"
                 "若应用页面本身也不支持，则如实说明办不到的部分（cannot），不要只办能办的部分就说完成。"
             )

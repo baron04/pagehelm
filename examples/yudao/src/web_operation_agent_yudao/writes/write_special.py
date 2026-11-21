@@ -72,6 +72,12 @@ class NativeSpecialHandler:
     def __init__(self, base):
         self.base, self.client, self.operation, self.goal_data = base, base.client, base.operation, base.goal_data
 
+    def validate_intent_alignment(self, inputs: dict, texts: tuple[str, ...]) -> None:
+        if self.operation == "crm_receivable_plan_create":
+            from .convention_writes import check_unrequested_prerequisite_create
+
+            check_unrequested_prerequisite_create("crm/receivable-plan", texts)
+
     def _grants(self, record_id, biz_type=2):
         grants = self.client.get("crm/permission/list", bizType=biz_type, bizId=record_id)
         if not isinstance(grants, list) or any(not isinstance(g, dict) or "userId" not in g or "level" not in g for g in grants):

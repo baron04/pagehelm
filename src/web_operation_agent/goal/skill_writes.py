@@ -185,6 +185,9 @@ class SkillWrites:
             if key in self._completed:
                 return OperationOutcome("repeated")
             validate_input(json.loads(definition.input_json), inputs)
+            align_fn = getattr(definition.handler, "validate_intent_alignment", None)
+            if callable(align_fn):
+                align_fn(inputs, tuple(texts))
             require_literal_inputs(inputs, definition, texts, existing_values=existing_values)
             expected = (definition.effect_contract.project_inputs(inputs)
                         if definition.effect_contract is not None else None)

@@ -28,8 +28,8 @@ from .java_scan import _CALL, _METHOD_MAPPING, _OPERATION, _SERVICE_CALL, _SERVI
 _SECRET = DEFAULT_SECRET_FIELD_PATTERN
 _VOLATILE = frozenset({"updateTime", "updater", "updaterName", "modifyTime", "version", "createTime", "creator", "creatorName"})
 _NAME_CANDIDATES = (
-    "name", "title", "no", "postName", "companyName", "nickname",
-    "username", "employeeName", "voucherNumber", "digest", "subject",
+    "name", "title", "no", "employeeName", "postName", "companyName", "nickname",
+    "username", "voucherNumber", "digest", "subject",
     "code", "jobNumber", "signature", "label",
     "itemName", "spuName", "userNickname", "content",
 )

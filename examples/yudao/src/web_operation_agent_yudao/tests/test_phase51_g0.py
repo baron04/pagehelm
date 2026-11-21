@@ -546,6 +546,697 @@ class Phase51G0Tests(unittest.TestCase):
         empty_text = know_empty.call_api("erp/sale/page", {"no": "NOPE", "pageNo": 1, "pageSize": 20}, row_sink=tables2.add)
         self.assertIn("精确绑定空集核实（complete=True，0 行）", empty_text)
 
+    def test_cell_values_large_table_and_verified_turn_id_source_ledger(self):
+        from web_operation_agent.execution.value_source import SourceLedger
+        from web_operation_agent_yudao.writes.convention_writes import _verified_turn_id
+
+        rows = [{"id": i + 1, "name": f"计划-{i + 1}", "remark": f"note-{i + 1}"} for i in range(460)]
+        rows.append({"id": 9999, "name": "末尾目标计划", "remark": "tail"})
+        all_cands, bound = _cell_values(rows, cap=400, entity_slug="crm/receivable-plan")
+        self.assertEqual(len(bound), 400)
+        self.assertIn(("crm/receivable-plan", 9999), all_cands)
+        self.assertIn(("", 9999), all_cands)
+
+        ledger = SourceLedger()
+        ledger.add_candidates([("system/dept", "103"), ("system/user", "257")])
+        ctx = NS(executor_turn={"source_ledger": ledger})
+        with turn_actor_reads(_MockWriteClient(), turn_context=ctx, knowledge=NS(turn_targets={})):
+            self.assertTrue(_verified_turn_id("system/dept", 103))
+            self.assertFalse(_verified_turn_id("crm/contract", 257))
+
+    def test_g0r3_end_to_end_find_record_to_employee_create_and_prereq_guards(self):
+        from datetime import date
+        from web_operation_agent.tests.execution.product_support import _Channel, _RemoteBrowser
+        from web_operation_agent_yudao.rules.source import YudaoSource
+
+        def _reply(*calls):
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": f"call_{i}",
+                        "type": "function",
+                        "function": {"name": name, "arguments": json.dumps(args, ensure_ascii=False)},
+                    }
+                    for i, (name, args) in enumerate(calls, 1)
+                ],
+            }
+
+        class _ScriptedChat:
+            model = "scripted"
+            provider = "synthetic"
+
+            def __init__(self, replies):
+                self.replies = list(replies)
+                self.calls = []
+
+            def complete(self, messages, tools=None, run_id="", **kwargs):
+                self.calls.append((list(messages), list(tools or ())))
+                if not self.replies:
+                    tail = [
+                        (m.get("role"), m.get("name"), str(m.get("content", ""))[:400])
+                        for m in messages[-4:]
+                    ]
+                    raise AssertionError(f"no scripted reply left after {len(self.calls)} calls; tail={tail}")
+                reply = self.replies.pop(0)
+                return reply(messages) if callable(reply) else reply
+
+            def complete_cancellable(self, messages, tools=None, run_id="", *, cancelled=None, **kwargs):
+                return self.complete(messages, tools, run_id, **kwargs)
+
+        docs = {
+            "paths": {
+                "/admin-api/system/dept/simple-list": {
+                    "get": {
+                        "tags": ["管理后台 - 部门"],
+                        "summary": "获取部门精简信息列表",
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/DeptListResp"}}}}},
+                    }
+                },
+                "/admin-api/system/dept/list": {
+                    "get": {
+                        "tags": ["管理后台 - 部门"],
+                        "summary": "获取部门列表",
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/DeptListResp"}}}}},
+                    }
+                },
+                "/admin-api/system/dept/get": {
+                    "get": {
+                        "tags": ["管理后台 - 部门"],
+                        "summary": "获得部门信息",
+                        "parameters": [{"name": "id", "in": "query", "required": True, "schema": {"type": "integer"}}],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/DeptGetResp"}}}}},
+                    }
+                },
+                "/admin-api/system/user/simple-list": {
+                    "get": {
+                        "tags": ["管理后台 - 用户"],
+                        "summary": "获取用户精简信息列表",
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/UserListResp"}}}}},
+                    }
+                },
+                "/admin-api/system/user/get": {
+                    "get": {
+                        "tags": ["管理后台 - 用户"],
+                        "summary": "获得用户详情",
+                        "parameters": [{"name": "id", "in": "query", "required": True, "schema": {"type": "integer"}}],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/UserGetResp"}}}}},
+                    }
+                },
+                "/admin-api/system/dict-data/simple-list": {
+                    "get": {"tags": ["管理后台 - 字典"], "summary": "字典精简列表", "responses": {"200": {"description": "OK"}}}
+                },
+                "/admin-api/hrm/employee/create": {
+                    "post": {
+                        "tags": ["管理后台 - HRM 员工"],
+                        "summary": "创建员工档案",
+                        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/HrmEmployeeSaveReqVO"}}}},
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                    }
+                },
+                "/admin-api/hrm/employee/get": {
+                    "get": {
+                        "tags": ["管理后台 - HRM 员工"],
+                        "summary": "获得员工档案",
+                        "parameters": [{"name": "id", "in": "query", "required": True, "schema": {"type": "integer"}}],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/HrmEmployeeGetResp"}}}}},
+                    }
+                },
+                "/admin-api/hrm/employee/page": {
+                    "get": {
+                        "tags": ["管理后台 - HRM 员工"],
+                        "summary": "获得员工档案分页",
+                        "parameters": [
+                            {"name": "name", "in": "query", "schema": {"type": "string"}},
+                            {"name": "pageNo", "in": "query", "required": True, "schema": {"type": "integer"}},
+                            {"name": "pageSize", "in": "query", "required": True, "schema": {"type": "integer"}},
+                        ],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/EmpPageResp"}}}}},
+                    }
+                },
+                "/admin-api/crm/receivable-plan/create": {
+                    "post": {
+                        "tags": ["管理后台 - CRM 回款计划"],
+                        "summary": "创建回款计划",
+                        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/RecPlanSaveReqVO"}}}},
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                    }
+                },
+                "/admin-api/crm/receivable-plan/get": {
+                    "get": {
+                        "tags": ["管理后台 - CRM 回款计划"],
+                        "summary": "获得回款计划",
+                        "parameters": [{"name": "id", "in": "query", "required": True, "schema": {"type": "integer"}}],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/RecPlanGetResp"}}}}},
+                    }
+                },
+                "/admin-api/crm/receivable-plan/page": {
+                    "get": {
+                        "tags": ["管理后台 - CRM 回款计划"],
+                        "summary": "获得回款计划分页",
+                        "parameters": [
+                            {"name": "contractId", "in": "query", "schema": {"type": "integer"}},
+                            {"name": "pageNo", "in": "query", "required": True, "schema": {"type": "integer"}},
+                            {"name": "pageSize", "in": "query", "required": True, "schema": {"type": "integer"}},
+                        ],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/PageResp"}}}}},
+                    }
+                },
+                "/admin-api/crm/receivable-plan/page-by-customer": {
+                    "get": {
+                        "tags": ["管理后台 - CRM 回款计划"],
+                        "summary": "获得客户下回款计划分页",
+                        "parameters": [
+                            {"name": "customerId", "in": "query", "required": True, "schema": {"type": "integer"}},
+                            {"name": "contractId", "in": "query", "schema": {"type": "integer"}},
+                            {"name": "pageNo", "in": "query", "required": True, "schema": {"type": "integer"}},
+                            {"name": "pageSize", "in": "query", "required": True, "schema": {"type": "integer"}},
+                        ],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/PageResp"}}}}},
+                    }
+                },
+                "/admin-api/crm/contract/page": {
+                    "get": {
+                        "tags": ["管理后台 - CRM 合同"],
+                        "summary": "获得合同分页",
+                        "parameters": [
+                            {"name": "name", "in": "query", "schema": {"type": "string"}},
+                            {"name": "pageNo", "in": "query", "required": True, "schema": {"type": "integer"}},
+                            {"name": "pageSize", "in": "query", "required": True, "schema": {"type": "integer"}},
+                        ],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/PageResp"}}}}},
+                    }
+                },
+                "/admin-api/crm/contract/get": {
+                    "get": {
+                        "tags": ["管理后台 - CRM 合同"],
+                        "summary": "获得合同详情",
+                        "parameters": [{"name": "id", "in": "query", "required": True, "schema": {"type": "integer"}}],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/PageResp"}}}}},
+                    }
+                },
+            },
+            "components": {
+                "schemas": {
+                    "CommonResultLong": {"properties": {"code": {"type": "integer"}, "data": {"type": "integer", "format": "int64"}}},
+                    "PageResp": {"properties": {"data": {"$ref": "#/components/schemas/PageInner"}}},
+                    "PageInner": {"properties": {"total": {"type": "integer"}, "list": {"type": "array", "items": {"type": "object"}}}},
+                    "DeptListResp": {"properties": {"data": {"type": "array", "items": {"$ref": "#/components/schemas/DeptVO"}}}},
+                    "DeptGetResp": {"properties": {"data": {"$ref": "#/components/schemas/DeptVO"}}},
+                    "DeptVO": {"properties": {"id": {"type": "integer"}, "name": {"type": "string", "description": "部门名称"}, "parentId": {"type": "integer"}}},
+                    "UserListResp": {"properties": {"data": {"type": "array", "items": {"$ref": "#/components/schemas/UserVO"}}}},
+                    "UserGetResp": {"properties": {"data": {"$ref": "#/components/schemas/UserVO"}}},
+                    "UserVO": {"properties": {"id": {"type": "integer"}, "nickname": {"type": "string", "description": "用户昵称"}, "username": {"type": "string"}}},
+                    "EmpPageResp": {"properties": {"data": {"$ref": "#/components/schemas/EmpPage"}}},
+                    "EmpPage": {"properties": {"total": {"type": "integer"}, "list": {"type": "array", "items": {"$ref": "#/components/schemas/HrmEmployeeRespVO"}}}},
+                    "HrmEmployeeGetResp": {"properties": {"data": {"$ref": "#/components/schemas/HrmEmployeeRespVO"}}},
+                    "HrmEmployeeRespVO": {
+                        "properties": {
+                            "id": {"type": "integer", "format": "int64"},
+                            "name": {"type": "string", "description": "员工姓名"},
+                            "mobile": {"type": "string", "description": "手机号"},
+                            "deptId": {"type": "integer", "format": "int64", "description": "部门编号"},
+                            "status": {"type": "integer", "format": "int32", "description": "员工状态"},
+                            "entryStatus": {"type": "integer", "format": "int32", "description": "入职状态"},
+                            "ownerUserId": {"type": "integer", "format": "int64", "description": "负责人"},
+                            "entryTime": {"type": "string", "format": "date-time", "description": "入职日期"},
+                        }
+                    },
+                    "HrmEmployeeSaveReqVO": {
+                        "required": ["name", "mobile", "status", "entryStatus"],
+                        "properties": {
+                            "name": {"type": "string", "description": "员工姓名"},
+                            "mobile": {"type": "string", "description": "手机号"},
+                            "deptId": {"type": "integer", "format": "int64", "description": "部门编号"},
+                            "status": {"type": "integer", "format": "int32", "description": "员工状态"},
+                            "entryStatus": {"type": "integer", "format": "int32", "description": "入职状态"},
+                            "ownerUserId": {"type": "integer", "format": "int64", "description": "负责人"},
+                            "entryTime": {"type": "string", "format": "date-time", "description": "入职日期"},
+                        },
+                    },
+                    "RecPlanGetResp": {"properties": {"data": {"$ref": "#/components/schemas/RecPlanSaveReqVO"}}},
+                    "RecPlanSaveReqVO": {
+                        "required": ["contractId", "returnTime", "price"],
+                        "properties": {
+                            "contractId": {"type": "integer", "format": "int64", "description": "合同编号"},
+                            "returnTime": {"type": "string", "description": "计划回款日期"},
+                            "price": {"type": "number", "description": "计划回款金额"},
+                        },
+                    },
+                }
+            },
+        }
+
+        class _HrmCrmClient:
+            def __init__(self):
+                self.read_generation = 1
+                self.tenant = "1"
+                self.posts = []
+                self.employees = {}
+                self.next_id = 901
+                self.contracts = [{"id": 101, "name": "2026框架协议", "no": "HT-101", "customerId": 11, "totalPrice": 100000}]
+                self.plans = []
+
+            def read_window(self, _check):
+                return nullcontext()
+
+            def write_window(self, _check):
+                return nullcontext()
+
+            def get(self, path, **params):
+                if path == "system/auth/get-permission-info":
+                    return {
+                        "user": {"id": 257, "nickname": "芋道源码", "username": "yudao", "deptId": 100},
+                        "roles": ["super_admin"],
+                        "permissions": ["system:dept:query", "hrm:employee:query", "crm:contract:query", "crm:receivable-plan:query"],
+                        "menus": [
+                            {"id": 1, "name": "系统管理", "path": "/system", "children": [
+                                {"id": 10, "name": "部门管理", "path": "dept", "component": "system/dept/index"},
+                            ]},
+                            {"id": 2, "name": "人事管理", "path": "/hrm", "children": [
+                                {"id": 20, "name": "员工管理", "path": "employee", "component": "hrm/employee/index"},
+                            ]},
+                            {"id": 3, "name": "CRM管理", "path": "/crm", "children": [
+                                {"id": 30, "name": "合同管理", "path": "contract", "component": "crm/contract/index"},
+                                {"id": 31, "name": "回款计划", "path": "receivable-plan", "component": "crm/receivable-plan/index"},
+                            ]},
+                        ],
+                    }
+                if path in {"system/dept/simple-list", "system/dept/list"}:
+                    return [{"id": 103, "name": "研发部门", "parentId": 100}]
+                if path == "system/dept/get":
+                    return {"id": 103, "name": "研发部门", "parentId": 100}
+                if path == "system/user/simple-list":
+                    return [{"id": 257, "nickname": "芋道源码", "username": "yudao"}]
+                if path == "system/user/get":
+                    return {"id": 257, "nickname": "芋道源码", "username": "yudao"}
+                if path == "system/dict-data/simple-list":
+                    return [{"dictType": "crm_receivable_return_type", "value": "1", "label": "银行转账"}]
+                if path == "hrm/employee/page":
+                    rows = list(self.employees.values())
+                    return {"list": rows, "total": len(rows)}
+                if path == "hrm/employee/get":
+                    return self.employees.get(str(params.get("id")))
+                if path == "crm/contract/page":
+                    return {"list": list(self.contracts), "total": len(self.contracts)}
+                if path == "crm/contract/get":
+                    return self.contracts[0]
+                if path in {"crm/receivable-plan/page", "crm/receivable-plan/page-by-customer"}:
+                    return {"list": list(self.plans), "total": len(self.plans)}
+                return []
+
+            def write_once(self, method, path, *, body=None, params=None, operation="", expect_result="bool"):
+                self.posts.append((method, path, dict(body or {}), operation))
+                if path == "hrm/employee/create":
+                    eid = self.next_id
+                    self.next_id += 1
+                    rec = {"id": eid, **dict(body or {})}
+                    self.employees[str(eid)] = rec
+                    return eid
+                if path == "crm/receivable-plan/create":
+                    self.plans.append({"id": 77, **dict(body or {}), "period": 1})
+                    return 77
+                return True
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            srv = root / "server/yudao-module-hrm/src/main/java/cn/iocoder/yudao/module/hrm"
+            (srv / "enums/employee").mkdir(parents=True)
+            (srv / "controller/admin/employee/vo").mkdir(parents=True)
+            (srv / "service/employee").mkdir(parents=True)
+            (srv / "dal/dataobject/employee").mkdir(parents=True)
+            (srv / "enums/employee/HrmEmployeeTypeEnum.java").write_text(
+                'package cn.iocoder.yudao.module.hrm.enums.employee;\n'
+                'public enum HrmEmployeeTypeEnum {\n'
+                '    FORMAL(1, "正式");\n'
+                '    private final Integer type; private final String name;\n'
+                '    public Integer getType() { return type; }\n'
+                '}\n',
+                encoding="utf-8",
+            )
+            (srv / "enums/employee/HrmEmployeeStatusEnum.java").write_text(
+                'package cn.iocoder.yudao.module.hrm.enums.employee;\n'
+                'public enum HrmEmployeeStatusEnum {\n'
+                '    REGULAR(1, HrmEmployeeTypeEnum.FORMAL.getType(), "正式"),\n'
+                '    PROBATION(2, HrmEmployeeTypeEnum.FORMAL.getType(), "试用");\n'
+                '}\n',
+                encoding="utf-8",
+            )
+            (srv / "enums/employee/HrmEmployeeEntryStatusEnum.java").write_text(
+                'package cn.iocoder.yudao.module.hrm.enums.employee;\n'
+                'public enum HrmEmployeeEntryStatusEnum {\n'
+                '    IN_SERVICE(1, "在职"),\n'
+                '    PENDING_ENTRY(2, "待入职");\n'
+                '}\n',
+                encoding="utf-8",
+            )
+            (srv / "dal/dataobject/employee/HrmEmployeeDO.java").write_text(
+                "public class HrmEmployeeDO extends BaseDO {\n"
+                "    private Long id;\n"
+                "    private String name;\n"
+                "    private String mobile;\n"
+                "    private Long deptId;\n"
+                "    private Integer status;\n"
+                "    private Integer entryStatus;\n"
+                "    private Long ownerUserId;\n"
+                "    private LocalDateTime entryTime;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (srv / "controller/admin/employee/vo/HrmEmployeeSaveReqVO.java").write_text(
+                "package cn.iocoder.yudao.module.hrm.controller.admin.employee.vo;\n"
+                "import cn.iocoder.yudao.framework.common.validation.InEnum;\n"
+                "import cn.iocoder.yudao.module.hrm.enums.employee.HrmEmployeeStatusEnum;\n"
+                "import cn.iocoder.yudao.module.hrm.enums.employee.HrmEmployeeEntryStatusEnum;\n"
+                "public class HrmEmployeeSaveReqVO {\n"
+                "    @Schema(description = \"员工姓名\")\n"
+                "    private String name;\n"
+                "    @Schema(description = \"手机号\")\n"
+                "    private String mobile;\n"
+                "    @Schema(description = \"部门编号\")\n"
+                "    private Long deptId;\n"
+                "    @InEnum(HrmEmployeeStatusEnum.class)\n"
+                "    private Integer status;\n"
+                "    @InEnum(HrmEmployeeEntryStatusEnum.class)\n"
+                "    private Integer entryStatus;\n"
+                "    @Schema(description = \"负责人\")\n"
+                "    private Long ownerUserId;\n"
+                "    @Schema(description = \"入职日期\")\n"
+                "    private LocalDateTime entryTime;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (srv / "controller/admin/employee/HrmEmployeeController.java").write_text(
+                'package cn.iocoder.yudao.module.hrm.controller.admin.employee;\n'
+                'import cn.iocoder.yudao.module.hrm.controller.admin.employee.vo.HrmEmployeeSaveReqVO;\n'
+                '@RequestMapping("/hrm/employee")\n'
+                'public class HrmEmployeeController {\n'
+                '    @Resource\n'
+                '    private HrmEmployeeService employeeService;\n'
+                '    @PostMapping("/create")\n'
+                '    public CommonResult<Long> createEmployee(@RequestBody HrmEmployeeSaveReqVO createReqVO) { return success(employeeService.createEmployee(createReqVO)); }\n'
+                '    @GetMapping("/get")\n'
+                '    public CommonResult<HrmEmployeeRespVO> getEmployee(@RequestParam("id") Long id) { return success(null); }\n'
+                '}\n',
+                encoding="utf-8",
+            )
+            (srv / "service/employee/HrmEmployeeServiceImpl.java").write_text(
+                "public class HrmEmployeeServiceImpl implements HrmEmployeeService {\n"
+                "    @Resource\n"
+                "    private HrmEmployeeMapper employeeMapper;\n"
+                "    public Long createEmployee(HrmEmployeeSaveReqVO createReqVO) {\n"
+                "        HrmEmployeeDO emp = BeanUtils.toBean(createReqVO, HrmEmployeeDO.class);\n"
+                "        employeeMapper.insert(emp);\n"
+                "        return emp.getId();\n"
+                "    }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            source = YudaoSource(root, release="local")
+            client = _HrmCrmClient()
+            app = YudaoApplication(
+                "https://app.test",
+                None,
+                docs,
+                client=client,
+                source=source,
+                today=date(2026, 10, 25),
+                native_writes=True,
+            )
+            bound_app = bind_application(app)
+            principal = PrincipalContext(1, "yudao", "1", "100", "257", "g0r3-e2e", int(time.time() * 1000) - 1000, int(time.time() * 1000) + 60_000, ("yudao.read", "yudao.write"))
+            hub_obs = PageObservation(
+                1, 1, "https://app.test/#/index", "工作台", [], [ElementRef("e0", "link", "首页", "a", 1, {})], content="[0]<a href=/index>首页 />"
+            )
+            channel = _Channel(page_url="https://app.test/#/index", decision="approved", principal=principal)
+            channel.latest_observation_envelope = NS(observation_id="obs-1", page_epoch=1, observation=hub_obs)
+            goal_port = NativePageGoalPort(app.goal_data)
+            chat = _ScriptedChat([
+                _reply(("find_record", {"name": "研发部门", "kind": "system/dept"})),
+                _reply(("create_record", {
+                    "entity": "hrm/employee",
+                    "fields": [
+                        {"field": "name", "value": "张三"},
+                        {"field": "mobile", "value": "13800001111"},
+                        {"field": "deptId", "value": "研发部门"},
+                        {"field": "status", "value": "正式"},
+                        {"field": "entryStatus", "value": 2},
+                        {"field": "ownerUserId", "value": "芋道源码"},
+                        {"field": "entryTime", "value": "2026-10-25 00:00:00"},
+                    ],
+                })),
+                lambda msgs: _reply(("finish", {
+                    "status": "done",
+                    "answer": "已创建员工档案张三（ID=901）。",
+                    "items": [{
+                        "item": "新增员工张三",
+                        "kind": "write",
+                        "status": "delivered",
+                        "receipts": [
+                            next(
+                                line.split("：", 1)[1].strip()
+                                for m in reversed(msgs)
+                                for line in str(m.get("content") or "").splitlines()
+                                if "本轮工具回执：" in line
+                            )
+                        ],
+                    }],
+                })),
+            ])
+            executor = YudaoTurnExecutor(
+                channel=channel,
+                chat=chat,
+                config=AgentTurnConfig(
+                    supported_scope="Yudao",
+                    ledger_path=root / "audit_e2e.jsonl",
+                    require_identity=True,
+                    deployment_profile="test",
+                    allow_business_mutations=True,
+                ),
+                application=bound_app,
+                goal_port=goal_port,
+                knowledge=ActorKnowledge(client, docs),
+                control=ReadOnlyControl(),
+                native_submit=NS(),
+                verify=False,
+                today="2026-10-25",
+                run_id_factory=lambda _m: "g0r3-e2e",
+            )
+            with patch("web_operation_agent.goal.executor.RemoteBrowserClient", _RemoteBrowser):
+                res = executor.execute({
+                    "message_id": "m1",
+                    "text": "请新增员工张三，手机号13800001111，归属上面查到的研发部门，状态为正式，入职状态为待入职。",
+                    "page_url": "https://app.test/#/index",
+                })
+            self.assertEqual(res.terminal_reason, "agent_finished")
+            self.assertEqual(len(client.posts), 1)
+            self.assertEqual(client.posts[0][1], "hrm/employee/create")
+            self.assertEqual(client.posts[0][2]["deptId"], 103)
+            self.assertEqual(client.posts[0][2]["status"], 1)
+            self.assertEqual(client.posts[0][2]["entryStatus"], 2)
+            self.assertEqual(client.posts[0][2]["ownerUserId"], 257)
+            self.assertEqual(len(channel.approvals), 1)
+
+            # Verify concurrent find_record also populates entity-slug-bound candidates in source_ledger
+            from web_operation_agent.execution.value_source import SourceLedger
+
+            conc_turn = {"source_ledger": SourceLedger()}
+            executor.turn_context.executor_turn = conc_turn
+            with turn_actor_reads(client, turn_context=executor.turn_context, knowledge=executor.knowledge):
+                op = NS(principal=principal, session_id="s1", turn_id="t1", require_live=lambda **_k: None)
+                prep = executor.procedures.prepare_read("find_record", {"name": "研发部门", "kind": "system/dept"}, operation=op)
+                with patch.object(executor.procedures, "_note"):
+                    executor.procedures.commit_read("find_record", prep, {"name": "研发部门"}, NS(operation=op, measure=lambda _k: nullcontext(), progress=lambda _f: None))
+            self.assertTrue(any(c.binding == "system/dept" and c.value == "研发部门" for c in conc_turn["source_ledger"].candidates))
+            self.assertTrue(any(c.binding == "system/dept" and c.value == "103" for c in conc_turn["source_ledger"].candidates))
+
+            # Prerequisite guard blocks unrequested crm_receivable_plan_create on downstream receivable request
+            guard_chat = _ScriptedChat([
+                _reply(("load_skill", {"skill": "crm-receivable-planning"})),
+                _reply(("propose_operation", {
+                    "operation": "crm_receivable_plan_create",
+                    "inputs": {
+                        "contract": "2026框架协议",
+                        "owner": "芋道源码",
+                        "returnTime": "2026-10-30 00:00:00",
+                        "price": 5000,
+                    },
+                })),
+                _reply(("create_record", {
+                    "entity": "crm/receivable-plan",
+                    "fields": [
+                        {"field": "contractId", "value": "2026框架协议"},
+                        {"field": "returnTime", "value": "2026-10-30"},
+                        {"field": "price", "value": 5000},
+                    ],
+                })),
+                _reply(("finish", {
+                    "status": "cannot",
+                    "answer": "合同缺少对应回款计划，未擅自新建回款计划。",
+                    "items": [{"item": "登记实际回款", "kind": "write", "status": "undelivered", "receipts": []}],
+                })),
+            ])
+            channel_guard = _Channel(page_url="https://app.test/#/index", decision="approved", principal=principal)
+            channel_guard.latest_observation_envelope = NS(observation_id="obs-2", page_epoch=1, observation=hub_obs)
+            guard_exec = YudaoTurnExecutor(
+                channel=channel_guard,
+                chat=guard_chat,
+                config=AgentTurnConfig(
+                    supported_scope="Yudao",
+                    ledger_path=root / "audit_guard.jsonl",
+                    require_identity=True,
+                    deployment_profile="test",
+                    allow_business_mutations=True,
+                ),
+                application=bound_app,
+                goal_port=NativePageGoalPort(app.goal_data),
+                knowledge=ActorKnowledge(client, docs),
+                control=ReadOnlyControl(),
+                native_submit=NS(),
+                verify=False,
+                today="2026-10-25",
+                enable_domain_packs=False,
+                run_id_factory=lambda _m: "g0r3-guard",
+            )
+            with patch("web_operation_agent.goal.executor.RemoteBrowserClient", _RemoteBrowser):
+                guard_res = guard_exec.execute({
+                    "message_id": "m2",
+                    "text": "给合同2026框架协议登记一笔5000元实际回款。",
+                    "page_url": "https://app.test/#/index",
+                })
+            self.assertEqual(guard_res.status, "refused")
+            self.assertEqual(len(client.plans), 0)
+            self.assertEqual(len(channel_guard.approvals), 0)
+            self.assertIn("严禁擅自补建回款计划", json.dumps(guard_chat.calls[2][0], ensure_ascii=False))
+            self.assertIn("严禁擅自补建回款计划", json.dumps(guard_chat.calls[3][0], ensure_ascii=False))
+            # enable_domain_packs=False omits switch_domain from offered tools
+            offered_names = [t["function"]["name"] for t in guard_chat.calls[0][1]]
+            self.assertNotIn("switch_domain", offered_names)
+
+            # Explicit plan creation prompt passes intent alignment check cleanly
+            port = YudaoConventionWritePort(client, app.goal_data)
+            port.check_create_intent_alignment("crm/receivable-plan", ("为2026框架协议新建一期回款计划",))
+
+    def test_hrm_salary_employee_info_target_suffix_and_line_changes_guidance(self):
+        docs = {
+            "paths": {
+                "/admin-api/hrm/salary/employee-info/page": {
+                    "get": {
+                        "tags": ["管理后台 - HRM 员工薪资信息"],
+                        "summary": "分页",
+                        "parameters": [
+                            {"name": "employeeId", "in": "query"},
+                            {"name": "search", "in": "query"},
+                            {"name": "postName", "in": "query"},
+                            {"name": "pageNo", "in": "query", "required": True},
+                            {"name": "pageSize", "in": "query", "required": True},
+                        ],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/SalPageResp"}}}}},
+                    }
+                },
+                "/admin-api/hrm/salary/employee-info/get": {
+                    "get": {
+                        "tags": ["管理后台 - HRM 员工薪资信息"],
+                        "summary": "详情",
+                        "parameters": [{"name": "employeeId", "in": "query", "required": True}],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/SalGetResp"}}}}},
+                    }
+                },
+                "/admin-api/hrm/salary/employee-info/update": {
+                    "put": {
+                        "tags": ["管理后台 - HRM 员工薪资信息"],
+                        "summary": "修改员工薪资",
+                        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/SalUpdateVO"}}}},
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                    }
+                },
+            },
+            "components": {
+                "schemas": {
+                    "CommonResultLong": {"properties": {"code": {"type": "integer"}, "data": {"type": "integer", "format": "int64"}}},
+                    "SalPageResp": {"properties": {"data": {"$ref": "#/components/schemas/SalPage"}}},
+                    "SalPage": {"properties": {"list": {"type": "array", "items": {"$ref": "#/components/schemas/SalRespVO"}}}},
+                    "SalGetResp": {"properties": {"data": {"$ref": "#/components/schemas/SalRespVO"}}},
+                    "SalRespVO": {
+                        "properties": {
+                            "id": {"type": "integer"},
+                            "employeeId": {"type": "integer"},
+                            "employeeName": {"type": "string"},
+                            "postName": {"type": "string"},
+                            "remark": {"type": "string", "description": "备注"},
+                            "salaryOptions": {"type": "array", "items": {"$ref": "#/components/schemas/SalOptVO"}},
+                        }
+                    },
+                    "SalUpdateVO": {
+                        "properties": {
+                            "id": {"type": "integer"},
+                            "employeeId": {"type": "integer", "description": "员工编号"},
+                            "remark": {"type": "string", "description": "备注"},
+                            "salaryOptions": {"type": "array", "description": "薪资项", "items": {"$ref": "#/components/schemas/SalOptVO"}},
+                        }
+                    },
+                    "SalOptVO": {
+                        "required": ["code", "value"],
+                        "properties": {
+                            "code": {"type": "integer", "description": "编码"},
+                            "name": {"type": "string", "description": "名称"},
+                            "value": {"type": "number", "description": "金额"},
+                        },
+                    },
+                }
+            },
+        }
+
+        class _SalaryClient:
+            def __init__(self):
+                self.tenant = "1"
+                self.page_queries = []
+                self.row = {
+                    "id": 55,
+                    "employeeId": 112,
+                    "employeeName": "李云珂",
+                    "postName": "研发总监",
+                    "remark": "原备注",
+                    "salaryOptions": [{"code": 10101, "name": "基本工资", "value": 10000}],
+                }
+
+            def get(self, path, **params):
+                if path == "system/auth/get-permission-info":
+                    return {"user": {"id": 257, "nickname": "芋道源码", "deptId": 100}, "roles": ["super_admin"], "menus": []}
+                if path == "hrm/salary/employee-info/page":
+                    self.page_queries.append(dict(params))
+                    return {"list": [dict(self.row)], "total": 1}
+                if path == "hrm/salary/employee-info/get":
+                    return dict(self.row)
+                return []
+
+        from web_operation_agent.business.compiled_writes import CompiledAggregateUpdateHandler
+
+        client = _SalaryClient()
+        port = YudaoConventionWritePort(client, NS(_documents=lambda: docs, find=lambda *_a, **_k: ()))
+        handler = CompiledAggregateUpdateHandler(port)
+        actor_ctx = NS(principal=_make_principal(), require_live=lambda **_k: None)
+        with self.assertRaises(BusinessToolRequestError) as err:
+            handler.prepare({
+                "entity": "hrm/salary/employee-info",
+                "target": "李云珂（employeeId=112）",
+                "changes": [{"field": "regularSalary", "value": 15000}],
+            }, context=actor_ctx)
+        self.assertIn("line_changes", str(err.exception))
+        self.assertIn("salaryOptions", str(err.exception))
+        self.assertNotIn("页面表单", str(err.exception))
+        self.assertTrue(client.page_queries)
+        self.assertNotIn("postName", client.page_queries[0])
+        self.assertEqual(client.page_queries[0].get("employeeId"), 112)
+
+        ok_spec = handler.prepare({
+            "entity": "hrm/salary/employee-info",
+            "target": "李云珂（employeeId=112）",
+            "line_changes": [{"collection": "salaryOptions", "match": "基本工资", "changes": [{"field": "value", "value": 15000}]}],
+        }, context=actor_ctx)
+        self.assertEqual(ok_spec.args["payload"]["salaryOptions"][0]["value"], 15000)
+
 
 if __name__ == "__main__":
     unittest.main()

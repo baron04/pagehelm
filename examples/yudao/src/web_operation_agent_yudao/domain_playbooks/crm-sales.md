@@ -7,4 +7,5 @@
 - **核心口径**：
   - 合同 `auditStatus`：`0`=未提交、`10`=审核中、`20`=审核通过、`30`=审核不通过；新签合同按 `orderDate`（下单日期）统计。
   - **金额单位**：CRM 合同、回款、回款计划、商机与产品接口金额字段（`totalPrice`、`totalReceivablePrice`、`price`）单位均为**元（yuan）**（与 ERP 一致，切勿当作分除以 100；仅商城/会员/支付域使用分），合同待回款差额 = `totalPrice - totalReceivablePrice`（多行差额或汇总用 `sql` 计算）。
-- **可用类型化写入**：`crm-customer-*`、`crm-contact-*`、`crm-clue-maintenance`、`crm-follow-up`、`crm-receivable-planning`。
+- **可用类型化写入**：`crm-customer-*`、`crm-contact-*`、`crm-clue-maintenance`、`crm-follow-up`、`crm-receivable-planning`；实际回款新建请用 `create_record(entity="crm/receivable")`。
+- **严禁越权新建前置实体**：办理下游单据（如登记实际回款 `crm/receivable`）时，若所引用的前置计划或父记录（如对应回款计划期次 `crm/receivable-plan` 或合同）不存在或当前账号无权限，必须如实向用户说明原因或使用 `finish(status="need_input")` 追问，**严禁擅自调用 `crm_receivable_plan_create` 或 `create_record` 代建回款计划/合同**；仅在用户明确要求创建回款计划时才使用 `crm_receivable_plan_create`。

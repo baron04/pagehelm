@@ -186,14 +186,15 @@ def _cell_values(rows, column_names=None, cap=400, *, entity_slug: str = ""):
                 continue
             raw_key = str(key)[:80]
             label = str(names.get(key, key))[:80]
-            bound.append((label, cell))
-            if raw_key != label:
-                raw_keys.append((raw_key, cell))
-            if _RECORD_KEY.search(str(key)) or _RECORD_KEY.search(label):
+            if len(bound) < cap:
+                bound.append((label, cell))
+                if raw_key != label:
+                    raw_keys.append((raw_key, cell))
+            if (_RECORD_KEY.search(str(key)) or _RECORD_KEY.search(label)) and len(records) < 4000:
                 records.append(("", cell))
-            if entity_slug and (raw_key in _REF_CELL_KEYS or _RECORD_KEY.search(raw_key)):
+            if entity_slug and (raw_key in _REF_CELL_KEYS or _RECORD_KEY.search(raw_key)) and len(ref_cands) < 4000:
                 ref_cands.append((entity_slug, cell))
-            if len(bound) >= cap:
+            if len(bound) >= cap and len(records) >= 4000 and (not entity_slug or len(ref_cands) >= 4000):
                 return bound + raw_keys + records + ref_cands, bound
     return bound + raw_keys + records + ref_cands, bound
 
@@ -750,7 +751,7 @@ class ActorKnowledge:
                 prepared["has_last_read"] = True
                 prepared["last_read"] = {"count": 1 if rows is None else len(rows), "scope": self._by_path[path]["tag"],
                                          "complete": whole if rows is not None else None, "declared_total": declared_total,
-                                         "values": _cell_values(rows if rows is not None else [data], column_names)[0]}
+                                         "values": _cell_values(rows if rows is not None else [data], column_names, entity_slug=_entity_slug_for_path(path))[0]}
                 prepared["last_keys"] = tuple(dict.fromkeys(key for row in rows or () if isinstance(row, dict) for key in row))
                 result = summarize(path=relative, filters=filters, fields=fields, props=props,
                     deref=self._deref, rows=rows, total=total, whole=whole, requests=requests,

@@ -65,18 +65,18 @@ _DOCS_OBJECT_CACHE: OrderedDict[int, tuple[object, bool, dict]] = OrderedDict()
 
 _SECRET = DEFAULT_SECRET_FIELD_PATTERN
 _NAME_CANDIDATES = (
-    "name", "title", "no", "postName", "companyName", "nickname",
-    "username", "employeeName", "voucherNumber", "digest", "subject",
+    "name", "title", "no", "employeeName", "postName", "companyName", "nickname",
+    "username", "voucherNumber", "digest", "subject",
     "code", "jobNumber", "signature", "label",
     "itemName", "spuName", "userNickname", "content",
 )
 _QUERY_CANDIDATES = (
-    "name", "title", "no", "postName", "companyName", "nickname",
-    "username", "search", "voucherNumber", "digest", "subject",
+    "name", "title", "no", "search", "employeeName", "postName", "companyName", "nickname",
+    "username", "voucherNumber", "digest", "subject",
     "code", "jobNumber",
 )
 _ORDINAL_STAGE_RE = re.compile(r"^(?:第\s*)?([0-9]+|[零〇一二两三四五六七八九十百千万]+)\s*[期批轮次]$")
-_PARENTHESIZED_ID_RE = re.compile(r"^(.+?)\s*[（(](?:ID\s*[=：:]\s*|#)?(\d+)[）)]\s*$", re.I)
+_PARENTHESIZED_ID_RE = re.compile(r"^(.+?)\s*[（(](?:(?:[A-Za-z][A-Za-z0-9_]*Id|ID|编号)\s*[=：:]\s*|#)?(\d+)[）)]\s*$", re.I)
 
 
 def _parse_period_int(token: str) -> int | None:
@@ -106,20 +106,72 @@ def _verified_turn_id(ref_entity: str, target_id: int) -> bool:
     """True only when ``target_id`` was actually read in this turn under ``ref_entity``."""
     policy_turn, knowledge = _active_turn_and_knowledge()
     s_id = str(target_id)
+    target_slug = ref_entity.strip("/")
     if policy_turn is not None:
-        ledger = policy_turn.get("sources")
+        ledger = policy_turn.get("source_ledger")
+        if ledger is None:
+            ledger = policy_turn.get("sources")
         if ledger is not None and hasattr(ledger, "candidates"):
             for cand in getattr(ledger, "candidates", ()) or ():
-                binding = getattr(cand, "binding", "")
+                binding = str(getattr(cand, "binding", "") or "").strip("/")
                 val = str(getattr(cand, "value", "") or "").strip()
-                if val == s_id and (binding == ref_entity or not binding):
+                if val == s_id and binding == target_slug:
                     return True
     if knowledge is not None:
         turn_targets = getattr(knowledge, "turn_targets", None) or {}
-        target_prefix = f"/admin-api/{ref_entity.strip('/')}"
+        target_prefix = f"/admin-api/{target_slug}"
         if s_id in (turn_targets.get(target_prefix) or ()):
             return True
     return False
+
+
+_PREREQUISITE_CREATE_GUARDS: tuple[tuple[str, re.Pattern[str], re.Pattern[str], str], ...] = (
+    (
+        "crm/receivable-plan",
+        re.compile(r"回款"),
+        re.compile(r"回款计划|分期计划|收款计划|receivable[-_ ]?plan", re.I),
+        "用户请求的是实际回款业务，未明确要求新建回款计划；遇前置回款计划缺失或当前账号无权限时，请直接向用户如实说明原因或使用 need_input 追问，严禁擅自补建回款计划。",
+    ),
+    (
+        "crm/contract",
+        re.compile(r"回款"),
+        re.compile(r"新建.{0,8}合同|创建.{0,8}合同|新增.{0,8}合同|补录.{0,8}合同|crm/contract", re.I),
+        "用户请求涉及回款，未明确要求新建合同；遇前置合同缺失或无权限时，请直接向用户说明或追问，严禁擅自新建合同。",
+    ),
+    (
+        "mes/dv/check-plan",
+        re.compile(r"点检单|点检记录|保养单"),
+        re.compile(r"点检计划|保养计划|方案|check[-_ ]?plan", re.I),
+        "用户请求的是点检单或点检记录，未明确要求新建点检计划/方案；遇前置计划缺失时请直接说明或追问，严禁擅自新建计划。",
+    ),
+    (
+        "mes/wm/stocktaking-plan",
+        re.compile(r"盘点单|盘点结果"),
+        re.compile(r"盘点方案|盘点计划|stocktaking[-_ ]?plan", re.I),
+        "用户请求的是盘点单或盘点结果，未明确要求新建盘点方案；遇前置方案缺失时请直接说明或追问，严禁擅自新建方案。",
+    ),
+    (
+        "hrm/salary/change-template",
+        re.compile(r"调薪|定薪|员工薪资"),
+        re.compile(r"模板|change[-_ ]?template", re.I),
+        "用户请求的是员工定薪或调薪，未明确要求新建调薪模板；请改用 update_record(entity='hrm/salary/employee-info', ...) 或向用户确认。",
+    ),
+    (
+        "hrm/insurance/scheme",
+        re.compile(r"员工社保|参保信息"),
+        re.compile(r"社保方案|参保方案|scheme", re.I),
+        "用户请求的是员工社保或参保办理，未明确要求新建社保方案；遇参保方案缺失时请直接说明或追问，严禁擅自新建方案。",
+    ),
+)
+
+
+def check_unrequested_prerequisite_create(entity: str, texts: tuple[str, ...]) -> None:
+    """Block creating an upstream prerequisite entity when user texts only ask for a downstream record."""
+    clean = str(entity or "").strip().strip("/")
+    joined = "\n".join(str(t or "") for t in (texts or ()))
+    for guard_ent, downstream_re, explicit_re, message in _PREREQUISITE_CREATE_GUARDS:
+        if clean == guard_ent and downstream_re.search(joined) and not explicit_re.search(joined):
+            raise BusinessToolRequestError(message)
 
 
 def _record_ref_candidates(ref_entity: str, rows: list[dict], *, name_keys: tuple[str, ...]) -> None:
@@ -189,7 +241,7 @@ _DEDICATED_STATUSES = {
         )
     },
 }
-_CANDIDATE_SUFFIX = re.compile(r"^(.+?)\s*[（(](?:ID\s*=|编号\s*|#)\s*([A-Za-z0-9_-]+)\s*[）)]$")
+_CANDIDATE_SUFFIX = re.compile(r"^(.+?)\s*[（(](?:[A-Za-z][A-Za-z0-9_]*Id\s*[=：:]|ID\s*[=：:]|id\s*[=：:]|编号\s*[=：:]?|#)\s*([A-Za-z0-9_-]+)\s*[）)]$")
 _API_IMPORT_RE = re.compile(r"import\s+(?:\*\s+as\s+(\w+)|\{([^}]*)\})\s+from\s+['\"]@/api/([^'\"]+)['\"]")
 _PUT_URL_ARROW_RE = re.compile(
     r"\b(\w+)\s*[:=]\s*(?:async\s*)?\([^)]*\)\s*(?::[^=>{]+)?=>\s*\{?\s*"
@@ -586,12 +638,19 @@ class YudaoConventionWritePort:
         m_cand = _CANDIDATE_SUFFIX.fullmatch(raw)
         clean_name = m_cand.group(1).strip() if m_cand else raw
         hint_id = m_cand.group(2) if m_cand else None
-        if not m_cand and clean_name.isdigit():
-            raise BusinessToolRequestError("target 请传目标记录的确切业务名称、单号或 '名称（ID=编号）'，不能只传裸数字 ID。")
-
+        id_field = getattr(spec, "id_field", "id") or "id"
         matched_id = None
         matched_comp: dict[str, object] = {}
-        id_field = getattr(spec, "id_field", "id") or "id"
+        if not m_cand and clean_name.isdigit():
+            cand_id = int(clean_name)
+            verified = _verified_turn_id(entity, cand_id) or (
+                id_field == "employeeId" and _verified_turn_id("hrm/employee", cand_id)
+            )
+            if not verified:
+                raise BusinessToolRequestError("target 请传目标记录的确切业务名称、单号或 '名称（ID=编号）'，不能只传裸数字 ID。")
+            hint_id = clean_name
+            matched_id = cand_id
+
         docs = self._docs()
         paths = docs.get("paths") or {}
         page_path = f"/admin-api/{entity}/page"
@@ -599,7 +658,7 @@ class YudaoConventionWritePort:
         simple_path = f"/admin-api/{entity}/simple-list"
         rows: list[dict] = []
 
-        if page_path in paths:
+        if matched_id is None and page_path in paths:
             get_op = (paths[page_path] or {}).get("get") or {}
             q_names = {
                 p["name"] for p in (get_op.get("parameters") or ())
@@ -612,10 +671,15 @@ class YudaoConventionWritePort:
             ]
             if not req_missing:
                 narrow = {}
-                for qk in (*spec.name_fields, *_QUERY_CANDIDATES):
-                    if qk in q_names:
-                        narrow[qk] = clean_name
-                        break
+                if hint_id and hint_id.isdigit() and id_field in q_names:
+                    narrow[id_field] = int(hint_id)
+                else:
+                    for qk in (*spec.name_fields, *_QUERY_CANDIDATES):
+                        if id_field == "employeeId" and qk == "postName":
+                            continue
+                        if qk in q_names:
+                            narrow[qk] = clean_name
+                            break
                 res = self.client.get(f"{entity}/page", pageNo=1, pageSize=100, **narrow)
                 if isinstance(res, dict) and isinstance(res.get("list"), list):
                     rows = [r for r in res["list"] if isinstance(r, dict)]
@@ -674,7 +738,7 @@ class YudaoConventionWritePort:
                     res = self.client.get(f"{entity}/page", projectId=pid, pageNo=1, pageSize=100)
                     if isinstance(res, dict) and isinstance(res.get("list"), list):
                         rows.extend(r for r in res["list"] if isinstance(r, dict))
-        if not rows:
+        if matched_id is None and not rows:
             for ep in (list_path, simple_path, f"/admin-api/{entity}/list-all-simple", f"/admin-api/{entity}/my-page"):
                 if ep not in paths:
                     continue
@@ -723,70 +787,76 @@ class YudaoConventionWritePort:
             ]
 
         comp_fields = tuple(getattr(spec, "composite_id_fields", ()) or ())
-        folded = clean_name.casefold()
-        exact_rows = []
-        for row in rows:
-            rid = row.get(id_field)
-            if rid is None:
-                continue
-            if hint_id is not None and str(rid) != hint_id:
-                continue
-            row_names = [
-                str(row.get(k)).strip()
-                for k in (*spec.name_fields, *_NAME_CANDIDATES)
-                if isinstance(row.get(k), (str, int)) and not isinstance(row.get(k), bool) and str(row.get(k)).strip()
-            ]
-            if row.get("voucherWordName") and row.get("voucherNumber") is not None:
-                vw = str(row["voucherWordName"]).strip()
-                vn = str(row["voucherNumber"]).strip()
-                row_names.extend((f"{vw}-{vn}", f"{vw}{vn}", f"{vw}字第{vn}号"))
-            if any(n.casefold() == folded for n in row_names):
-                exact_rows.append(row)
+        if matched_id is None:
+            folded = clean_name.casefold()
+            exact_rows = []
+            for row in rows:
+                rid = row.get(id_field)
+                if rid is None:
+                    continue
+                if hint_id is not None and str(rid) != hint_id:
+                    continue
+                row_names = [
+                    str(row.get(k)).strip()
+                    for k in (*spec.name_fields, *_NAME_CANDIDATES)
+                    if not (id_field == "employeeId" and k == "postName")
+                    and isinstance(row.get(k), (str, int)) and not isinstance(row.get(k), bool) and str(row.get(k)).strip()
+                ]
+                if row.get("voucherWordName") and row.get("voucherNumber") is not None:
+                    vw = str(row["voucherWordName"]).strip()
+                    vn = str(row["voucherNumber"]).strip()
+                    row_names.extend((f"{vw}-{vn}", f"{vw}{vn}", f"{vw}字第{vn}号"))
+                if any(n.casefold() == folded for n in row_names):
+                    exact_rows.append(row)
+            if len(exact_rows) != 1 and hint_id is not None:
+                id_rows = [r for r in rows if r.get(id_field) is not None and str(r.get(id_field)) == hint_id]
+                if len(id_rows) == 1:
+                    exact_rows = id_rows
 
-        if len(exact_rows) == 1:
-            chosen_row = exact_rows[0]
-            matched_id = chosen_row[id_field]
-            matched_comp = {cf: chosen_row[cf] for cf in comp_fields if cf != id_field and chosen_row.get(cf) is not None}
-            if entity.startswith("fms/") and chosen_row.get("accountSetId") is not None:
-                matched_comp.setdefault("accountSetId", chosen_row["accountSetId"])
-            if matched_comp:
-                self._composite_hints[(entity, str(matched_id))] = dict(matched_comp)
-        elif len(exact_rows) > 1:
-            choices = tuple(
-                f"{exact_rows[i].get(spec.name_fields[0]) or clean_name}（ID={exact_rows[i][id_field]}）"
-                for i in range(min(6, len(exact_rows)))
-            )
-            raise BusinessToolReferenceError(
-                f"找到多条名为「{clean_name}」的{spec.label}，请向用户确认具体哪一条",
-                entity=entity,
-                choices=choices,
-            )
-        else:
-            try:
-                found = self.goal_data.find(entity, clean_name, limit=8)
-            except Exception:
-                found = ()
-            exact_refs = [
-                r for r in found
-                if (hint_id is None or str(r.id) == hint_id)
-                and (r.name.strip().casefold() == folded or r.display.strip().casefold() == folded)
-            ]
-            if len(exact_refs) == 1:
-                matched_id = exact_refs[0].id
-            else:
-                near = tuple(dict.fromkeys((
-                    *(r.display for r in found),
-                    *(
-                        f"{row.get(spec.name_fields[0]) or row.get('name') or row.get('title') or row.get('no')}（ID={row.get(id_field)}）"
-                        for row in rows[:6]
-                        if row.get(id_field) is not None
-                    ),
-                )))[:6]
-                raise BusinessToolReferenceError(
-                    f"未找到唯一匹配的{spec.label}「{target}」，请核对确切业务名称或单号",
-                    entity=entity,
-                    choices=near,
+            if len(exact_rows) == 1:
+                chosen_row = exact_rows[0]
+                matched_id = chosen_row[id_field]
+                matched_comp = {cf: chosen_row[cf] for cf in comp_fields if cf != id_field and chosen_row.get(cf) is not None}
+                if entity.startswith("fms/") and chosen_row.get("accountSetId") is not None:
+                    matched_comp.setdefault("accountSetId", chosen_row["accountSetId"])
+                if matched_comp:
+                    self._composite_hints[(entity, str(matched_id))] = dict(matched_comp)
+            elif len(exact_rows) > 1:
+                choices = tuple(
+                    f"{exact_rows[i].get(spec.name_fields[0]) or clean_name}（ID={exact_rows[i][id_field]}）"
+                    for i in range(min(6, len(exact_rows)))
                 )
+                raise BusinessToolReferenceError(
+                    f"找到多条名为「{clean_name}」的{spec.label}，请向用户确认具体哪一条",
+                    entity=entity,
+                    choices=choices,
+                )
+            else:
+                try:
+                    found = self.goal_data.find(entity, clean_name, limit=8)
+                except Exception:
+                    found = ()
+                exact_refs = [
+                    r for r in found
+                    if (hint_id is None or str(r.id) == hint_id)
+                    and (r.name.strip().casefold() == folded or r.display.strip().casefold() == folded)
+                ]
+                if len(exact_refs) == 1:
+                    matched_id = exact_refs[0].id
+                else:
+                    near = tuple(dict.fromkeys((
+                        *(r.display for r in found),
+                        *(
+                            f"{row.get(spec.name_fields[0]) or row.get('name') or row.get('title') or row.get('no')}（ID={row.get(id_field)}）"
+                            for row in rows[:6]
+                            if row.get(id_field) is not None
+                        ),
+                    )))[:6]
+                    raise BusinessToolReferenceError(
+                        f"未找到唯一匹配的{spec.label}「{target}」，请核对确切业务名称或单号",
+                        entity=entity,
+                        choices=near,
+                    )
 
         record = self.read_record(entity, matched_id, spec=spec, composite_id=matched_comp)
         if not isinstance(record, dict) or str(record.get(id_field)) != str(matched_id):
@@ -868,10 +938,12 @@ class YudaoConventionWritePort:
             enum_cls = dict_type.split(":", 1)[1]
             labels = self._enum_labels_for(enum_cls)
             matches = [(k, lbl) for k, lbl in labels.items() if str(lbl).strip() == s_val]
+            if not matches:
+                matches = [(k, lbl) for k, lbl in labels.items() if str(k).strip() == s_val]
             if len(matches) != 1:
-                allowed = "、".join(str(v) for v in list(labels.values())[:20])
+                allowed = "、".join(f"{lbl}(编码={k})" for k, lbl in list(labels.items())[:20])
                 raise BusinessToolRequestError(
-                    f"枚举「{enum_cls}」中没有唯一匹配的选项「{raw_value}」（可选标签：{allowed or '无'}；请传中文标签而非数字编码）。"
+                    f"枚举「{enum_cls}」中没有唯一匹配的选项「{raw_value}」（可选：{allowed or '无'}；支持传中文标签或唯一编码）。"
                 )
             code_raw, label = matches[0]
             if kind == "integer":
@@ -889,10 +961,15 @@ class YudaoConventionWritePort:
             raise BusinessToolRequestError("当前系统字典不可读，无法核验枚举选项。")
         choices = [r for r in rows if isinstance(r, dict) and r.get("dictType") == dict_type]
         exact = [r for r in choices if str(r.get("label") or "").strip() == s_val]
+        if not exact:
+            exact = [r for r in choices if str(r.get("value") or "").strip() == s_val]
         if len(exact) != 1:
-            allowed = "、".join(str(r.get("label")) for r in choices[:20] if r.get("label"))
+            allowed = "、".join(
+                f"{r.get('label')}(编码={r.get('value')})"
+                for r in choices[:20] if r.get("label") is not None
+            )
             raise BusinessToolRequestError(
-                f"字典「{dict_type}」中没有唯一匹配的选项「{raw_value}」（可选标签：{allowed or '无'}；请传中文标签而非数字编码）。"
+                f"字典「{dict_type}」中没有唯一匹配的选项「{raw_value}」（可选：{allowed or '无'}；支持传中文标签或唯一编码）。"
             )
         code_raw = str(exact[0].get("value", "")).strip()
         if kind == "integer":
@@ -1031,6 +1108,44 @@ class YudaoConventionWritePort:
                     allow_root=allow_root,
                     query_ctx=child_ctx,
                 )
+
+        if ref_entity == "system/user" and hint_id is None:
+            info = self.client.get("system/auth/get-permission-info") or {}
+            user = info.get("user") if isinstance(info, dict) else None
+            if isinstance(user, dict) and user.get("id") is not None:
+                actor_names = {
+                    tok for tok in (
+                        "当前账号",
+                        "当前用户",
+                        "本人",
+                        str(user.get("nickname") or "").strip(),
+                        str(user.get("username") or "").strip(),
+                    )
+                    if tok
+                }
+                if name in actor_names:
+                    actor_uid = int(user["id"]) if str(user["id"]).isdigit() else user["id"]
+                    actor_lbl = str(user.get("nickname") or user.get("username") or user["id"]).strip()
+                    try:
+                        list_path, name_keys, rows, call_params = self._list_ref_rows("system/user", query_ctx=query_ctx)
+                        row_match = next((r for r in rows if str(r.get("id")) == str(actor_uid)), None)
+                    except Exception:
+                        list_path, name_keys, call_params, row_match = "", ("nickname", "name"), {}, None
+                    if row_match is not None:
+                        lbl = next((str(row_match.get(k)).strip() for k in name_keys if row_match.get(k)), "") or actor_lbl
+                        pk = next((k for k in name_keys if row_match.get(k)), name_keys[0])
+                        return row_match["id"], lbl, {
+                            "kind": "relation",
+                            "list_path": list_path,
+                            "query_params": call_params,
+                            "name_keys": list(name_keys),
+                            "name_key": pk,
+                            "id": row_match["id"],
+                            "name": lbl,
+                        }
+                    return actor_uid, actor_lbl, {"kind": "self_actor", "id": actor_uid}
+            if name in {"当前账号", "当前用户", "本人"}:
+                raise BusinessToolRequestError("当前登录账号信息不可读，无法绑定当前用户。")
 
         if name.isdigit() and hint_id is None:
             cand_id = int(name)
@@ -1409,6 +1524,11 @@ class YudaoConventionWritePort:
             kind = b.get("kind")
             if kind == "root":
                 continue
+            if kind == "self_actor":
+                cur_uid = ((self.client.get("system/auth/get-permission-info") or {}).get("user") or {}).get("id")
+                if str(cur_uid) != str(b.get("id")):
+                    raise BusinessMutationRefusedError("actor changed after approval", reason="precondition_changed")
+                continue
             if kind == "java_enum":
                 labels = self._enum_labels_for(b["enum_cls"])
                 if labels and str(labels.get(str(b["code"])) or "") != str(b["label"]):
@@ -1589,6 +1709,91 @@ class YudaoConventionWritePort:
 
     def invalidate_reads(self, entities: frozenset[str]) -> None:
         self.goal_data.invalidate_reads(entities)
+
+    def check_create_intent_alignment(self, entity: str, texts: tuple[str, ...]) -> None:
+        check_unrequested_prerequisite_create(entity, texts)
+
+    def actor_provenance_tokens(self) -> tuple[str, ...]:
+        tokens: list[str] = ["当前账号", "当前用户", "本人"]
+        _policy_turn, knowledge = _active_turn_and_knowledge()
+        if knowledge is not None:
+            uname = str(getattr(knowledge, "user_name", "") or "").strip()
+            if uname:
+                tokens.append(uname)
+        try:
+            info = self.client.get("system/auth/get-permission-info") or {}
+        except Exception:
+            info = {}
+        user = info.get("user") if isinstance(info, dict) else None
+        if isinstance(user, dict):
+            for key in ("nickname", "username"):
+                val = str(user.get(key) or "").strip()
+                if val:
+                    tokens.append(val)
+        return tuple(dict.fromkeys(tokens))
+
+    def actor_reference_entities(self) -> tuple[str, ...]:
+        return ("system/user", "hrm/employee")
+
+    def session_anchor_dates(self) -> tuple[str, ...]:
+        scope = current_turn_read_scope()
+        turn_ctx = scope.get("turn_context") if isinstance(scope, dict) else None
+        knowledge = scope.get("knowledge") if isinstance(scope, dict) else None
+        today_str = (
+            str(getattr(turn_ctx, "today", "") or "").strip()
+            or str(getattr(knowledge, "session_today", "") or "").strip()
+            or str(getattr(self.goal_data, "today", "") or "").strip()
+            or datetime.now(self._zone()).strftime("%Y-%m-%d")
+        )
+        out: list[str] = [today_str]
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", today_str):
+            out.append(f"{today_str} 00:00:00")
+            try:
+                dt = datetime.strptime(f"{today_str} 00:00:00", "%Y-%m-%d %H:%M:%S").replace(tzinfo=self._zone())
+                out.append(str(int(dt.timestamp() * 1000)))
+            except ValueError:
+                pass
+        return tuple(dict.fromkeys(out))
+
+    def enum_provenance_tokens(self, f_spec: ConventionFieldSpec, raw_val) -> tuple[str, ...]:
+        dict_type = str(getattr(f_spec, "enum_type", "") or "").strip()
+        if not dict_type or raw_val is None:
+            return ()
+        s_val = str(raw_val).strip()
+        if not s_val:
+            return ()
+        tokens: list[str] = []
+        if dict_type.startswith("__java_enum__:"):
+            labels = self._enum_labels_for(dict_type.split(":", 1)[1])
+            by_label = [(str(k).strip(), str(lbl).strip()) for k, lbl in labels.items() if str(lbl).strip() == s_val]
+            matches = by_label or [
+                (str(k).strip(), str(lbl).strip()) for k, lbl in labels.items() if str(k).strip() == s_val
+            ]
+            if len(matches) == 1:
+                tokens.extend(t for t in matches[0] if t)
+            return tuple(dict.fromkeys(tokens))
+        check_label = (
+            {"启用": "开启", "正常": "开启", "停用": "关闭", "禁用": "关闭"}.get(s_val, s_val)
+            if dict_type == "common_status"
+            else s_val
+        )
+        try:
+            rows = self.client.get("system/dict-data/simple-list") or []
+        except Exception:
+            rows = []
+        if isinstance(rows, list):
+            choices = [r for r in rows if isinstance(r, dict) and r.get("dictType") == dict_type]
+            exact = [r for r in choices if str(r.get("label") or "").strip() == check_label]
+            if not exact:
+                exact = [r for r in choices if str(r.get("value") or "").strip() == s_val]
+            if len(exact) == 1:
+                val_tok = str(exact[0].get("value") or "").strip()
+                lbl_tok = str(exact[0].get("label") or "").strip()
+                if val_tok:
+                    tokens.append(val_tok)
+                if lbl_tok:
+                    tokens.append(lbl_tok)
+        return tuple(dict.fromkeys(tokens))
 
     def write_route_capability(self) -> WriteRouteCapability:
         return YUDAO_WRITE_ROUTE_CAPABILITY
@@ -1797,6 +2002,10 @@ def build_yudao_write_directory(*, docs: dict | None = None, source=None, ui=Non
             "tag": op_tag,
             "id_field": spec.id_field,
             "collections": [col.name for col in spec.collections],
+            "collection_details": [
+                f"{col.name}({','.join(f.name for f in col.fields[:6])})"
+                for col in spec.collections
+            ],
             "required": ["target", "changes/line_changes"],
             "relations": [],
         })
