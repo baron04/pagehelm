@@ -746,6 +746,91 @@ class Phase51ContractTests(unittest.TestCase):
         self.assertIn("archived category refused in precheck", str(ctx.exception))
         self.assertEqual(dispatches, [])
 
+    def test_change_record_id_readback_formats_reference(self):
+        from web_operation_agent.business.compiled_writes import (
+            CompiledAggregateUpdateHandler,
+            CompiledAggregateUpdateSpec,
+            CompiledChildCollectionSpec,
+        )
+        from web_operation_agent.business.convention_writes import ConventionFieldSpec
+
+        class _ChangeRecordPort:
+            def __init__(self, *, custom_format: bool):
+                self.custom_format = custom_format
+                self.current = {
+                    "id": 12,
+                    "name": "Ada",
+                    "effectiveDate": "2026-10-01",
+                    "items": [{"id": 1, "label": "Base", "amount": 8000}],
+                }
+                self.change_rec = None
+
+            def verify_actor(self, context):
+                return "9"
+
+            def aggregate_update_specs(self):
+                return {
+                    "compensation-records": CompiledAggregateUpdateSpec(
+                        entity="compensation-records",
+                        label="Compensation",
+                        fields=(ConventionFieldSpec("effectiveDate", "string", label="Effective Date"),),
+                        collections=(
+                            CompiledChildCollectionSpec(
+                                "items",
+                                "Items",
+                                (
+                                    ConventionFieldSpec("label", "string", label="Label"),
+                                    ConventionFieldSpec("amount", "number", label="Amount"),
+                                ),
+                                name_fields=("label",),
+                            ),
+                        ),
+                        readback_strategy="change_record_id",
+                    )
+                }
+
+            def resolve_target(self, entity, target, *, spec):
+                return dict(self.current)
+
+            def read_aggregate_record(self, spec, record_id, *, composite_id=None):
+                return dict(self.current)
+
+            def recheck_bindings(self, bindings, *, actor_id):
+                return None
+
+            def encode_field(self, spec, f_spec, raw_value, cur_row):
+                val = float(raw_value) if f_spec.kind == "number" else str(raw_value)
+                return val, str(cur_row.get(f_spec.name, "")), str(val), None
+
+            def dispatch_aggregate_update(self, spec, record_id, payload, *, current_record):
+                self.change_rec = dict(payload)
+                return 77
+
+            def read_aggregate_after_update(self, spec, record_id, dispatch_result, payload, *, composite_id=None):
+                merged = dict(self.current)
+                merged.update(self.change_rec or {})
+                return merged
+
+            def invalidate_reads(self, entities):
+                return None
+
+        class _FormattedPort(_ChangeRecordPort):
+            def format_change_record_reference(self, spec, record_id, dispatch_result, payload, after, *, reference):
+                return f"{reference} (change_record={dispatch_result})"
+
+        for custom, expected_fragment in ((False, "（变更记录ID=77）"), (True, "(change_record=77)")):
+            port = _FormattedPort(custom_format=True) if custom else _ChangeRecordPort(custom_format=False)
+            handler = CompiledAggregateUpdateHandler(port)
+            spec = handler.prepare({
+                "entity": "compensation-records",
+                "target": "Ada",
+                "changes": [{"field": "effectiveDate", "value": "2026-11-01"}],
+                "line_changes": [{"collection": "items", "match": "Base", "changes": [{"field": "amount", "value": 9500}]}],
+            })
+            res = handler.dispatch(spec.args)
+            self.assertEqual(res.content["change_record_id"], "77")
+            self.assertIn(expected_fragment, res.content["reference"])
+
 
 if __name__ == "__main__":
     unittest.main()

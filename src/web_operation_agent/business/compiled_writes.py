@@ -1463,6 +1463,21 @@ class CompiledAggregateUpdateHandler:
             content_payload = {"verified": True, "record_id": str(record_id), "entity": entity, "reference": reference, "effects": effects}
             if spec.readback_strategy == "change_record_id" and dispatch_result not in (None, ""):
                 content_payload["change_record_id"] = str(dispatch_result)
+                fmt_fn = getattr(self.port, "format_change_record_reference", None)
+                if callable(fmt_fn):
+                    reference = str(
+                        fmt_fn(
+                            spec,
+                            record_id,
+                            dispatch_result,
+                            args.get("payload") or {},
+                            after,
+                            reference=reference,
+                        )
+                    )
+                else:
+                    reference = f"{reference}（变更记录ID={dispatch_result}）"
+                content_payload["reference"] = reference
             return BusinessToolResult(
                 content_payload,
                 {"verified": True, "operation": "update_record", "effects": effects},

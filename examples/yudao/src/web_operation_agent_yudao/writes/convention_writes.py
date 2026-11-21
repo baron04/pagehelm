@@ -1843,6 +1843,24 @@ class YudaoConventionWritePort:
             return info if isinstance(info, dict) else (change_rec if isinstance(change_rec, dict) else None)
         return self.read_record(spec.entity, record_id, spec=spec, composite_id=composite_id)
 
+    def format_change_record_reference(
+        self,
+        spec: CompiledAggregateUpdateSpec,
+        record_id,
+        dispatch_result,
+        payload: dict,
+        after: dict,
+        *,
+        reference: str,
+    ) -> str:
+        if spec.entity == "hrm/salary/employee-info":
+            return (
+                f"{reference}（已生成并回读核实调薪记录 hrm/salary/change-record ID={dispatch_result}；"
+                "若生效日期晚于今日，hrm/salary/employee-info 当前档案在到期前保持原薪资，"
+                f"调薪明细与调后薪资可经 GET /admin-api/hrm/salary/change-record/get?id={dispatch_result} 核实）"
+            )
+        return f"{reference}（变更记录ID={dispatch_result}）"
+
     def dispatch_status(self, spec: TwoStateStatusSpec, record_id, status_code) -> None:
         action_path = spec.action_path or f"{spec.entity}/update-status"
         id_param = spec.id_param or "id"

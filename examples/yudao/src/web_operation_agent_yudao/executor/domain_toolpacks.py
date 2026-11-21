@@ -112,7 +112,8 @@ YUDAO_DOMAIN_PACKS: tuple[DomainToolpack, ...] = (
             "员工新建用 create_record(entity='hrm/employee')（有页面默认值的字段如 type/entryStatus 未指明可省略自动补齐；在职需 jobNumber）；"
             "调薪/定薪改薪资项用 update_record(entity='hrm/salary/employee-info', target='姓名或姓名(employeeId=编号)', "
             "changes=[主表字段], line_changes=[{'collection':'salaryOptions','match':'薪资项名称或编码','changes':[{'field':'value','value':金额}]}])"
-            "（regularSalary/probationSalary 为汇总只读列，勿放 changes；算得目标金额须先调 sql 留回执）。"
+            "（regularSalary/probationSalary 为汇总只读列，勿放 changes；算得目标金额须先调 sql 留回执；"
+            "未来日期生效的调薪写入 hrm/salary/change-record（到期前 employee-info 仍显示当前生效薪资，勿误判为未生效））。"
         ),
         read_contract_text="实体前缀 hrm/employee、hrm/salary/employee-info、hrm/salary/*、hrm/attendance/*、hrm/recruit/*。",
         default_priority=1,

@@ -1902,6 +1902,148 @@ class Phase51G0Tests(unittest.TestCase):
             self.assertEqual(ref_ctx.exception.reason, "precondition_changed")
             self.assertEqual(len(client.dispatches), 1)
 
+    def test_hrm_salary_future_change_record_reference_explains_effective_date_readback(self):
+        import time
+        from web_operation_agent.business.compiled_writes import CompiledAggregateUpdateHandler
+        from web_operation_agent.state.identity import OperationContext, PrincipalContext
+        from web_operation_agent_yudao.executor.domain_toolpacks import resolve_domain_pack, YUDAO_DOMAIN_PACKS
+        from web_operation_agent_yudao.writes.convention_writes import YudaoConventionWritePort
+
+        now = int(time.time() * 1000)
+        actor = PrincipalContext(
+            1, "yudao", "1", "7", "1", "synthetic",
+            now - 1000, now + 60000, ("yudao.read", "yudao.write"),
+        )
+        op_ctx = OperationContext.create(actor, session_id="s", turn_id="t", operation_id="o", deadline_ms=now + 30000)
+
+        docs = {
+            "paths": {
+                "/admin-api/hrm/salary/employee-info/page": {
+                    "get": {
+                        "tags": ["管理后台 - HRM 员工薪资信息"],
+                        "parameters": [
+                            {"name": "employeeId", "in": "query"},
+                            {"name": "pageNo", "in": "query", "required": True},
+                            {"name": "pageSize", "in": "query", "required": True},
+                        ],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/SalPageResp"}}}}},
+                    }
+                },
+                "/admin-api/hrm/salary/employee-info/get": {
+                    "get": {
+                        "tags": ["管理后台 - HRM 员工薪资信息"],
+                        "parameters": [{"name": "employeeId", "in": "query", "required": True}],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/SalGetResp"}}}}},
+                    }
+                },
+                "/admin-api/hrm/salary/employee-info/update": {
+                    "put": {
+                        "tags": ["管理后台 - HRM 员工薪资信息"],
+                        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/SalUpdateVO"}}}},
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                    }
+                },
+            },
+            "components": {
+                "schemas": {
+                    "CommonResultLong": {"properties": {"code": {"type": "integer"}, "data": {"type": "integer", "format": "int64"}}},
+                    "SalPageResp": {"properties": {"data": {"$ref": "#/components/schemas/SalPage"}}},
+                    "SalPage": {"properties": {"list": {"type": "array", "items": {"$ref": "#/components/schemas/SalRespVO"}}}},
+                    "SalGetResp": {"properties": {"data": {"$ref": "#/components/schemas/SalRespVO"}}},
+                    "SalRespVO": {
+                        "properties": {
+                            "id": {"type": "integer"},
+                            "employeeId": {"type": "integer"},
+                            "employeeName": {"type": "string"},
+                            "effectTime": {"type": "integer"},
+                            "changeReason": {"type": "integer"},
+                            "remark": {"type": "string"},
+                            "salaryOptions": {"type": "array", "items": {"$ref": "#/components/schemas/SalOptVO"}},
+                        }
+                    },
+                    "SalUpdateVO": {
+                        "properties": {
+                            "id": {"type": "integer"},
+                            "employeeId": {"type": "integer"},
+                            "effectTime": {"type": "string", "format": "date-time", "description": "生效日期"},
+                            "changeReason": {"type": "integer", "description": "调整原因"},
+                            "remark": {"type": "string"},
+                            "salaryOptions": {"type": "array", "items": {"$ref": "#/components/schemas/SalOptVO"}},
+                        }
+                    },
+                    "SalOptVO": {
+                        "required": ["code", "value"],
+                        "properties": {
+                            "code": {"type": "integer", "description": "编码"},
+                            "name": {"type": "string", "description": "名称"},
+                            "value": {"type": "number", "description": "金额"},
+                        },
+                    },
+                }
+            },
+        }
+
+        class _FutureSalaryClient:
+            def __init__(self):
+                self.tenant = "1"
+                self.read_generation = 1
+                self.row = {
+                    "id": 1,
+                    "employeeId": 112,
+                    "employeeName": "李云珂",
+                    "effectTime": 1767715200000,
+                    "changeReason": 0,
+                    "remark": "seed",
+                    "salaryOptions": [{"code": 10101, "name": "基本工资", "value": 8000.0}],
+                }
+                self.change_records = {}
+
+            def read_window(self, _check):
+                return nullcontext()
+
+            def write_window(self, _check):
+                return nullcontext()
+
+            def get(self, path, **params):
+                if path == "system/auth/get-permission-info":
+                    return {"user": {"id": 1, "nickname": "芋道源码", "deptId": 100}, "roles": ["super_admin"], "menus": []}
+                if path == "hrm/salary/employee-info/page":
+                    return {"list": [dict(self.row)], "total": 1}
+                if path == "hrm/salary/employee-info/get":
+                    # Future-dated change keeps pre-effective value in employee-info before effective date
+                    return dict(self.row)
+                if path == "hrm/salary/change-record/get":
+                    return dict(self.change_records[int(params["id"])])
+                return []
+
+            def write_once(self, method, path, *, body=None, params=None, operation="", expect_result="bool"):
+                self.change_records[3] = {
+                    "id": 3,
+                    "employeeId": 112,
+                    "effectTime": body["effectTime"],
+                    "changeReason": body["changeReason"],
+                    "salaryOptions": list(body["salaryOptions"]),
+                }
+                return 3
+
+        client = _FutureSalaryClient()
+        port = YudaoConventionWritePort(client, NS(_documents=docs, _source=None, _ui=None, invalidate_reads=lambda _e: None))
+        handler = CompiledAggregateUpdateHandler(port)
+        spec = handler.prepare({
+            "entity": "hrm/salary/employee-info",
+            "target": "李云珂（employeeId=112）",
+            "changes": [{"field": "effectTime", "value": "2026-11-01"}],
+            "line_changes": [{"collection": "salaryOptions", "match": "基本工资", "changes": [{"field": "value", "value": 9500}]}],
+        }, context=op_ctx)
+        res = handler.dispatch(spec.args, context=op_ctx)
+        self.assertTrue(res.content["verified"])
+        self.assertEqual(res.content["change_record_id"], "3")
+        self.assertIn("hrm/salary/change-record ID=3", res.content["reference"])
+        self.assertIn("到期前保持原薪资", res.content["reference"])
+        hrm_pack = resolve_domain_pack(YUDAO_DOMAIN_PACKS, "hrm")
+        self.assertIsNotNone(hrm_pack)
+        self.assertIn("hrm/salary/change-record", hrm_pack.write_contract_text)
+
 
 if __name__ == "__main__":
     unittest.main()
