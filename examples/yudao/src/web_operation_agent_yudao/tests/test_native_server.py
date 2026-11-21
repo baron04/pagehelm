@@ -862,6 +862,34 @@ class NativeHostTests(unittest.TestCase):
         self.assertTrue(dev_ch.local_dev_mode)
         self.assertTrue(dev_ch._panel_configuration()["local_dev_mode"])
 
+    def test_host_warms_compiled_write_catalog_on_startup(self):
+        import threading
+        docs = {"paths": {"/admin-api/demo/item/get": {"get": {}}}}
+        self.documents.return_value = docs
+        self.config = replace(self.config, native_writes=True, warm_index=False)
+        host = self.host()
+        with patch("web_operation_agent_yudao.writes.convention_writes.warm_yudao_write_catalog") as warm_mock:
+            host._warm_api_docs()
+        warm_mock.assert_called_once_with(docs=docs, source=host.rule_source, ui=host.ui)
+
+        done = threading.Event()
+        called = []
+
+        def record_warm(**kwargs):
+            called.append(kwargs)
+            done.set()
+
+        root = Path(self.tmp.name) / "srv-src"
+        (root / "server" / "yudao-module-demo" / "src" / "main" / "java").mkdir(parents=True, exist_ok=True)
+        host2 = replace(self.config, native_writes=True, warm_index=True, source_root=root,
+                        state_dir=Path(self.tmp.name) / "warm-catalog")
+        with patch("web_operation_agent_yudao.writes.convention_writes.warm_yudao_write_catalog", side_effect=record_warm):
+            from web_operation_agent_yudao.host.native_server import YudaoHost
+            h = YudaoHost(host2)
+            self.hosts.append(h)
+            self.assertTrue(done.wait(5))
+        self.assertEqual(called[0]["docs"], docs)
+
 
 class NativeCliTests(unittest.TestCase):
     def test_policy_diagnostic_precedes_model_and_network(self):

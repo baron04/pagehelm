@@ -1387,6 +1387,32 @@ class YudaoConventionWritePort:
         return YUDAO_WRITE_ROUTE_CAPABILITY
 
 
+def warm_yudao_write_catalog(*, docs: dict, source, ui=None) -> None:
+    """Precompile the 4-category write catalog outside live turns."""
+    if not isinstance(docs, dict) or not docs.get("paths"):
+        return
+    rel = str(getattr(source, "release", "")) if source is not None else ""
+    cache_key = (id(docs), id(source), id(ui), rel)
+    with _CACHE_LOCK:
+        if cache_key in _COMPILED_SPECS_CACHE:
+            _COMPILED_SPECS_CACHE.move_to_end(cache_key)
+            return
+    catalog = compile_yudao_write_catalog(
+        docs=docs,
+        source=source,
+        ui=ui,
+        dedicated_creates=frozenset(_DEDICATED_CREATES),
+        dedicated_updates=frozenset(_DEDICATED_UPDATES),
+        dedicated_statuses=frozenset(_DEDICATED_STATUSES),
+        ui_metadata_fn=_compile_ui_metadata,
+    )
+    with _CACHE_LOCK:
+        _COMPILED_SPECS_CACHE[cache_key] = catalog
+        _COMPILED_SPECS_CACHE.move_to_end(cache_key)
+        while len(_COMPILED_SPECS_CACHE) > 8:
+            _COMPILED_SPECS_CACHE.popitem(last=False)
+
+
 def yudao_convention_tools(client, goal_data):
     port = YudaoConventionWritePort(client, goal_data)
     return compiled_write_tool_definitions(
@@ -1396,4 +1422,9 @@ def yudao_convention_tools(client, goal_data):
     )
 
 
-__all__ = ["YUDAO_WRITE_ROUTE_CAPABILITY", "YudaoConventionWritePort", "yudao_convention_tools"]
+__all__ = [
+    "YUDAO_WRITE_ROUTE_CAPABILITY",
+    "YudaoConventionWritePort",
+    "warm_yudao_write_catalog",
+    "yudao_convention_tools",
+]

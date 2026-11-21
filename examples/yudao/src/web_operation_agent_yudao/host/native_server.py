@@ -398,6 +398,11 @@ class YudaoHost:
         try:
             if self.rule_source is not None:
                 self.rule_source.warm()
+            if self.config.native_writes or self.config.native_write_preparation:
+                docs = self._load_api_docs()
+                if isinstance(docs, dict) and docs.get("paths"):
+                    from ..writes.convention_writes import warm_yudao_write_catalog
+                    warm_yudao_write_catalog(docs=docs, source=self.rule_source, ui=self.ui)
         except Exception:  # noqa: BLE001 -- live turns report source unavailability directly
             pass
 
@@ -421,14 +426,22 @@ class YudaoHost:
                          if not re.search(r"Mapper\.\w+$", str(reasons.get(path, ""))))
 
     def _warm_api_docs(self) -> None:
+        documents = None
         try:
             with self._documents_lock:
                 if self._api_documents is None:
-                    documents = _api_docs(self.config.api_base)
-                    if isinstance(documents, dict):
-                        self._api_documents = documents
+                    loaded = _api_docs(self.config.api_base)
+                    if isinstance(loaded, dict):
+                        self._api_documents = loaded
+                documents = self._api_documents
         except (OSError, ValueError):
             pass  # A turn reads it again and says so if it is still unavailable.
+        if (self.config.native_writes or self.config.native_write_preparation) and isinstance(documents, dict) and documents.get("paths"):
+            try:
+                from ..writes.convention_writes import warm_yudao_write_catalog
+                warm_yudao_write_catalog(docs=documents, source=self.rule_source, ui=self.ui)
+            except Exception:  # noqa: BLE001 -- lazy turn compilation handles retry/fallback
+                pass
 
     def _load_api_docs(self) -> dict:
         from web_operation_agent.goal.data import DataRefused

@@ -1860,6 +1860,108 @@ class YudaoConventionWritesTests(unittest.TestCase):
             self.assertIn("name", [f.name for f in spu_ast_agg.collections[0].fields])
             self.assertIn("name", spu_ast_agg.collections[0].server_computed_fields)
 
+    def test_warm_write_catalog_populates_cache_and_releases_source_lock(self):
+        import threading
+        from unittest.mock import patch
+        from web_operation_agent_yudao.writes import convention_writes as cw
+        from web_operation_agent_yudao.writes.convention_writes import warm_yudao_write_catalog
+        from web_operation_agent_yudao.rules import compiled_write_source as cws
+
+        with tempfile.TemporaryDirectory() as tmp:
+            troot = Path(tmp)
+            _write_synthetic_release(troot)
+            mod = troot / "server" / "yudao-module-demo" / "src" / "main" / "java" / "cn" / "iocoder" / "yudao" / "module" / "demo"
+            for sub in ("controller", "controller/vo", "dal/dataobject", "service"):
+                (mod / sub).mkdir(parents=True, exist_ok=True)
+            (mod / "dal" / "dataobject" / "ItemDO.java").write_text(
+                "package cn.iocoder.yudao.module.demo.dal.dataobject;\n"
+                "public class ItemDO { private Long id; private String name; }\n",
+                encoding="utf-8",
+            )
+            (mod / "controller" / "vo" / "ItemSaveReqVO.java").write_text(
+                "package cn.iocoder.yudao.module.demo.controller.vo;\n"
+                "public class ItemSaveReqVO { private Long id; private String name; }\n",
+                encoding="utf-8",
+            )
+            (mod / "controller" / "ItemController.java").write_text(
+                "package cn.iocoder.yudao.module.demo.controller;\n"
+                "import cn.iocoder.yudao.module.demo.controller.vo.*;\n"
+                '@RequestMapping("/demo/item")\n'
+                "public class ItemController {\n"
+                "  private ItemService itemService;\n"
+                '  @PostMapping("/create") public CommonResult<Long> create(@RequestBody ItemSaveReqVO req) { return success(itemService.createItem(req)); }\n'
+                '  @PutMapping("/update") public CommonResult<Boolean> update(@RequestBody ItemSaveReqVO req) { itemService.updateItem(req); return success(true); }\n'
+                "}\n",
+                encoding="utf-8",
+            )
+            (mod / "service" / "ItemServiceImpl.java").write_text(
+                "package cn.iocoder.yudao.module.demo.service;\n"
+                "public class ItemServiceImpl implements ItemService {\n"
+                "  private ItemMapper itemMapper;\n"
+                "  public Long createItem(ItemSaveReqVO req) { ItemDO d = BeanUtils.toBean(req, ItemDO.class); itemMapper.insert(d); return d.getId(); }\n"
+                "  public void updateItem(ItemSaveReqVO req) { ItemDO d = BeanUtils.toBean(req, ItemDO.class); itemMapper.updateById(d); }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            docs = {
+                "paths": {
+                    "/admin-api/demo/item/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/ItemResp"}}}}}}},
+                    "/admin-api/demo/item/create": {"post": {"tags": ["管理后台 - 示例"], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/ItemReq"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}}}},
+                    "/admin-api/demo/item/update": {"put": {"tags": ["管理后台 - 示例"], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/ItemReq"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}}}},
+                },
+                "components": {"schemas": {
+                    "CommonResultLong": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "integer"}}},
+                    "CommonResultBoolean": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "boolean"}}},
+                    "ItemReq": {"type": "object", "required": ["name"], "properties": {"id": {"type": "integer"}, "name": {"type": "string", "description": "名称"}}},
+                    "ItemResp": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}}}}},
+                }},
+            }
+            source = YudaoSource(troot, release="v-warm-test")
+            source.warm()
+
+            orig_java_files = source._java_files
+            service_calls = []
+
+            def counting_java_files(suffix):
+                if suffix == "ServiceImpl.java":
+                    service_calls.append(suffix)
+                return orig_java_files(suffix)
+
+            peer_acquired = []
+
+            def probe_ui_meta(_src, _ui=None):
+                ok = False
+                def worker():
+                    nonlocal ok
+                    if source._instance_lock.acquire(blocking=False):
+                        ok = True
+                        source._instance_lock.release()
+                t = threading.Thread(target=worker)
+                t.start()
+                t.join(timeout=5)
+                peer_acquired.append(ok)
+                return cw._compile_ui_metadata(_src, _ui)
+
+            with patch.object(source, "_java_files", side_effect=counting_java_files):
+                cws.compile_yudao_write_catalog(
+                    docs=docs,
+                    source=source,
+                    ui=None,
+                    dedicated_creates=frozenset(),
+                    dedicated_updates=frozenset(),
+                    dedicated_statuses=frozenset(),
+                    ui_metadata_fn=probe_ui_meta,
+                )
+            self.assertEqual(len(service_calls), 1)
+            self.assertEqual(peer_acquired, [True])
+
+            docs2 = copy.deepcopy(docs)
+            warm_yudao_write_catalog(docs=docs2, source=source, ui=None)
+            port = YudaoConventionWritePort(FakeYudaoClient(), FakeGoalData(docs2, source=source))
+            with patch.object(cw, "compile_yudao_write_catalog", side_effect=AssertionError("expected warm cache hit")):
+                updates = port.update_specs()
+            self.assertIn("demo/item", updates)
+
 
 if __name__ == "__main__":
     unittest.main()

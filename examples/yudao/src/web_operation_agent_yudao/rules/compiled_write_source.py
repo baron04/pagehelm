@@ -95,9 +95,7 @@ _DANGEROUS_SERVICE_TYPES = re.compile(
 # Java VO / Controller AST regexes
 _PACKAGE_RE = re.compile(r"^\s*package\s+([\w.]+)\s*;", re.M)
 _IMPORT_RE = re.compile(r"^\s*import\s+(?:static\s+)?([\w.*]+)\s*;", re.M)
-_CLASS_DECL_RE = re.compile(
-    r"(?:public|protected|private)?\s*(?:static\s+)?(?:final\s+)?class\s+([A-Z]\w*)\b[^{]*\{",
-)
+_CLASS_DECL_RE = re.compile(r"\bclass\s+([A-Z]\w*)\b[^{]*\{")
 _VO_FIELD_DECL_RE = re.compile(
     r"^[ \t]*private\s+(?!static\b|final\b)([\w<>?.,\[\]\s@$()=-]+?)\s+(\w+)\s*(?:=[^;]*)?;",
     re.M,
@@ -273,20 +271,39 @@ def _parse_vo_classes_in_text(
     walk(masked, raw, ())
 
 
-def _index_java_tree(source) -> tuple[dict[str, JavaVOAST], dict[str, ControllerEndpointAST]]:
-    if source is None or not getattr(source, "root", None):
-        return {}, {}
+def _index_java_tree(
+    source,
+    *,
+    vo_do_texts: list[tuple[str, str]] | None = None,
+    ctrl_texts: list[tuple[str, str]] | None = None,
+) -> tuple[dict[str, JavaVOAST], dict[str, ControllerEndpointAST]]:
+    if vo_do_texts is None or ctrl_texts is None:
+        if source is None or not getattr(source, "root", None):
+            return {}, {}
+        lock = getattr(source, "_instance_lock", None) or nullcontext()
+        with lock:
+            if vo_do_texts is None:
+                vo_do_texts = [
+                    (rel, source._read(rel))
+                    for path in (*source._java_files("VO.java"), *source._java_files("DO.java"))
+                    for rel in (source._relative(path),)
+                ]
+            if ctrl_texts is None:
+                ctrl_texts = [
+                    (rel, source._read(rel))
+                    for path in source._java_files("Controller.java")
+                    for rel in (source._relative(path),)
+                    if "/controller/app/" not in rel.replace("\\", "/")
+                ]
+    return _index_java_tree_locked(vo_do_texts, ctrl_texts)
 
-    lock = getattr(source, "_instance_lock", None) or nullcontext()
-    with lock:
-        return _index_java_tree_locked(source)
 
-
-def _index_java_tree_locked(source) -> tuple[dict[str, JavaVOAST], dict[str, ControllerEndpointAST]]:
+def _index_java_tree_locked(
+    vo_do_texts: list[tuple[str, str]],
+    ctrl_texts: list[tuple[str, str]],
+) -> tuple[dict[str, JavaVOAST], dict[str, ControllerEndpointAST]]:
     raw_class_spans: dict[str, tuple[str, dict[str, str], tuple[str, ...], str, tuple[str, ...]]] = {}
-    for path in (*source._java_files("VO.java"), *source._java_files("DO.java")):
-        rel = source._relative(path)
-        raw = source._read(rel)
+    for _rel, raw in vo_do_texts:
         masked = _mask(raw)
         m_pkg = _PACKAGE_RE.search(masked)
         pkg = m_pkg.group(1) if m_pkg else ""
@@ -348,11 +365,9 @@ def _index_java_tree_locked(source) -> tuple[dict[str, JavaVOAST], dict[str, Con
         )
 
     endpoints: dict[str, ControllerEndpointAST] = {}
-    for path in source._java_files("Controller.java"):
-        rel = source._relative(path)
+    for rel, raw_text in ctrl_texts:
         if "/controller/app/" in rel.replace("\\", "/"):
             continue
-        raw_text = source._read(rel)
         m_pkg = _PACKAGE_RE.search(raw_text)
         pkg = m_pkg.group(1) if m_pkg else ""
         all_imports = _IMPORT_RE.findall(raw_text)
@@ -557,14 +572,26 @@ _DO_CLASS_RE = re.compile(r"(?:public\s+)?(?:abstract\s+)?class\s+(\w+)(?:\s+ext
 _BASE_DO_FIELDS = frozenset({"id", "createTime", "updateTime", "creator", "updater", "deleted", "tenantId"})
 
 
-def _collect_do_fields(source) -> dict[str, set[str]]:
+def _collect_do_fields(
+    source,
+    *,
+    do_texts: list[tuple[str, str]] | None = None,
+) -> dict[str, set[str]]:
     """Index declared entity DO fields (including superclass DO chains) for BeanUtils drop detection."""
-    if source is None or not getattr(source, "root", None):
-        return {}
+    if do_texts is None:
+        if source is None or not getattr(source, "root", None):
+            return {}
+        lock = getattr(source, "_instance_lock", None) or nullcontext()
+        with lock:
+            do_texts = [
+                (rel, source._read(rel))
+                for path in source._java_files("DO.java")
+                for rel in (source._relative(path),)
+            ]
     raw_fields: dict[str, set[str]] = {}
     parents: dict[str, str] = {}
-    for path in source._java_files("DO.java"):
-        text = _mask(source._read(source._relative(path)))
+    for _rel, raw in do_texts:
+        text = _mask(raw)
         m_cls = _DO_CLASS_RE.search(text)
         if not m_cls:
             continue
@@ -591,26 +618,40 @@ def _analyze_service_method(
     allow_child_mappers: bool = False,
     do_fields: dict[str, set[str]] | None = None,
     vo_field_names: tuple[str, ...] = (),
+    svc_by_iface: dict[str, str] | None = None,
+    parsed_svc_cache: dict[str, tuple[str, dict[str, str], dict[str, list[tuple[int, int, int]]]]] | None = None,
 ) -> tuple[bool, set[str], set[str]]:
     """Return ``(safe, unconditional_null_fields, dropped_vo_fields)`` for one service method."""
-    if ep is None or not ep.service_iface or not ep.service_method or source is None or not getattr(source, "root", None):
+    if ep is None or not ep.service_iface or not ep.service_method:
+        return False, set(), set()
+    if svc_by_iface is None and (source is None or not getattr(source, "root", None)):
         return False, set(), set()
     if _DANGEROUS_SERVICE_TYPES.search(ep.service_iface):
         return False, set(), set()
 
-    target_file = None
-    for path in source._java_files("ServiceImpl.java"):
-        if path.stem[:-len("Impl")] == ep.service_iface:
-            target_file = path
-            break
-    if target_file is None:
-        return False, set(), set()
-
-    masked = _mask(source._read(source._relative(target_file)))
-    svc_fields = {name: kind for kind, name in _SERVICE_FIELD.findall(masked)}
-    sigs: dict[str, list[tuple[int, int, int]]] = {}
-    for name, start, bs, be in _methods(masked):
-        sigs.setdefault(name, []).append((start, bs, be))
+    cached_svc = parsed_svc_cache.get(ep.service_iface) if parsed_svc_cache is not None else None
+    if cached_svc is not None:
+        masked, svc_fields, sigs = cached_svc
+    else:
+        raw_svc = svc_by_iface.get(ep.service_iface) if svc_by_iface is not None else None
+        if raw_svc is None:
+            if svc_by_iface is not None:
+                return False, set(), set()
+            target_file = None
+            for path in source._java_files("ServiceImpl.java"):
+                if path.stem[:-len("Impl")] == ep.service_iface:
+                    target_file = path
+                    break
+            if target_file is None:
+                return False, set(), set()
+            raw_svc = source._read(source._relative(target_file))
+        masked = _mask(raw_svc)
+        svc_fields = {name: kind for kind, name in _SERVICE_FIELD.findall(masked)}
+        sigs = {}
+        for name, start, bs, be in _methods(masked):
+            sigs.setdefault(name, []).append((start, bs, be))
+        if parsed_svc_cache is not None:
+            parsed_svc_cache[ep.service_iface] = (masked, svc_fields, sigs)
     spans = sigs.get(ep.service_method)
     if not spans:
         return False, set(), set()
@@ -1069,17 +1110,15 @@ def compile_yudao_write_catalog(
     ui_metadata_fn,
 ) -> dict:
     """Compile all 4 write categories from Yudao OpenAPI + Java AST + Vue/TS form sources."""
-    src_lock = getattr(source, "_instance_lock", None) or nullcontext()
-    with src_lock:
-        src_id = id(source) if source is not None else 0
-        docs_id = id(docs)
-        rel_key = str(getattr(source, "release", "")) if source is not None else ""
-        cache_key = (docs_id, src_id, rel_key)
-        with _COMPILED_ALL_LOCK:
-            cached = _COMPILED_ALL_CACHE.get(cache_key)
-            if cached is not None:
-                _COMPILED_ALL_CACHE.move_to_end(cache_key)
-                return cached
+    src_id = id(source) if source is not None else 0
+    docs_id = id(docs)
+    rel_key = str(getattr(source, "release", "")) if source is not None else ""
+    cache_key = (docs_id, src_id, rel_key)
+    with _COMPILED_ALL_LOCK:
+        cached = _COMPILED_ALL_CACHE.get(cache_key)
+        if cached is not None:
+            _COMPILED_ALL_CACHE.move_to_end(cache_key)
+            return cached
         return _compile_yudao_write_catalog_locked(
             docs=docs,
             source=source,
@@ -1107,10 +1146,56 @@ def _compile_yudao_write_catalog_locked(
     schemas = (docs.get("components") or {}).get("schemas") or {}
     available_paths = set(paths.keys())
 
+    vo_texts: list[tuple[str, str]] = []
+    do_texts: list[tuple[str, str]] = []
+    ctrl_texts: list[tuple[str, str]] = []
+    svc_entries: list[tuple[str, str]] = []
+    enum_labels: dict[str, dict[str, str]] = {}
+    refusals: dict = {}
+    if source is not None and getattr(source, "root", None):
+        src_lock = getattr(source, "_instance_lock", None) or nullcontext()
+        with src_lock:
+            vo_texts = [
+                (rel, source._read(rel))
+                for path in source._java_files("VO.java")
+                for rel in (source._relative(path),)
+            ]
+            do_texts = [
+                (rel, source._read(rel))
+                for path in source._java_files("DO.java")
+                for rel in (source._relative(path),)
+            ]
+            ctrl_texts = [
+                (rel, source._read(rel))
+                for path in source._java_files("Controller.java")
+                for rel in (source._relative(path),)
+                if "/controller/app/" not in rel.replace("\\", "/")
+            ]
+            svc_entries = [
+                (path.stem, source._read(source._relative(path)))
+                for path in source._java_files("ServiceImpl.java")
+            ]
+            if hasattr(source, "enum_value_labels"):
+                enum_labels = source.enum_value_labels()
+            if hasattr(source, "_server_rules"):
+                refusals = source._server_rules()[1]
+            elif hasattr(source, "_refusals") and hasattr(source, "_messages"):
+                refusals = source._refusals(source._messages())
+    elif source is not None:
+        if hasattr(source, "enum_value_labels"):
+            enum_labels = source.enum_value_labels()
+        if hasattr(source, "_server_rules"):
+            refusals = source._server_rules()[1]
+        elif hasattr(source, "_refusals") and hasattr(source, "_messages"):
+            refusals = source._refusals(source._messages())
+
     ui_labels, ui_dicts, ui_scales = ui_metadata_fn(source, ui)
-    vo_map, ctrl_endpoints = _index_java_tree(source)
-    do_fields = _collect_do_fields(source)
-    enum_labels = source.enum_value_labels() if source is not None and hasattr(source, "enum_value_labels") else {}
+    vo_map, ctrl_endpoints = _index_java_tree(source, vo_do_texts=[*vo_texts, *do_texts], ctrl_texts=ctrl_texts)
+    do_fields = _collect_do_fields(source, do_texts=do_texts)
+    svc_by_iface = {
+        stem[:-len("Impl")]: txt for stem, txt in svc_entries if stem.endswith("Impl")
+    }
+    parsed_svc_cache: dict[str, tuple[str, dict[str, str], dict[str, list[tuple[int, int, int]]]]] = {}
     known_java_enums = frozenset(k for k, v in enum_labels.items() if v)
     form_defaults = _compile_vue_create_defaults(source, ui)
 
@@ -1207,10 +1292,9 @@ def _compile_yudao_write_catalog_locked(
                     if ep_st and ep_st.service_iface:
                         svc_cand_stem = ep_st.service_iface + "Impl"
                     ent_slug = re.sub(r"[^a-z0-9]", "", entity.lower())
-                    for sf in source._java_files("ServiceImpl.java"):
-                        stem_l = re.sub(r"[^a-z0-9]", "", sf.stem.removesuffix("ServiceImpl").lower())
-                        if (svc_cand_stem and sf.stem == svc_cand_stem) or (ent_slug and stem_l.endswith(ent_slug)):
-                            stxt = source._read(source._relative(sf))
+                    for sf_stem, stxt in svc_entries:
+                        stem_l = re.sub(r"[^a-z0-9]", "", sf_stem.removesuffix("ServiceImpl").lower())
+                        if (svc_cand_stem and sf_stem == svc_cand_stem) or (ent_slug and stem_l.endswith(ent_slug)):
                             if "CommonStatusEnum" in stxt and not re.search(
                                 r"(?:AuditStatus|CandidateStatus|PostStatus|BusinessEndStatus)\w*Enum", stxt
                             ):
@@ -1426,7 +1510,6 @@ def _compile_yudao_write_catalog_locked(
     # ------------------------------------------------------------------
     # Categories 2 & 3: Relaxed Flat Updates + 1-2 Level Aggregate Updates
     # ------------------------------------------------------------------
-    refusals = source._refusals(source._messages()) if source is not None and hasattr(source, "_refusals") else {}
     nonnull_pat = re.compile(r"^(?:Objects\.nonNull\(\s*\w+\.get([A-Z]\w*)\(\)\s*\)|\w+\.get([A-Z]\w*)\(\)\s*!=\s*null)$")
 
     for p, item in sorted(paths.items()):
@@ -1491,6 +1574,8 @@ def _compile_yudao_write_catalog_locked(
                 allow_child_mappers=is_aggregate,
                 do_fields=do_fields,
                 vo_field_names=tuple(req_props.keys()),
+                svc_by_iface=svc_by_iface,
+                parsed_svc_cache=parsed_svc_cache,
             )
             if not safe_svc:
                 continue
@@ -1666,6 +1751,8 @@ def _compile_yudao_write_catalog_locked(
                 allow_child_mappers=False,
                 do_fields=do_fields,
                 vo_field_names=tuple(req_props.keys()),
+                svc_by_iface=svc_by_iface,
+                parsed_svc_cache=parsed_svc_cache,
             )
             if not safe_svc:
                 continue
