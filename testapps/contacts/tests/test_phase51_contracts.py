@@ -210,6 +210,69 @@ class Phase51ContractTests(unittest.TestCase):
         self.assertFalse(any(e.get("event") == "approval_requested" for e in events))
         self.assertIn("archived", json.dumps(chat.calls[1][0], ensure_ascii=False))
 
+    def test_contacts_visible_create_fields_blocks_hidden_field_and_skips_hidden_default(self):
+        # Explicit hidden field 'body' under category='brief' is refused before approval
+        result_hid, chat_hid, events_hid, channel_hid = self._run_contacts([
+            _tool_reply((
+                "create_record",
+                {
+                    "entity": "contact-notes",
+                    "fields": [
+                        {"field": "title", "value": "Brief note"},
+                        {"field": "category", "value": "brief"},
+                        {"field": "body", "value": "Too detailed"},
+                    ],
+                },
+            )),
+            _tool_reply(("finish", {"status": "cannot", "answer": "Body is hidden for brief notes."})),
+        ], resident_convention_skill=True)
+        self.assertEqual(result_hid.terminal_reason, "agent_refused", result_hid.user_answer)
+        self.assertEqual(channel_hid.approvals, [])
+        self.assertFalse(any(e.get("event") == "approval_requested" for e in events_hid))
+        self.assertIn("未开启显示", json.dumps(chat_hid.calls[1][0], ensure_ascii=False))
+
+        # Hidden defaults are omitted cleanly via visible_create_fields on CompiledCreateHandler
+        from web_operation_agent.business.compiled_writes import CompiledCreateHandler, CompiledCreateSpec, CompiledFieldDefault
+        from web_operation_agent.business.convention_writes import ConventionFieldSpec
+
+        class _HiddenDefaultPort:
+            def verify_actor(self, context):
+                return "9"
+
+            def create_specs(self):
+                return {
+                    "contact-notes": CompiledCreateSpec(
+                        entity="contact-notes",
+                        label="Contact note",
+                        fields=(
+                            ConventionFieldSpec("title", "string", label="Title", required=True),
+                            ConventionFieldSpec("category", "string", label="Category", required=True),
+                            ConventionFieldSpec("body", "string", label="Body", required=False),
+                        ),
+                        defaults=(CompiledFieldDefault("body", "literal", value="Default body", display="Default body"),),
+                    )
+                }
+
+            def encode_field(self, spec, field, raw_val, cur_rec):
+                return str(raw_val), "", str(raw_val), None
+
+            def visible_create_fields(self, spec, resolved_fields, *, actor_id=""):
+                if resolved_fields.get("category") == "brief":
+                    return frozenset({"title", "category"})
+                return None
+
+        spec_ok = CompiledCreateHandler(_HiddenDefaultPort()).prepare(
+            {
+                "entity": "contact-notes",
+                "fields": [
+                    {"field": "title", "value": "Brief note"},
+                    {"field": "category", "value": "brief"},
+                ],
+            }
+        )
+        self.assertNotIn("body", spec_ok.args["payload"])
+        self.assertNotIn("body", spec_ok.args["expected"])
+
     def test_hub_route_defers_dom_tools_until_navigation_keeping_stable_prefix(self):
         result, chat, events, _channel = self._run_contacts(
             [

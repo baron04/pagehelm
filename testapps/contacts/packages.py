@@ -300,6 +300,17 @@ class ContactsConventionWritePort:
         if spec.entity == "contact-notes" and str(payload.get("category") or "").strip().casefold() == "archived":
             raise BusinessToolRequestError("category 'archived' cannot be used when creating a new contact note")
 
+    def visible_create_fields(
+        self,
+        spec: CompiledCreateSpec,
+        resolved_fields: dict,
+        *,
+        actor_id: str = "",
+    ) -> frozenset[str] | None:
+        if spec.entity == "contact-notes" and str(resolved_fields.get("category") or "").strip().casefold() == "brief":
+            return frozenset({"title", "owner", "category"})
+        return None
+
     def dispatch_update(self, spec: ConventionUpdateSpec, record_id, payload: dict) -> None:
         self._request_once("PUT", f"/api/contacts/{record_id}", payload)
 

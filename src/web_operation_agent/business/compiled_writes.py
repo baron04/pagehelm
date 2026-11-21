@@ -616,10 +616,27 @@ class CompiledCreateHandler:
             shown_label = f"{f_spec.label}（{f_spec.name}）" if f_spec.label else f_spec.name
             details.append(create_detail(shown_label, str(disp)))
 
+        visible_fields: frozenset[str] | None = None
+        visible_fields_fn = getattr(self.port, "visible_create_fields", None)
+        if callable(visible_fields_fn) and not errors and not ref_errors:
+            try:
+                vis_raw = visible_fields_fn(spec, dict(payload), actor_id=actor_id)
+                if vis_raw is not None:
+                    visible_fields = frozenset(vis_raw)
+            except BusinessToolRequestError as exc:
+                errors.append(str(exc))
+        if visible_fields is not None:
+            for _idx, f_spec, _api_val, _disp, _binding in sorted(resolved_entries, key=lambda entry: entry[0]):
+                if f_spec.name not in visible_fields:
+                    lbl = f"{f_spec.label}（{f_spec.name}）" if f_spec.label else f_spec.name
+                    errors.append(f"新建{spec.label}当前状态下字段「{lbl}」未开启显示，不能提交该字段。")
+
         # Apply static D1/D2 defaults ONLY for omitted fields and always surface with （页面默认值）
         derived_defaults: dict[str, object] = {}
         for d_spec in spec.defaults:
             if d_spec.field in seen_fields:
+                continue
+            if visible_fields is not None and d_spec.field not in visible_fields:
                 continue
             f_spec = spec.resolve_field(d_spec.field)
             if f_spec is None:

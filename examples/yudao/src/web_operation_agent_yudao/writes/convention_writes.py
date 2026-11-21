@@ -1700,6 +1700,58 @@ class YudaoConventionWritePort:
                             f"所选回款计划（ID={plan_id}）已关联回款（receivableId={plan['receivableId']}），"
                             "不能重复使用；禁止擅自改绑其他期次或静默省略 planId，请如实说明或用 need_input 请用户确认。"
                         )
+        elif spec.entity == "hrm/employee":
+            if payload.get("type") == 2 and payload.get("status") is None:
+                raise BusinessToolRequestError("非正式员工新建时必须指定员工状态（status，如实习/兼职/顾问等）。")
+            if "/admin-api/hrm/employee/page" in paths:
+                mobile = str(payload.get("mobile") or "").strip()
+                if mobile:
+                    try:
+                        res = self.client.get("hrm/employee/page", mobile=mobile, pageNo=1, pageSize=10)
+                    except YudaoReadRefused:
+                        res = None
+                    if isinstance(res, dict) and isinstance(res.get("list"), list):
+                        if any(isinstance(r, dict) and str(r.get("mobile") or "").strip() == mobile for r in res["list"]):
+                            raise BusinessToolRequestError(f"手机号「{mobile}」已存在对应员工档案，不能重复新建。")
+                job_no = str(payload.get("jobNumber") or "").strip()
+                if job_no:
+                    try:
+                        res = self.client.get("hrm/employee/page", jobNumber=job_no, pageNo=1, pageSize=10)
+                    except YudaoReadRefused:
+                        res = None
+                    if isinstance(res, dict) and isinstance(res.get("list"), list):
+                        if any(isinstance(r, dict) and str(r.get("jobNumber") or "").strip() == job_no for r in res["list"]):
+                            raise BusinessToolRequestError(f"工号「{job_no}」已存在对应员工档案，不能重复新建。")
+
+    def visible_create_fields(
+        self,
+        spec: CompiledCreateSpec,
+        resolved_fields: dict,
+        *,
+        actor_id: str = "",
+    ) -> frozenset[str] | None:
+        if spec.entity == "hrm/employee":
+            paths = (self._docs() or {}).get("paths") or {}
+            entry_status = resolved_fields.get("entryStatus")
+            if entry_status is not None and "/admin-api/hrm/employee/config/create-field/list" in paths:
+                try:
+                    rows = self.client.get("hrm/employee/config/create-field/list", entryStatus=entry_status)
+                except YudaoReadRefused as exc:
+                    if exc.read_failed:
+                        raise BusinessToolUnavailableError("员工新建字段显隐配置接口当前不可用。") from exc
+                    raise BusinessToolRequestError(f"无法读取员工新建字段显隐配置（code={exc.code}）。") from exc
+                if isinstance(rows, list) and rows:
+                    cfg_names = {str(r["name"]) for r in rows if isinstance(r, dict) and r.get("name")}
+                    vis_names = {
+                        str(r["name"])
+                        for r in rows
+                        if isinstance(r, dict) and r.get("name") and r.get("visible") is True
+                    }
+                    allowed = vis_names | ({f.name for f in spec.fields} - cfg_names) | {"candidateId"}
+                    if resolved_fields.get("candidateId") is not None:
+                        allowed.add("channelId")
+                    return frozenset(allowed)
+        return None
 
     def encode_preserved_field(self, spec, field: ConventionFieldSpec, raw_value):
         if field.date_kind == "epoch_ms" and isinstance(raw_value, str) and raw_value.strip():
@@ -1713,6 +1765,24 @@ class YudaoConventionWritePort:
         return _values_equal(readback_value, expected_api_value, kind=field.kind)
 
     def dispatch_create(self, spec: CompiledCreateSpec, payload: dict):
+        if spec.entity == "hrm/employee":
+            from web_operation_agent.business.errors import BusinessMutationRefusedError
+
+            try:
+                vis = self.visible_create_fields(spec, payload)
+            except BusinessToolRequestError as exc:
+                raise BusinessMutationRefusedError(
+                    "employee visible field config changed after approval",
+                    reason="precondition_changed",
+                ) from exc
+            if vis is not None and any(
+                k != "id" and v is not None and v != "" and k not in vis
+                for k, v in payload.items()
+            ):
+                raise BusinessMutationRefusedError(
+                    "employee visible field config changed after approval",
+                    reason="precondition_changed",
+                )
         res = self.client.write_once("POST", f"{spec.entity}/create", body=payload, operation="create_record")
         if isinstance(res, dict):
             return res.get("id", res.get("data"))

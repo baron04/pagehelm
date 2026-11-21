@@ -1654,6 +1654,254 @@ class Phase51G0Tests(unittest.TestCase):
         self.assertEqual(ref_ctx.exception.reason, "precondition_changed")
         self.assertEqual(client.dispatches, [])
 
+    def test_hrm_employee_visible_create_fields_strips_hidden_defaults_and_blocks_hidden_inputs_and_dupes(self):
+        import tempfile
+        import time
+        from pathlib import Path
+        from web_operation_agent.business.compiled_writes import CompiledCreateHandler
+        from web_operation_agent.business.errors import BusinessMutationRefusedError, BusinessToolRequestError
+        from web_operation_agent.state.identity import OperationContext, PrincipalContext
+        from web_operation_agent_yudao.rules.source import YudaoSource
+        from web_operation_agent_yudao.writes.convention_writes import YudaoConventionWritePort
+
+        now = int(time.time() * 1000)
+        actor = PrincipalContext(
+            1, "yudao", "1", "7", "1", "synthetic",
+            now - 1000, now + 60000, ("yudao.read", "yudao.write"),
+        )
+        op_ctx = OperationContext.create(actor, session_id="s", turn_id="t", operation_id="o", deadline_ms=now + 30000)
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            srv = root / "server/yudao-module-hrm/src/main/java/cn/iocoder/yudao/module/hrm"
+            (srv / "controller/admin/employee/vo").mkdir(parents=True)
+            (srv / "service/employee").mkdir(parents=True)
+            (srv / "dal/dataobject/employee").mkdir(parents=True)
+            (root / "ui/src/api/hrm/employee").mkdir(parents=True)
+            (root / "ui/src/views/hrm/employee").mkdir(parents=True)
+
+            (srv / "dal/dataobject/employee/HrmEmployeeDO.java").write_text(
+                "public class HrmEmployeeDO extends BaseDO {\n"
+                "    private Long id; private String name; private String mobile; private String country;\n"
+                "    private Integer idType; private Integer entryStatus; private Integer type; private Integer probation;\n"
+                "    private String jobNumber; private Long deptId;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (srv / "controller/admin/employee/vo/HrmEmployeeSaveReqVO.java").write_text(
+                "package cn.iocoder.yudao.module.hrm.controller.admin.employee.vo;\n"
+                "public class HrmEmployeeSaveReqVO {\n"
+                "    private String name; private String mobile; private String country;\n"
+                "    private Integer idType; private Integer entryStatus; private Integer type;\n"
+                "    private Integer probation; private String jobNumber; private Long deptId;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (srv / "controller/admin/employee/HrmEmployeeController.java").write_text(
+                'package cn.iocoder.yudao.module.hrm.controller.admin.employee;\n'
+                'import cn.iocoder.yudao.module.hrm.controller.admin.employee.vo.HrmEmployeeSaveReqVO;\n'
+                '@RequestMapping("/hrm/employee")\n'
+                'public class HrmEmployeeController {\n'
+                '    @Resource\n'
+                '    private HrmEmployeeService employeeService;\n'
+                '    @PostMapping("/create") public CommonResult<Long> createEmployee(@RequestBody HrmEmployeeSaveReqVO createReqVO) { return success(employeeService.createEmployee(createReqVO)); }\n'
+                '    @GetMapping("/get") public CommonResult<HrmEmployeeRespVO> getEmployee(@RequestParam("id") Long id) { return success(null); }\n'
+                '}\n',
+                encoding="utf-8",
+            )
+            (srv / "service/employee/HrmEmployeeServiceImpl.java").write_text(
+                "public class HrmEmployeeServiceImpl implements HrmEmployeeService {\n"
+                "    @Resource\n"
+                "    private HrmEmployeeMapper employeeMapper;\n"
+                "    public Long createEmployee(HrmEmployeeSaveReqVO createReqVO) {\n"
+                "        HrmEmployeeDO emp = BeanUtils.toBean(createReqVO, HrmEmployeeDO.class);\n"
+                "        employeeMapper.insert(emp);\n"
+                "        return emp.getId();\n"
+                "    }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (root / "ui/src/api/hrm/employee/index.ts").write_text(
+                "export const createEmployee = (data: any) => request.post({ url: '/hrm/employee/create', data })\n",
+                encoding="utf-8",
+            )
+            (root / "ui/src/views/hrm/employee/EmployeeForm.vue").write_text(
+                "<script setup lang=\"ts\">\n"
+                "import * as EmployeeApi from '@/api/hrm/employee'\n"
+                "function createDefaultFormData() {\n"
+                "  return {\n"
+                "    country: '中国',\n"
+                "    idType: 1,\n"
+                "    type: 1,\n"
+                "    probation: 0,\n"
+                "  }\n"
+                "}\n"
+                "const submitForm = () => EmployeeApi.createEmployee(formData.value)\n"
+                "</script>\n",
+                encoding="utf-8",
+            )
+
+            docs = {
+                "paths": {
+                    "/admin-api/hrm/employee/config/create-field/list": {
+                        "get": {"parameters": [{"name": "entryStatus", "in": "query", "required": True}], "responses": {"200": {}}}
+                    },
+                    "/admin-api/hrm/employee/page": {
+                        "get": {"parameters": [{"name": "mobile", "in": "query"}, {"name": "jobNumber", "in": "query"}], "responses": {"200": {}}}
+                    },
+                    "/admin-api/hrm/employee/get": {
+                        "get": {
+                            "parameters": [{"name": "id", "in": "query", "required": True}],
+                            "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/EmpGetResp"}}}}},
+                        }
+                    },
+                    "/admin-api/hrm/employee/create": {
+                        "post": {
+                            "tags": ["管理后台 - HRM 员工档案"],
+                            "summary": "创建员工档案",
+                            "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/EmpCreateReq"}}}},
+                            "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                        }
+                    },
+                },
+                "components": {
+                    "schemas": {
+                        "CommonResultLong": {"properties": {"code": {"type": "integer"}, "data": {"type": "integer"}}},
+                        "EmpGetResp": {"properties": {"data": {"$ref": "#/components/schemas/EmpCreateReq"}}},
+                        "EmpCreateReq": {
+                            "required": ["name", "mobile", "entryStatus", "type"],
+                            "properties": {
+                                "name": {"type": "string", "description": "员工姓名"},
+                                "mobile": {"type": "string", "description": "手机号"},
+                                "country": {"type": "string", "description": "国家地区"},
+                                "idType": {"type": "integer", "description": "证件类型"},
+                                "entryStatus": {"type": "integer", "description": "入职状态"},
+                                "type": {"type": "integer", "description": "聘用形式"},
+                                "probation": {"type": "integer", "description": "试用期"},
+                                "jobNumber": {"type": "string", "description": "工号"},
+                                "deptId": {"type": "integer", "description": "部门"},
+                            },
+                        },
+                    }
+                },
+            }
+
+            class _HrmVisibilityClient:
+                def __init__(self):
+                    self.read_generation = 1
+                    self.tenant = "1"
+                    self.employees = {}
+                    self.dispatches = []
+                    self.config_rows = [
+                        {"name": "name", "visible": True},
+                        {"name": "mobile", "visible": True},
+                        {"name": "country", "visible": False},
+                        {"name": "idType", "visible": True},
+                        {"name": "entryStatus", "visible": True},
+                        {"name": "type", "visible": True},
+                        {"name": "probation", "visible": True},
+                        {"name": "jobNumber", "visible": False},
+                        {"name": "deptId", "visible": True},
+                    ]
+                    self.existing_rows = []
+
+                def read_window(self, _check):
+                    return nullcontext()
+
+                def write_window(self, _check):
+                    return nullcontext()
+
+                def get(self, path, **params):
+                    if path == "system/auth/get-permission-info":
+                        return {"user": {"id": 1, "nickname": "芋道源码", "username": "admin"}, "roles": [], "permissions": [], "menus": []}
+                    if path in {"system/dept/simple-list", "system/dept/list"}:
+                        return [{"id": 103, "name": "研发部门", "parentId": 0}]
+                    if path == "hrm/employee/config/create-field/list":
+                        return list(self.config_rows)
+                    if path == "hrm/employee/page":
+                        return {"list": list(self.existing_rows), "total": len(self.existing_rows)}
+                    if path == "hrm/employee/get":
+                        return self.employees.get(str(params.get("id")))
+                    return []
+
+                def write_once(self, method, path, *, body=None, params=None, operation="", expect_result="bool"):
+                    self.dispatches.append((method, path, dict(body or {})))
+                    rec = {"id": 501, **dict(body or {})}
+                    self.employees["501"] = rec
+                    return 501
+
+            client = _HrmVisibilityClient()
+            source = YudaoSource(root, release="v-g0r6-vis")
+            port = YudaoConventionWritePort(
+                client,
+                NS(_documents=docs, _source=source, _ui=None, invalidate_reads=lambda _entities: None),
+            )
+            handler = CompiledCreateHandler(port)
+
+            # (a) Hidden default country='中国' is stripped from payload/expected/details while visible defaults remain,
+            #     and dispatch + readback succeed cleanly.
+            spec = handler.prepare(
+                {
+                    "entity": "hrm/employee",
+                    "fields": [
+                        {"field": "name", "value": "陈砚秋"},
+                        {"field": "mobile", "value": "13622190047"},
+                        {"field": "entryStatus", "value": 2},
+                        {"field": "deptId", "value": "研发部门"},
+                    ],
+                },
+                context=op_ctx,
+            )
+            payload = spec.args["payload"]
+            self.assertNotIn("country", payload)
+            self.assertNotIn("country", spec.args["expected"])
+            self.assertEqual((payload.get("idType"), payload.get("type"), payload.get("probation")), (1, 1, 0))
+            self.assertFalse(any("country" in d.label for d in spec.details))
+            res = handler.dispatch(spec.args, context=op_ctx)
+            self.assertTrue(res.content["verified"])
+            self.assertEqual(len(client.dispatches), 1)
+            self.assertNotIn("country", client.dispatches[0][2])
+
+            # (b) Explicit hidden field ('country' or 'jobNumber' under entryStatus=2) and duplicate mobile refuse pre-approval.
+            for hidden_field, hidden_val in (("country", "中国"), ("jobNumber", "EMP-99")):
+                with self.assertRaises(BusinessToolRequestError) as hid_ctx:
+                    handler.prepare(
+                        {
+                            "entity": "hrm/employee",
+                            "fields": [
+                                {"field": "name", "value": "陈砚秋"},
+                                {"field": "mobile", "value": "13622190048"},
+                                {"field": "entryStatus", "value": 2},
+                                {"field": hidden_field, "value": hidden_val},
+                            ],
+                        },
+                        context=op_ctx,
+                    )
+                self.assertIn("未开启显示", str(hid_ctx.exception))
+
+            client.existing_rows = [{"id": 9, "mobile": "13622190047", "jobNumber": "EMP-01"}]
+            with self.assertRaises(BusinessToolRequestError) as dup_ctx:
+                handler.prepare(
+                    {
+                        "entity": "hrm/employee",
+                        "fields": [
+                            {"field": "name", "value": "陈砚秋"},
+                            {"field": "mobile", "value": "13622190047"},
+                            {"field": "entryStatus", "value": 2},
+                        ],
+                    },
+                    context=op_ctx,
+                )
+            self.assertIn("已存在对应员工档案", str(dup_ctx.exception))
+
+            # (c) Post-approval visibility drift aborts dispatch safely with precondition_changed.
+            client.existing_rows = []
+            client.config_rows = [r for r in client.config_rows if r["name"] != "probation"] + [{"name": "probation", "visible": False}]
+            with self.assertRaises(BusinessMutationRefusedError) as ref_ctx:
+                handler.dispatch(spec.args, context=op_ctx)
+            self.assertEqual(ref_ctx.exception.reason, "precondition_changed")
+            self.assertEqual(len(client.dispatches), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
