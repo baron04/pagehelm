@@ -16,6 +16,7 @@ class DomainToolpack:
     write_contract_text: str = ""
     read_contract_text: str = ""
     default_priority: int = 0
+    co_activate_domains: tuple[str, ...] = ()
 
 
 def _route_path(page_url: str) -> str:
@@ -52,24 +53,28 @@ def select_active_domains(
     prompt: str = "",
     pinned_domains: tuple[str, ...] = (),
     top_k: int = 2,
+    max_total: int = 3,
 ) -> tuple[DomainToolpack, ...]:
     """Select the most relevant active domains deterministically for the current page/prompt."""
     if not packs:
         return ()
     limit = max(1, int(top_k))
+    co_limit = max(limit, int(max_total), len(pinned_domains))
     by_id = {pack.domain_id: pack for pack in packs}
     selected: list[DomainToolpack] = []
+    matched_packs: list[DomainToolpack] = []
     seen: set[str] = set()
 
     for pinned_id in pinned_domains:
         pack = by_id.get(pinned_id) or resolve_domain_pack(packs, pinned_id)
         if pack is not None and pack.domain_id not in seen:
             selected.append(pack)
+            matched_packs.append(pack)
             seen.add(pack.domain_id)
 
     path = _route_path(page_url).casefold()
     prompt_cf = str(prompt or "").casefold()
-    scored: list[tuple[tuple[int, int, int, int], DomainToolpack]] = []
+    scored: list[tuple[tuple[int, int, int, int], bool, DomainToolpack]] = []
     for index, pack in enumerate(packs):
         if pack.domain_id in seen:
             continue
@@ -83,18 +88,42 @@ def select_active_domains(
             needle = str(candidate or "").strip().casefold()
             if len(needle) >= 2 and needle in prompt_cf:
                 alias_hits += len(needle)
-        if best_prefix == 0 and alias_hits == 0 and pack.default_priority <= 0:
+        matched = best_prefix > 0 or alias_hits > 0
+        if not matched and pack.default_priority <= 0:
             continue
         rank = (best_prefix, alias_hits, pack.default_priority, -index)
-        scored.append((rank, pack))
+        scored.append((rank, matched, pack))
 
     scored.sort(key=lambda item: item[0], reverse=True)
-    for _rank, pack in scored:
+    for _rank, matched, pack in scored:
+        if not matched:
+            continue
+        if len(selected) >= max(limit, len(pinned_domains)):
+            break
+        selected.append(pack)
+        matched_packs.append(pack)
+        seen.add(pack.domain_id)
+
+    for base_pack in matched_packs:
+        for co_id in base_pack.co_activate_domains:
+            if len(selected) >= co_limit:
+                break
+            co_pack = by_id.get(co_id) or resolve_domain_pack(packs, co_id)
+            if co_pack is not None and co_pack.domain_id not in seen:
+                selected.append(co_pack)
+                seen.add(co_pack.domain_id)
+        if len(selected) >= co_limit:
+            break
+
+    # Fill up to top_k with default_priority packs only after matched domains and their co-activations.
+    for _rank, matched, pack in scored:
+        if matched or pack.domain_id in seen:
+            continue
         if len(selected) >= max(limit, len(pinned_domains)):
             break
         selected.append(pack)
         seen.add(pack.domain_id)
-    return tuple(selected[: max(limit, len(pinned_domains))])
+    return tuple(selected[:co_limit])
 
 
 def build_switch_domain_schema(

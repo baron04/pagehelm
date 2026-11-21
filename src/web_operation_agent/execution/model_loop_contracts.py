@@ -144,6 +144,7 @@ class ModelLoopProfile:
     is_hub_route: Callable[[PageObservation], bool] | None = None
     deferred_dom_tools: frozenset[str] = frozenset()
     suppress_system_operation_catalog: bool = False
+    resolve_unknown_skill: Callable[[str, Any, dict], str | None] | None = None
     #: Optional closing reading of a finished answer against the turn's own sources,
     #: as (answer, sources) and the stated values the sources do not show. The loop
     #: sends the list back once and audits it. Unresolved item values mark those items

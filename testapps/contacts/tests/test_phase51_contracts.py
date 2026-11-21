@@ -223,15 +223,75 @@ class Phase51ContractTests(unittest.TestCase):
         packs = (
             DomainToolpack("billing", "Billing", aliases=("invoice", "账单"), route_prefixes=("/billing",), default_priority=1),
             DomainToolpack("orders", "Orders", aliases=("order", "订单"), route_prefixes=("/orders",), default_priority=2),
-            DomainToolpack("catalog", "Catalog", aliases=("product",), route_prefixes=("/catalog",)),
+            DomainToolpack("catalog", "Catalog", aliases=("product",), route_prefixes=("/catalog",), co_activate_domains=("inventory",)),
+            DomainToolpack("inventory", "Inventory", aliases=("stock",), route_prefixes=("/inventory",)),
         )
         selected = select_active_domains(packs, page_url="https://app.test/#/orders/list?tab=1", prompt="Check invoice", top_k=2)
         self.assertEqual([p.domain_id for p in selected], ["orders", "billing"])
         pinned = select_active_domains(packs, page_url="https://app.test/#/catalog", prompt="Hi", pinned_domains=("billing",), top_k=2)
-        self.assertEqual([p.domain_id for p in pinned], ["billing", "catalog"])
+        self.assertEqual([p.domain_id for p in pinned], ["billing", "catalog", "inventory"])
         self.assertIs(resolve_domain_pack(packs, "账单"), packs[0])
         schema = build_switch_domain_schema(packs)
-        self.assertEqual(schema["function"]["parameters"]["properties"]["domain"]["enum"], ["billing", "orders", "catalog"])
+        self.assertEqual(schema["function"]["parameters"]["properties"]["domain"]["enum"], ["billing", "orders", "catalog", "inventory"])
+
+    def test_create_record_description_and_load_skill_fallbacks(self):
+        from web_operation_agent.business.compiled_writes import compiled_write_tool_definitions
+
+        defs = {d.name: d for d in compiled_write_tool_definitions(_DummyPort(), scope="demo.write", entity_example="records")}
+        self.assertIn("绑定本轮同账号已核实的目标实体记录", defs["create_record"].description)
+        self.assertIn("非外键标量属性不跨记录借用", defs["create_record"].description)
+
+        adapter = MinimalContactsAdapter(
+            self.app.origin,
+            api_token=DEMO_ACTORS[0].token,
+            allow_mutations=True,
+            mutation_journal=MemoryMutationJournal(),
+            standard_skills=True,
+            convention_updates=True,
+            resident_convention_skill=True,
+        )
+        principal = adapter.identity.bind(
+            adapter.identity.page_identity(f"{DEMO_SESSION_COOKIE}={DEMO_ACTORS[0].session}"),
+            delegation_id="p51-load-fallback",
+        )
+        channel = _Channel(page_url=self.app.origin + "/contacts", principal=principal, decision="approved")
+        goal_port = ContactsModelGoalPort(adapter, updates=True)
+        base_profile = contacts_profile(adapter, goal_port)
+        from dataclasses import replace as _dc_replace
+
+        profile = _dc_replace(base_profile, resolve_unknown_skill=lambda raw, _s, _t: f"domain-fallback:{raw}")
+        chat = _ScriptedChat([
+            _tool_reply(("load_skill", {"skill": "create_contact"})),
+            _tool_reply(("load_skill", {"skill": "contacts-domain"})),
+            _tool_reply(("finish", {"status": "done", "answer": "Loaded skill and resolved domain fallback."})),
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            executor = ModelDrivenTurnExecutor(
+                channel=channel,
+                config=AgentTurnConfig(
+                    supported_scope="Contacts",
+                    ledger_path=Path(td) / "audit.jsonl",
+                    require_identity=True,
+                    deployment_profile="test",
+                    allow_business_mutations=True,
+                ),
+                application=bind_application(adapter),
+                chat=chat,
+                goal_port=goal_port,
+                profile=profile,
+                control=ReadOnlyControl(),
+                verify=False,
+                run_id_factory=lambda _m: "p51-load-fallback",
+            )
+            with patch("web_operation_agent.goal.executor.RemoteBrowserClient", _RemoteBrowser):
+                res = executor.execute({
+                    "message_id": "m2",
+                    "text": "Help check contact skill loading.",
+                    "page_url": self.app.origin + "/contacts",
+                })
+        self.assertEqual(res.terminal_reason, "agent_finished")
+        self.assertIn("domain-fallback:contacts-domain", chat.calls[2][0][-1]["content"])
+        self.assertIn("已加载 Skill", chat.calls[1][0][-1]["content"])
 
     def test_compiled_create_fk_provenance_vs_scalar_blocking_and_sibling_deferral(self):
         handler = CompiledCreateHandler(_DummyPort())

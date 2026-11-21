@@ -641,7 +641,7 @@ class YudaoProceduresBase:
             return LoopToolResult(text, answer_targets=targets)
         if name == "search_api":
             self._note(s, stage="search", what="source", term=args["keyword"], tool=name, arguments=said)
-            return LoopToolResult(know.search_api(args["keyword"]))
+            return LoopToolResult(know.search_api(args["keyword"], include_writes=self._writes_active(s.operation)))
         if name == "entity_rules":
             self._note(s, stage="search", what="rules", term=args["target"], tool=name, arguments=said)
             return LoopToolResult(self._entity_rules(s, args["target"], args.get("operation", "")), kind="read")
@@ -664,13 +664,18 @@ class YudaoProceduresBase:
                 pinned = policy_turn.setdefault("pinned_domains", [])
                 if pack.domain_id not in pinned:
                     pinned.append(pack.domain_id)
-            principal = getattr(s.operation, "principal", None)
-            writes_on = bool(
-                getattr(self, "writes_enabled", False)
-                and (principal is None or "yudao.write" in getattr(principal, "scopes", ()))
-            )
+            writes_on = self._writes_active(getattr(s, "operation", None))
+            docs, source, ui = self._compiled_catalog_inputs()
             return LoopToolResult(
-                "已激活业务域契约（保留本轮已读数据）：\n" + format_domain_contract(pack, writes_enabled=writes_on),
+                "已激活业务域契约（保留本轮已读数据）：\n"
+                + format_domain_contract(
+                    pack,
+                    writes_enabled=writes_on,
+                    prompt=ctx.current_request or "",
+                    docs=docs,
+                    source=source,
+                    ui=ui,
+                ),
                 kind="read",
             )
         if name == "find_record":
@@ -1543,6 +1548,66 @@ class YudaoProceduresBase:
             return ""
         return _attach_fms_dual_month_receipt(store, note, vals, policy_turn=policy_turn)
 
+    def _writes_active(self, operation=None) -> bool:
+        principal = getattr(operation, "principal", None)
+        return bool(
+            getattr(self, "writes_enabled", False)
+            and (principal is None or "yudao.write" in getattr(principal, "scopes", ()))
+        )
+
+    def _compiled_catalog_inputs(self):
+        loaded = getattr(self.knowledge, "_loaded_docs", None)
+        docs = loaded if isinstance(loaded, dict) else None
+        if docs is None:
+            raw_docs = getattr(self.knowledge, "_docs", None)
+            if isinstance(raw_docs, dict):
+                docs = raw_docs
+        data = getattr(getattr(self, "goal_port", None), "data", None)
+        return docs, getattr(data, "_source", None), getattr(data, "_ui", None)
+
+    def resolve_unknown_skill(self, skill_name: str, s, turn: dict) -> str | None:
+        """Activate matching business domain & write directory entries on fuzzy domain skill loads."""
+        if not self._writes_active(getattr(s, "operation", None)):
+            return None
+        from .domain_toolpacks import (
+            format_domain_contract,
+            format_write_entry_line,
+            resolve_yudao_domain_fuzzy,
+            search_write_directory,
+        )
+
+        pack = resolve_yudao_domain_fuzzy(skill_name)
+        docs, source, ui = self._compiled_catalog_inputs()
+        hits = search_write_directory(skill_name, docs=docs, source=source, ui=ui, limit=5)
+        if pack is None and not hits:
+            return None
+        lines: list[str] = []
+        if pack is not None:
+            for holder in (turn, self._ctx().executor_turn):
+                if isinstance(holder, dict):
+                    pinned = holder.setdefault("pinned_domains", [])
+                    if pack.domain_id not in pinned:
+                        pinned.append(pack.domain_id)
+            lines.append(
+                f"「{skill_name}」不是单个专用 Skill；已为你自动激活业务域【{pack.label}】，请直接调用常驻工具 "
+                "create_record / update_record / toggle_record_status / assign_record_relations 或专用操作 propose_operation："
+            )
+            lines.append(
+                format_domain_contract(
+                    pack,
+                    writes_enabled=True,
+                    prompt=self._ctx().current_request or "",
+                    docs=docs,
+                    source=source,
+                    ui=ui,
+                )
+            )
+        else:
+            lines.append(f"「{skill_name}」对应已编译写契约如下，请直接调用对应写入工具：")
+        for entry in hits:
+            lines.append(format_write_entry_line(entry))
+        return "\n".join(lines)
+
     def prepare(self, prompt, context):
         bound = self._bound_reads(self.goal_port.data, context.operation, context.page.checkpoint)
         fms_note = ""
@@ -1562,16 +1627,16 @@ class YudaoProceduresBase:
             obs_url = str(getattr(obs, "url", "") or "")
             policy_turn = self._ctx().executor_turn
             pinned = tuple((policy_turn or {}).get("pinned_domains") or ())
-            principal = getattr(getattr(context, "operation", None), "principal", None)
-            writes_on = bool(
-                getattr(self, "writes_enabled", False)
-                and (principal is None or "yudao.write" in getattr(principal, "scopes", ()))
-            )
+            writes_on = self._writes_active(getattr(context, "operation", None))
+            docs, source, ui = self._compiled_catalog_inputs()
             domain_note = active_domain_contract_block(
                 page_url=obs_url,
                 prompt=prompt,
                 pinned_domains=pinned,
                 writes_enabled=writes_on,
+                docs=docs,
+                source=source,
+                ui=ui,
             )
         for extra in (dates, fms_note, domain_note):
             if extra:
@@ -1622,7 +1687,13 @@ class YudaoProceduresBase:
             return {"domain": domain, "guide": domain_playbooks().get(domain)}
         with self._worker_read_scope(operation):
             if name == "search_api":
-                return {"keyword": arguments["keyword"], "text": self.knowledge.search_api(arguments["keyword"])}
+                return {
+                    "keyword": arguments["keyword"],
+                    "text": self.knowledge.search_api(
+                        arguments["keyword"],
+                        include_writes=self._writes_active(operation),
+                    ),
+                }
             if name == "entity_rules":
                 return {
                     "target": arguments["target"],

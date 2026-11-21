@@ -885,6 +885,12 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                 self._note(s, stage="tool", tool="load_skill", arguments={"skill": args["skill"]})
                 text = self._load_skill(s, writes, args["skill"], turn)
                 loaded = self._skill_id(writes, args["skill"]) in turn["skills"]
+                if not loaded:
+                    resolver = getattr(getattr(self, "profile", None), "resolve_unknown_skill", None)
+                    if callable(resolver):
+                        resolved = resolver(str(args.get("skill") or ""), s, turn)
+                        if resolved:
+                            return LoopToolResult(resolved, kind="metadata", state="completed")
                 return LoopToolResult(text, kind="metadata", state="completed" if loaded else "unavailable")
             if name == "read_skill_resource":
                 self._note(s, stage="tool", tool="load_skill", arguments={"skill": args["skill"]})
@@ -2425,8 +2431,12 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
     # -- installed Skills and the writes they propose ---------------------------------
     @staticmethod
     def _skill_id(writes, name: str) -> str:
-        return next((skill.skill_id for skill, _definitions in writes.catalog()
-                     if name in (skill.name, skill.skill_id)), "")
+        for skill, definitions in writes.catalog():
+            if name in (skill.name, skill.skill_id):
+                return skill.skill_id
+            if any(getattr(d, "name", "") == name for d in definitions):
+                return skill.skill_id
+        return ""
 
     def _load_skill(self, s, writes, name: str, turn: dict) -> str:
         try:

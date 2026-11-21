@@ -57,9 +57,11 @@ from ..reads.bound_data_reads import current_turn_read_scope
 from ..reads.client import YudaoReadRefused
 from ..rules.compiled_write_source import compile_yudao_write_catalog
 from .write_definitions import RECORD_CONTRACTS
+from .write_status_ops import ERP_DOCUMENT_ENTITIES
 
 _CACHE_LOCK = RLock()
 _COMPILED_SPECS_CACHE: OrderedDict[tuple[int, int, int, str], dict] = OrderedDict()
+_DOCS_OBJECT_CACHE: OrderedDict[int, tuple[object, bool, dict]] = OrderedDict()
 
 _SECRET = DEFAULT_SECRET_FIELD_PATTERN
 _NAME_CANDIDATES = (
@@ -401,11 +403,7 @@ class YudaoConventionWritePort:
                 dedicated_statuses=frozenset(_DEDICATED_STATUSES),
                 ui_metadata_fn=_compile_ui_metadata,
             )
-            with _CACHE_LOCK:
-                _COMPILED_SPECS_CACHE[cache_key] = catalog
-                _COMPILED_SPECS_CACHE.move_to_end(cache_key)
-                while len(_COMPILED_SPECS_CACHE) > 8:
-                    _COMPILED_SPECS_CACHE.popitem(last=False)
+            _store_cached_catalog(cache_key, docs, source, catalog)
 
         self._creates = catalog["creates"]
         self._excluded_create_reasons = catalog["excluded_create_reasons"]
@@ -1596,6 +1594,34 @@ class YudaoConventionWritePort:
         return YUDAO_WRITE_ROUTE_CAPABILITY
 
 
+def _empty_compiled_catalog() -> dict:
+    return {
+        "creates": {},
+        "excluded_create_reasons": {},
+        "updates": {},
+        "aggregates": {},
+        "statuses": {},
+        "relations": {},
+        "immutable_fields": {},
+        "nonnull_refusals": {},
+    }
+
+
+def _store_cached_catalog(cache_key: tuple[int, int, int, str], docs: dict, source, catalog: dict) -> None:
+    has_rich = source is not None
+    with _CACHE_LOCK:
+        _COMPILED_SPECS_CACHE[cache_key] = catalog
+        _COMPILED_SPECS_CACHE.move_to_end(cache_key)
+        while len(_COMPILED_SPECS_CACHE) > 8:
+            _COMPILED_SPECS_CACHE.popitem(last=False)
+        existing = _DOCS_OBJECT_CACHE.get(id(docs))
+        if existing is None or has_rich or not existing[1]:
+            _DOCS_OBJECT_CACHE[id(docs)] = (docs, has_rich, catalog)
+            _DOCS_OBJECT_CACHE.move_to_end(id(docs))
+            while len(_DOCS_OBJECT_CACHE) > 8:
+                _DOCS_OBJECT_CACHE.popitem(last=False)
+
+
 def warm_yudao_write_catalog(*, docs: dict, source, ui=None) -> None:
     """Precompile the 4-category write catalog outside live turns."""
     if not isinstance(docs, dict) or not docs.get("paths"):
@@ -1615,11 +1641,220 @@ def warm_yudao_write_catalog(*, docs: dict, source, ui=None) -> None:
         dedicated_statuses=frozenset(_DEDICATED_STATUSES),
         ui_metadata_fn=_compile_ui_metadata,
     )
+    _store_cached_catalog(cache_key, docs, source, catalog)
+
+
+def get_yudao_write_catalog(*, docs: dict | None = None, source=None, ui=None) -> dict:
+    """Return the pre-warmed (or lazily compiled) Yudao 4-category write catalog."""
     with _CACHE_LOCK:
-        _COMPILED_SPECS_CACHE[cache_key] = catalog
-        _COMPILED_SPECS_CACHE.move_to_end(cache_key)
-        while len(_COMPILED_SPECS_CACHE) > 8:
-            _COMPILED_SPECS_CACHE.popitem(last=False)
+        if isinstance(docs, dict):
+            entry = _DOCS_OBJECT_CACHE.get(id(docs))
+            if entry is not None and entry[0] is docs and (source is None or entry[1]):
+                _DOCS_OBJECT_CACHE.move_to_end(id(docs))
+                return entry[2]
+        elif _COMPILED_SPECS_CACHE:
+            return next(reversed(_COMPILED_SPECS_CACHE.values()))
+    if isinstance(docs, dict) and docs.get("paths"):
+        warm_yudao_write_catalog(docs=docs, source=source, ui=ui)
+        with _CACHE_LOCK:
+            entry = _DOCS_OBJECT_CACHE.get(id(docs))
+            if entry is not None and entry[0] is docs:
+                return entry[2]
+    return _empty_compiled_catalog()
+
+
+def _openapi_op_label(docs: dict | None, path: str, method: str = "") -> tuple[str, str]:
+    """Extract cleaned OpenAPI tag and operation summary for programmatic write indexing."""
+    if not isinstance(docs, dict) or not path:
+        return "", ""
+    path_item = (docs.get("paths") or {}).get(path)
+    if not isinstance(path_item, dict):
+        return "", ""
+    op = path_item.get(method.lower()) if method else None
+    if not isinstance(op, dict):
+        for cand_m in ("post", "put", "delete"):
+            if isinstance(path_item.get(cand_m), dict):
+                op = path_item[cand_m]
+                break
+    if not isinstance(op, dict):
+        return "", ""
+    raw_tag = str((op.get("tags") or [""])[0] or "").strip()
+    if raw_tag.startswith("管理后台 - "):
+        raw_tag = raw_tag[len("管理后台 - "):].strip()
+    summary = str(op.get("summary") or "").strip()
+    return raw_tag, summary
+
+
+def _merge_label(base_label: str, tag_text: str, summary: str) -> str:
+    """Combine spec label with non-redundant OpenAPI tag/summary tokens."""
+    parts: list[str] = []
+    for cand in (base_label, tag_text, summary):
+        tok = str(cand or "").strip()
+        if not tok:
+            continue
+        if any(tok == p or tok in p for p in parts):
+            continue
+        parts.append(tok)
+    return " / ".join(parts)
+
+
+def _format_create_req(spec: CompiledCreateSpec) -> tuple[list[str], list[str]]:
+    req: list[str] = []
+    fks: list[str] = []
+    for f in spec.fields:
+        if f.reference_entity:
+            fks.append(f"{f.name}->{f.reference_entity}")
+        if f.required and f.name not in spec.server_computed_fields:
+            req.append(f"{f.name}->{f.reference_entity}" if f.reference_entity else f.name)
+    return req, fks
+
+
+def build_yudao_write_directory(*, docs: dict | None = None, source=None, ui=None) -> list[dict]:
+    """Programmatically assemble all Yudao write tools and compiled entities from source/OpenAPI."""
+    entries: list[dict] = []
+    for c in RECORD_CONTRACTS:
+        if "create" in c.operations:
+            req = list(dict.fromkeys([
+                *c.required,
+                *(r.input for r in c.relations if r.field in c.required),
+                *(("customer",) if c.prefix == "crm_contact" else ()),
+            ]))
+            entries.append({
+                "tool": f"{c.prefix}_create",
+                "mode": "propose_operation",
+                "kind": "dedicated_create",
+                "entity": c.entity,
+                "label": c.label,
+                "required": req,
+                "relations": [f"{r.input}->{r.entity}" for r in c.relations],
+            })
+        if "update" in c.operations:
+            entries.append({
+                "tool": f"{c.prefix}_update",
+                "mode": "propose_operation",
+                "kind": "dedicated_update",
+                "entity": c.entity,
+                "label": c.label,
+                "required": ["target", "changes"],
+                "relations": [],
+            })
+
+    special_specs = (
+        ("crm_follow_up_create", "crm/follow-up-record", "CRM 跟进记录", ["entity", "target", "type", "content", "nextTime"]),
+        ("crm_receivable_plan_create", "crm/receivable-plan", "CRM 回款计划", ["contract->crm/contract", "owner->system/user", "returnTime", "price"]),
+        ("oa_announcement_create", "oa/announcement", "OA 公告发布", ["title", "content", "type", "priority", "top", "audience"]),
+        ("crm_customer_put_pool", "crm/customer", "CRM 客户放入公海", ["target"]),
+        ("crm_customer_receive", "crm/customer", "CRM 公海客户领取", ["target"]),
+        ("crm_customer_lock", "crm/customer", "CRM 客户锁定/解锁", ["target", "lockStatus"]),
+        ("crm_customer_deal_status", "crm/customer", "CRM 客户成交状态", ["target", "dealStatus"]),
+        ("promotion_coupon_template_status", "promotion/coupon-template", "商城优惠券模板启停", ["target", "status"]),
+        ("promotion_seckill_activity_close", "promotion/seckill-activity", "关闭商城秒杀活动", ["target"]),
+    )
+    for tname, entity, label, req in special_specs:
+        entries.append({
+            "tool": tname,
+            "mode": "propose_operation",
+            "kind": "dedicated_special",
+            "entity": entity,
+            "label": label,
+            "required": req,
+            "relations": [],
+        })
+    entries.append({
+        "tool": "erp_document_status",
+        "mode": "propose_operation",
+        "kind": "dedicated_status",
+        "entity": "erp/document-status",
+        "entities": tuple(ERP_DOCUMENT_ENTITIES.values()),
+        "label": "ERP 业务单据审批/反审批（" + "、".join(ERP_DOCUMENT_ENTITIES) + "）",
+        "required": ["document_type", "no", "action(审批|反审批)"],
+        "relations": [],
+    })
+
+    cat = get_yudao_write_catalog(docs=docs, source=source, ui=ui)
+    for ent, spec in sorted(cat["creates"].items()):
+        req, fks = _format_create_req(spec)
+        op_tag, op_sum = _openapi_op_label(docs, f"/admin-api/{ent}/create", "post")
+        entries.append({
+            "tool": "create_record",
+            "mode": "direct",
+            "kind": "compiled_create",
+            "entity": ent,
+            "label": _merge_label(spec.label, op_tag, op_sum),
+            "tag": op_tag,
+            "required": req,
+            "relations": fks,
+        })
+    for ent, spec in sorted(cat["aggregates"].items()):
+        extra_lbl = " / 员工定薪调薪" if getattr(spec, "readback_strategy", "") == "change_record_id" else ""
+        op_tag, op_sum = _openapi_op_label(docs, f"/admin-api/{ent}/update", "put")
+        entries.append({
+            "tool": "update_record",
+            "mode": "direct",
+            "kind": "compiled_aggregate_update",
+            "entity": ent,
+            "label": _merge_label(f"{spec.label}{extra_lbl}", op_tag, op_sum),
+            "tag": op_tag,
+            "id_field": spec.id_field,
+            "collections": [col.name for col in spec.collections],
+            "required": ["target", "changes/line_changes"],
+            "relations": [],
+        })
+    for ent, spec in sorted(cat["updates"].items()):
+        if ent in cat["aggregates"]:
+            continue
+        op_tag, op_sum = _openapi_op_label(docs, f"/admin-api/{ent}/update", "put")
+        entries.append({
+            "tool": "update_record",
+            "mode": "direct",
+            "kind": "compiled_update",
+            "entity": ent,
+            "label": _merge_label(spec.label, op_tag, op_sum),
+            "tag": op_tag,
+            "id_field": spec.id_field,
+            "required": ["target", "changes"],
+            "relations": [],
+        })
+    for ent, spec in sorted(cat["statuses"].items()):
+        op_tag, op_sum = _openapi_op_label(docs, f"/admin-api/{spec.action_path}", "put")
+        entries.append({
+            "tool": "toggle_record_status",
+            "mode": "direct",
+            "kind": "compiled_status",
+            "entity": ent,
+            "label": _merge_label(spec.label, op_tag, op_sum),
+            "tag": op_tag,
+            "required": ["target", "status"],
+            "relations": [],
+        })
+    for ent, rels in sorted(cat["relations"].items()):
+        lbl = " / ".join(dict.fromkeys(r.relation_label for r in rels if r.relation_label)) or ent
+        entries.append({
+            "tool": "assign_record_relations",
+            "mode": "direct",
+            "kind": "compiled_relation",
+            "entity": ent,
+            "label": lbl,
+            "required": ["target", "relation", "items"],
+            "relations": [f"{r.relation_label}->{r.target_entity}" for r in rels],
+        })
+    for ent, reason in sorted(cat["excluded_create_reasons"].items()):
+        upd_spec = cat["updates"].get(ent)
+        base_lbl = upd_spec.label if upd_spec is not None and upd_spec.label else ""
+        op_tag, op_sum = _openapi_op_label(docs, f"/admin-api/{ent}/create", "post")
+        merged = _merge_label(base_lbl, op_tag, op_sum) or ent
+        entries.append({
+            "tool": "EXCLUDED",
+            "mode": "boundary",
+            "kind": "excluded_create",
+            "entity": ent,
+            "label": f"{merged} ({ent})",
+            "tag": op_tag,
+            "reason": reason,
+            "required": [],
+            "relations": [],
+        })
+    return entries
 
 
 def yudao_convention_tools(client, goal_data):
@@ -1634,6 +1869,8 @@ def yudao_convention_tools(client, goal_data):
 __all__ = [
     "YUDAO_WRITE_ROUTE_CAPABILITY",
     "YudaoConventionWritePort",
+    "build_yudao_write_directory",
+    "get_yudao_write_catalog",
     "warm_yudao_write_catalog",
     "yudao_convention_tools",
 ]

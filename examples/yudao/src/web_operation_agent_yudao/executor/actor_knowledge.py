@@ -217,7 +217,7 @@ class ActorKnowledge:
         #: in summaries; comparison labels alone are not executable bindings.
         self.filter_semantics = filter_semantics
         self._zone = ZoneInfo(time_zone)
-        self._menu = self._ops = self._by_path = self._schemas = self._s3_index = None
+        self._menu = self._ops = self._by_path = self._schemas = self._s3_index = self._loaded_docs = None
         #: The host may load this ahead of the first turn, or concurrent read threads may race _load().
         self._loading = threading.RLock()
         self.user_name = ""
@@ -240,6 +240,7 @@ class ActorKnowledge:
 
     def _learn(self):
         docs = self._docs() if callable(self._docs) else self._docs
+        self._loaded_docs = docs if isinstance(docs, dict) else None
         self._schemas = (docs.get("components") or {}).get("schemas") or {}
         ops = []
         for path, item in (docs.get("paths") or {}).items():
@@ -355,11 +356,19 @@ class ActorKnowledge:
             return "没有匹配的菜单页面。换一个更短的业务词再试。"
         return "\n".join(f"{m['path']}  {m['name']}" for m in hits)
 
-    def search_api(self, keyword: str) -> str:
+    def search_api(self, keyword: str, *, include_writes: bool = False) -> str:
         self._load()
         ranked = sorted(((_score(keyword, (2, o["summary"]), (2, o["tag"]), (1, o["path"])), o)
                          for o in self._ops), key=lambda pair: -pair[0])
         lines = [self._api_line(op) for score, op in ranked[:8] if score > 2]
+        if include_writes:
+            from .domain_toolpacks import format_write_entry_line, search_write_directory
+
+            docs = self._loaded_docs if isinstance(self._loaded_docs, dict) else (
+                self._docs if isinstance(self._docs, dict) else None
+            )
+            write_hits = search_write_directory(keyword, docs=docs, limit=6)
+            lines.extend(format_write_entry_line(entry) for entry in write_hits)
         return "\n".join(lines) or "没有匹配的只读接口。换一个业务词再试。"
 
     def _api_line(self, op) -> str:

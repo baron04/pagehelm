@@ -306,11 +306,14 @@ def structured_write_routing_rules(
     if ops_available:
         if direct_skill_operations:
             lines.append(
-                "- 路 1（常驻编译写与领域 Skill API 写入）：扁平新建用 create_record、单表或 1–2 层明细修改用 update_record、"
-                "两态启停/上下架用 toggle_record_status、角色/关联集合用 assign_record_relations（均已常驻，可直接调用）；"
-                "激活业务域契约中的专用操作（或 via switch_domain 补充切换域）直接用 propose_operation(operation, inputs) 提出提案"
-                "（程序自动加载 Skill，需要完整领域规则时再调 load_skill）。关联外键优先填确切业务名称或「父名称/第N期」，"
-                "无名称字段的编号外键可用本轮已读核验候选；提案须用户批准并回读核对，只问流程或仅要求预填时禁止提出。"
+                "- 路 1（API 写入优先，严禁未请求预填时滑向网页表单）：API 写入已覆盖的实体"
+                "（见末尾激活业务域契约、或用 search_api 查写入契约 / entity_rules 核对规则）"
+                "必须调用常驻编译写（create_record / update_record / toggle_record_status / assign_record_relations，"
+                "含 hrm/salary/employee-info 等 1–2 层明细修改）或专用操作 propose_operation(operation, inputs)"
+                "（程序自动加载 Skill）；缺失必填值调 finish(status='need_input') 追问，"
+                "修改备注除非明示追加否则按用户给定新文本写入，**在用户未明示草稿预填时严禁滑向网页表单预填冒充完成**。"
+                "关联外键允许绑定本轮同账号已核实读取的目标实体记录（确切业务名称、父名称/第N期 或已读候选ID）；"
+                "非外键标量属性严禁跨记录借用；只问流程或仅要求预填时禁止提出写入提案。"
             )
         else:
             lines.append(
@@ -318,11 +321,14 @@ def structured_write_routing_rules(
             )
     if cap.inline_row_status_submit:
         lines.append(
-            "- 路 2（表格行内无表单按钮）：如审核、启停、关闭等无表单行内动作且未被 API 写入覆盖时，用 request_submit(index=按钮序号) 请求批准执行。"
+            "- 路 2（单据审批与表格行内无表单按钮）：ERP 业务单据审批/反审批优先用 propose_operation('erp_document_status', ...)；"
+            "其余无 API 写入覆盖且无表单弹窗的行内按钮（如单行状态开关）用 request_submit(index=按钮序号) 请求批准执行。"
         )
     if cap.page_form_mode == "prefill_handoff":
         lines.append(
-            "- 路 3（复杂或未覆盖页面表单预填交接）：不含在 API 写入覆盖内的新建/流程起草（如含密码用户新建、多行明细新建等），"
+            "- 路 3（安全边界与未覆盖草稿预填交接）：① 含密码硬排除新建（如 system/user）要求直接建号时如实说明安全边界（cannot），"
+            "仅当要求页面草稿预填时进页填非密码项；② 外部支付/异步网关或当前部署禁用的高危端点（如商城售后退款）直接说明安全围栏（cannot）；"
+            "③ 仅当确实属于 API 写入未覆盖的多行单据新建、流程起草或用户明示要求页面草稿预填时，"
             "打开目标原生表单按用户原话填满字段并用 fill_fields(..., then_highlight='确定/保存/提交') 标出提交按钮，"
             "由用户自行点击确认——完成预填高亮即调 finish(status='done')，不得对表单提交按钮调用 request_submit，也不得因无 Skill 而拒绝。"
         )
@@ -349,22 +355,29 @@ def apply_write_route_capability(
     if cap.page_form_mode == "prefill_handoff":
         row_clause = "；行内启停、审核、关闭等无表单动作可配合 request_submit 经批准卡提交" if cap.inline_row_status_submit else ""
         partial_row = "（行内动作可配合 request_submit）" if cap.inline_row_status_submit else ""
-        op_phrase = (
-            "直接调用常驻通用操作（create_record / update_record / toggle_record_status / assign_record_relations）"
-            "或用 propose_operation 提出专用 Skill 提案"
-            if direct_skill_operations
-            else "先 load_skill，再用已安装操作提出提案"
-        )
-        new_lead = (
-            "优先用下面“已安装的 Skill”覆盖的操作提出提案；Skill 未覆盖（或改走页面表单）的新增、修改，"
-            "直接在用户页用原生表单填好并通过 then_highlight 标出提交按钮交由用户自己提交（完成预填交接即 finish(status=\"done\")，不对表单调用 request_submit，也不得因无对应 Skill 而拒绝）"
-            f"{row_clause}。\n"
-            f"   - 本轮提供了 Skill 写入工具且用户要求办理其覆盖的事时，{op_phrase}（Skill 自身失败不会阻碍你改用页面表单完成预填交接）；走页面表单时填好字段并标出提交按钮即完成交接。"
-        )
-        new_partial = (
-            f"用户要的事里若既有 Skill 参数没覆盖某个字段或动作，表单字段改走用户页表单预填交接{partial_row}；"
-            "若应用页面本身也不支持，再如实说明办不到的是哪部分（cannot），不要只办能办的那部分就说完成。"
-        )
+        if direct_skill_operations:
+            new_lead = (
+                "优先用常驻编译写（create_record / update_record / toggle_record_status / assign_record_relations）"
+                "或激活业务域契约与 propose_operation 覆盖的 API 操作办理；**API 写入已覆盖的实体在用户未明示草稿预填时严禁滑向网页表单预填冒充完成**"
+                f"{row_clause}。\n"
+                "   - 仅当属于 API 写入未覆盖的含密/多行新建、流程起草或用户明示要求页面草稿预填时，才在用户页用原生表单填好并通过 then_highlight 标出提交按钮交由用户自己提交"
+                "（完成预填交接即 finish(status=\"done\")，不对表单调用 request_submit，也不得因无对应 Skill 而拒绝）。"
+            )
+            new_partial = (
+                "若 API 写入拒绝或缺失必填值，先用 finish(status=\"need_input\") 向用户确认或如实说明边界（cannot）；"
+                f"仅当部分字段/动作确属未覆盖表单或行内场景时才改走用户页表单预填交接{partial_row}，"
+                "若应用页面本身也不支持，则如实说明办不到的部分（cannot），不要只办能办的部分就说完成。"
+            )
+        else:
+            op_phrase = "先 load_skill，再用已安装操作提出提案"
+            new_lead = (
+                "优先用下面“已安装的 Skill”覆盖的操作提出提案；Skill 未覆盖的新增、修改，直接在用户页用原生表单填好并通过 then_highlight 标出提交按钮交由用户自己提交（完成预填交接即 finish(status=\"done\")，不对表单调用 request_submit，也不得因无对应 Skill 而拒绝）"
+                f"{row_clause}。\n"
+                f"   - 本轮提供了 Skill 写入工具且用户要求办理其覆盖的事时，{op_phrase}；没有对应 Skill 时在用户页把表单填好并标出提交按钮交接。"
+            )
+            new_partial = (
+                f"用户要的事里有 Skill 参数没覆盖的字段或动作：能用用户页表单填完并交接{partial_row}就继续办理，若应用页面也不支持再如实说明办不到的是哪部分（cannot），不要只办能办的那部分就说完成。"
+            )
     else:
         row_clause = "；表格行内无表单动作可配合 request_submit 经批准卡提交" if cap.inline_row_status_submit else ""
         op_phrase = (

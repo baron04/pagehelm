@@ -183,9 +183,11 @@ class Phase51G0Tests(unittest.TestCase):
                 run_id_factory=lambda _m: "g0-exec",
             )
             instr = executor.profile.instructions
-            self.assertIn("路 1（常驻编译写与领域 Skill API 写入）", instr)
-            self.assertIn("路 2（表格行内无表单按钮）", instr)
-            self.assertIn("路 3（复杂或未覆盖页面表单预填交接）", instr)
+            self.assertIn("路 1（API 写入优先，严禁未请求预填时滑向网页表单）", instr)
+            self.assertIn("路 2（单据审批与表格行内无表单按钮）", instr)
+            self.assertIn("路 3（安全边界与未覆盖草稿预填交接）", instr)
+            self.assertIn("在用户未明示草稿预填时严禁滑向网页表单预填冒充完成", instr)
+            self.assertNotIn("Skill 自身失败不会阻碍你改用页面表单完成预填交接", instr)
             self.assertIn("switch_domain", _STATUS_READ_TOOLS)
 
             with tempfile.TemporaryDirectory() as td2:
@@ -231,7 +233,180 @@ class Phase51G0Tests(unittest.TestCase):
                 sw = executor.procedures._tool(s, "switch_domain", {"domain": "erp"}, fake_ctx_turn)
             self.assertEqual(sw.state, "completed")
             self.assertIn("erp_document_status", sw.feedback)
-            self.assertEqual(fake_ctx_turn["pinned_domains"], ["erp"])
+            self.assertIn("erp_product_unit_create", sw.feedback)
+            self.assertEqual(fake_ctx_turn["pinned_domains"], ["erp_wms"])
+
+            # Fuzzy load_skill resolves dashed domain tokens into active domain write contract
+            with patch.object(executor, "_note"):
+                fu = executor._invoke_tool(
+                    NS(operation=NS(principal=principal), obs=hub_obs, step=0, measure=lambda _k: nullcontext(), progress=lambda _f: None),
+                    "load_skill",
+                    {"skill": "hrm-salary"},
+                    turn,
+                )
+            self.assertEqual(fu.state, "completed")
+            self.assertIn("hrm/salary/employee-info", fu.feedback)
+            self.assertIn("hrm", turn.get("pinned_domains", []))
+
+    def test_search_api_write_guidance_and_programmatic_domain_packs(self):
+        from web_operation_agent_yudao.executor.domain_toolpacks import (
+            YUDAO_DOMAIN_PACKS,
+            active_domain_contract_block,
+        )
+        from web_operation_agent.goal.domain_packs import select_active_domains
+
+        docs = {
+            "paths": {
+                "/admin-api/crm/receivable/create": {
+                    "post": {
+                        "tags": ["管理后台 - CRM 回款"],
+                        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/RecCreate"}}}},
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                    }
+                },
+                "/admin-api/crm/receivable/get": {
+                    "get": {
+                        "tags": ["管理后台 - CRM 回款"],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/RecGetResp"}}}}},
+                    }
+                },
+                "/admin-api/crm/receivable/page": {
+                    "get": {
+                        "tags": ["管理后台 - CRM 回款"],
+                        "summary": "分页查询回款",
+                        "parameters": [{"name": "pageNo", "in": "query"}, {"name": "pageSize", "in": "query"}],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/PageResp"}}}}},
+                    }
+                },
+                "/admin-api/hrm/employee/create": {
+                    "post": {
+                        "tags": ["管理后台 - HRM 员工档案"],
+                        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/EmpCreate"}}}},
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                    }
+                },
+                "/admin-api/hrm/employee/get": {
+                    "get": {
+                        "tags": ["管理后台 - HRM 员工档案"],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/EmpGetResp"}}}}},
+                    }
+                },
+                "/admin-api/system/user/create": {
+                    "post": {
+                        "tags": ["管理后台 - 用户"],
+                        "summary": "新增用户",
+                        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/UserCreate"}}}},
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                    }
+                },
+                "/admin-api/system/user/get": {
+                    "get": {
+                        "tags": ["管理后台 - 用户"],
+                        "summary": "获得用户详情",
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/UserGetResp"}}}}},
+                    }
+                },
+                "/admin-api/erp/stock-check/update": {
+                    "put": {
+                        "tags": ["管理后台 - ERP 库存调拨单"],
+                        "summary": "更新库存盘点单",
+                        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/StockCheckUpdate"}}}},
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}},
+                    }
+                },
+                "/admin-api/erp/stock-check/get": {
+                    "get": {
+                        "tags": ["管理后台 - ERP 库存调拨单"],
+                        "summary": "获得库存盘点单",
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/StockCheckGetResp"}}}}},
+                    }
+                },
+                "/admin-api/erp/stock-check/page": {
+                    "get": {
+                        "tags": ["管理后台 - ERP 库存调拨单"],
+                        "summary": "获得库存盘点单分页",
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/PageResp"}}}}},
+                    }
+                },
+            },
+            "components": {
+                "schemas": {
+                    "CommonResultLong": {"properties": {"code": {"type": "integer"}, "data": {"type": "integer", "format": "int64"}}},
+                    "CommonResultBoolean": {"properties": {"code": {"type": "integer"}, "data": {"type": "boolean"}}},
+                    "PageResp": {"properties": {"data": {"type": "object"}}},
+                    "RecGetResp": {"properties": {"data": {"$ref": "#/components/schemas/RecData"}}},
+                    "RecData": {"properties": {"id": {"type": "integer"}, "contractId": {"type": "integer"}, "price": {"type": "number"}, "returnTime": {"type": "string"}}},
+                    "RecCreate": {
+                        "required": ["contractId", "price", "returnTime"],
+                        "properties": {
+                            "contractId": {"type": "integer", "description": "合同ID"},
+                            "price": {"type": "number", "description": "回款金额"},
+                            "returnTime": {"type": "string", "description": "回款日期"},
+                        },
+                    },
+                    "EmpGetResp": {"properties": {"data": {"$ref": "#/components/schemas/EmpData"}}},
+                    "EmpData": {"properties": {"id": {"type": "integer"}, "name": {"type": "string"}, "mobile": {"type": "string"}, "entryTime": {"type": "string"}}},
+                    "EmpCreate": {
+                        "required": ["name", "mobile", "entryTime"],
+                        "properties": {
+                            "name": {"type": "string", "description": "员工姓名"},
+                            "mobile": {"type": "string", "description": "手机号"},
+                            "entryTime": {"type": "string", "description": "入职时间"},
+                        },
+                    },
+                    "UserGetResp": {"properties": {"data": {"$ref": "#/components/schemas/UserData"}}},
+                    "UserData": {"properties": {"id": {"type": "integer"}, "username": {"type": "string"}, "nickname": {"type": "string"}}},
+                    "UserCreate": {
+                        "required": ["username", "nickname", "password"],
+                        "properties": {
+                            "username": {"type": "string"},
+                            "nickname": {"type": "string"},
+                            "password": {"type": "string"},
+                        },
+                    },
+                    "StockCheckGetResp": {"properties": {"data": {"$ref": "#/components/schemas/StockCheckData"}}},
+                    "StockCheckData": {"properties": {"id": {"type": "integer"}, "no": {"type": "string"}, "checkTime": {"type": "string"}, "remark": {"type": "string"}}},
+                    "StockCheckUpdate": {
+                        "required": ["id", "checkTime"],
+                        "properties": {
+                            "id": {"type": "integer"},
+                            "no": {"type": "string"},
+                            "checkTime": {"type": "string"},
+                            "remark": {"type": "string"},
+                        },
+                    },
+                }
+            },
+        }
+        client = _MockWriteClient()
+        know = ActorKnowledge(client, docs)
+        # include_writes=False preserves legacy read-only behavior and never emits write contracts
+        res_ro = know.search_api("回款 创建", include_writes=False)
+        self.assertIn("GET /admin-api/crm/receivable/page", res_ro)
+        self.assertNotIn("[写入契约]", res_ro)
+        self.assertIn("没有匹配的只读接口", know.search_api("不存在的接口xyz", include_writes=False))
+        # include_writes=True discovers compiled create_record entities even if query contains create verb
+        res_rec = know.search_api("回款 创建", include_writes=True)
+        self.assertIn("[写入契约]", res_rec)
+        self.assertIn('create_record(entity="crm/receivable"', res_rec)
+        res_emp = know.search_api("员工 新建", include_writes=True)
+        self.assertIn('create_record(entity="hrm/employee"', res_emp)
+        res_user = know.search_api("用户 新建", include_writes=True)
+        self.assertIn("[写入边界] system/user", res_user)
+        res_chk = know.search_api("盘点单 修改", include_writes=True)
+        self.assertIn('update_record(entity="erp/stock-check"', res_chk)
+
+        # Co-activation of oa_bpm + hrm + system_infra & 8 domains structure
+        self.assertEqual(
+            [p.domain_id for p in YUDAO_DOMAIN_PACKS],
+            ["crm", "erp_wms", "mall_promotion", "fms_pay", "hrm", "oa_bpm", "mes_iot", "system_infra"],
+        )
+        co_hrm = select_active_domains(YUDAO_DOMAIN_PACKS, page_url="https://app.test/#/index", prompt="请假并查员工档案")
+        self.assertEqual({p.domain_id for p in co_hrm}, {"oa_bpm", "hrm", "system_infra"})
+        block = active_domain_contract_block(page_url="https://app.test/#/index", prompt="新建一个员工档案", docs=docs)
+        self.assertIn("hrm/employee(name,mobile,entryTime)", block)
+        self.assertIn("oa_bpm", block)
+        self.assertIn("system_infra", block)
 
     def test_native_submit_get_detail_fallback(self):
         class FallbackClient:

@@ -1261,6 +1261,7 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
             is_hub_route=is_yudao_hub_route,
             deferred_dom_tools=YUDAO_DEFERRED_DOM_TOOLS,
             suppress_system_operation_catalog=True,
+            resolve_unknown_skill=owner.resolve_unknown_skill,
             untraced_numbers=untraced_answer_numbers)
         super().__init__(profile=profile, **kwargs)
         ops_port = getattr(getattr(application, "ports", None), "operations", None)
