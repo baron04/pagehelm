@@ -2394,8 +2394,13 @@ def build_yudao_write_directory(*, docs: dict | None = None, source=None, ui=Non
         entries.append(entry_dict)
     for ent, spec in sorted(cat["aggregates"].items()):
         extra_lbl = " / 员工定薪调薪" if getattr(spec, "readback_strategy", "") == "change_record_id" else ""
+        related_ents = (
+            ["hrm/salary/change-record"]
+            if getattr(spec, "readback_strategy", "") == "change_record_id" and ent == "hrm/salary/employee-info"
+            else []
+        )
         op_tag, op_sum = _openapi_op_label(docs, f"/admin-api/{ent}/update", "put")
-        entries.append({
+        agg_entry: dict[str, object] = {
             "tool": "update_record",
             "mode": "direct",
             "kind": "compiled_aggregate_update",
@@ -2410,7 +2415,10 @@ def build_yudao_write_directory(*, docs: dict | None = None, source=None, ui=Non
             ],
             "required": ["target", "changes/line_changes"],
             "relations": [],
-        })
+        }
+        if related_ents:
+            agg_entry["related_entities"] = related_ents
+        entries.append(agg_entry)
     for ent, spec in sorted(cat["updates"].items()):
         if ent in cat["aggregates"]:
             continue

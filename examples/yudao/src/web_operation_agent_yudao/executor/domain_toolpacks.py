@@ -64,7 +64,7 @@ YUDAO_DOMAIN_PACKS: tuple[DomainToolpack, ...] = (
             "回款新建调 create_record(entity='crm/receivable')；仅当用户未指定具体期次时，planId 为选填字段可直接省略并在 contractId 名下直接 create_record；"
             "若用户已指定具体回款期次或计划而该计划无权读取、不存在或已关联回款，禁止在同一轮静默省略 planId 或擅自改绑其他期次，更严禁擅自调 crm_receivable_plan_create 代建计划，应如实说明（cannot）或 need_input 请用户确认。"
         ),
-        read_contract_text="/crm/{customer,clue,business,contract,receivable,receivable-plan,contact,product}/{page,get}。customer:pool=true公海/否私海(contactStatus不传pool),sceneType=1负责2参与3下属;时间分dealTime/returnTime与createTime。follow-up-record/page必bizType+bizId;tab:permission/list,operate-log/page,page-by-customer,products仅get。statistics-*必deptId,rank/performance必times[]。元;0-40。",
+        read_contract_text="/crm/{customer,clue,business,contract,receivable,receivable-plan,contact,product}/{page,get}。customer:pool=true公海/否私海(contactStatus不传),sceneType=1负责2参与3下属;分deal/return与createTime。follow-up-record必bizType+bizId;tab:permission/list,page-by-customer(返0即无),products仅get。statistics-*必deptId(返0勿用performance-config异objectType覆盖),times[]。元;0-40。",
         default_priority=3,
     ),
     DomainToolpack(
@@ -77,7 +77,7 @@ YUDAO_DOMAIN_PACKS: tuple[DomainToolpack, ...] = (
         ),
         route_prefixes=("/erp", "/wms"),
         write_contract_text="ERP 单据审批/反审批优先用 propose_operation('erp_document_status', {document_type,no,action})；计量单位与主数据按契约工具办理。",
-        read_contract_text="/erp/{product,warehouse,account,supplier,customer,stock*,{purchase,sale,finance}-*}/{page,get},stock/get-count,stock-record/page(createTime异于inTime/outTime),*-statistics/*。/wms/{inventory/{page(必type=warehouse|item),list(必warehouseId)},inventory-history/page,{receipt,shipment,movement,check}-order/{page,get}(details仅get)}。ERP10/20,WMS0/4/5,元。",
+        read_contract_text="/erp/{product(含standard/unitName),warehouse(同名取defaultStatus=true默认仓并注非默认),account,supplier,customer(往来同名双查supplier+customer),stock*,{purchase,sale,finance}-*}/{page,get},stock-record/page(createTime异于inTime/outTime),*-statistics/*。/wms/{inventory/{page(必type),list(必warehouseId)},{receipt,shipment,movement,check}-order/{page,get}}。10/20,0/4/5。",
         default_priority=2,
     ),
     DomainToolpack(
@@ -90,7 +90,7 @@ YUDAO_DOMAIN_PACKS: tuple[DomainToolpack, ...] = (
         ),
         route_prefixes=("/mall", "/product", "/trade", "/promotion", "/member", "/statistics"),
         write_contract_text="已停用支付/退款网关高危动作如实说明安全围栏；品牌/分类/营销状态用契约专用操作或编译写。",
-        read_contract_text="/product/spu/{page(必tabType:0售1仓2空3警4回收),get-detail,get-count};/trade/{order,after-sale}/{page,get-detail},/trade/brokerage-*/{page,get};/promotion/{coupon,coupon-template,*-activity}/{page,get};/member/user/{page,get};/statistics/{trade,member,product}/*(order-count-trend必type,汇总0勿异口径覆盖)。会员tab:wallet,point,address,favorite。分(/100),单0/10/20/30/40。",
+        read_contract_text="/product/spu/{page(必tabType:0售1仓2空3警4回收),get-detail};/trade/{order,after-sale}/{page,get-detail},brokerage-*/{page,get};/promotion/{coupon,coupon-template(开启即status=0勿自加validEndTime,剩余totalCount-takeCount),*-activity}/{page,get};/member/user/{page,get};/statistics/{trade,member,product}/*(order-count-trend必type,汇总0勿覆盖)。分(/100),单0-40。",
         default_priority=1,
     ),
     DomainToolpack(
@@ -99,33 +99,33 @@ YUDAO_DOMAIN_PACKS: tuple[DomainToolpack, ...] = (
         aliases=("fms_pay", "fms", "pay", "fms-accounting", "财务", "会计", "凭证", "账套", "科目", "资产负债", "利润表", "现金流", "结账", "支付", "商户", "渠道", "钱包"),
         route_prefixes=("/fms", "/pay"),
         write_contract_text="fms/voucher 等明细修改用 update_record；注意区分日历月与账套当前会计期（year/period）。",
-        read_contract_text="FMS(除/fms/config/account-set/list)全必accountSetId:/fms/{voucher/{page,get},home/*,closing/*,config/*,{ledger/*/list,report/*/{get,check}}(必startMonth,endMonth=YYYY-MM;auxiliary-*必auxiliaryTypeId)}。元,凭0-8。Pay:/pay/{order,notify}/{page,get-detail},/pay/{refund,transfer}/{page,get},/pay/wallet/{page,get(必userId)},wallet-transaction/page。分(/100),0-30。",
+        read_contract_text="FMS(除account-set/list)全必accountSetId:/fms/{voucher/{page(含voucherWordName/voucherNumber/voucherTime/total/creatorUserName/reviewerUserName),get},home/*,closing/*,config/*,{ledger/*/list,report/*/{get,check}}(必startMonth,endMonth;auxiliary-*必auxiliaryTypeId)}。元,0-8。Pay:/pay/{order,notify}/{page,get-detail},{refund,transfer,wallet}/*。分(/100)。",
         default_priority=1,
         co_activate_domains=("erp_wms",),
     ),
     DomainToolpack(
         domain_id="hrm",
         label="HRM 人事档案考勤与薪酬",
-        aliases=("hrm", "hrm-org-salary", "hrm-salary", "人事", "员工", "入职", "在职", "离职", "花名册", "档案", "薪资", "薪酬", "调薪", "定薪", "工资", "考勤", "打卡", "请假", "排班", "假期", "招聘", "候选人"),
+        aliases=("hrm", "hrm-org-salary", "hrm-salary", "人事", "员工", "入职", "在职", "离职", "花名册", "档案", "薪资", "薪酬", "调薪", "定薪", "工资", "考勤", "打卡", "请假", "排班", "假期", "招聘", "候选人", "迟到", "早退", "旷工", "缺卡", "加班", "出勤"),
         route_prefixes=("/hrm",),
         write_contract_text=(
-            "员工新建用 create_record(entity='hrm/employee')（有页面默认值的字段如 type/entryStatus 未指明可省略自动补齐；在职需 jobNumber）；"
-            "调薪/定薪改薪资项用 update_record(entity='hrm/salary/employee-info', target='姓名或姓名(employeeId=编号)', "
-            "changes=[主表字段], line_changes=[{'collection':'salaryOptions','match':'薪资项名称或编码','changes':[{'field':'value','value':金额}]}])"
-            "（regularSalary/probationSalary 为汇总只读列，勿放 changes；算得目标金额须先调 sql 留回执；"
-            "未来日期生效的调薪写入 hrm/salary/change-record（到期前 employee-info 仍显示当前生效薪资，勿误判为未生效））。"
+            "员工新建用 create_record(entity='hrm/employee')（支持 name,mobile,deptId,postName[职位/岗位名称],entryTime,entryStatus 等，用户提及的岗位/职位定语须填入 postName；有默认值的 type/idType 等未指明自动补齐；在职需 jobNumber）；"
+            "调薪/定薪（含未来生效日期 effectTime）统一用 update_record(entity='hrm/salary/employee-info', target='姓名或姓名(employeeId=编号)', "
+            "changes=[{'field':'changeReason',...},{'field':'effectTime',...}], line_changes=[{'collection':'salaryOptions','match':'薪资项名称或编码','changes':[{'field':'value','value':金额}]}])"
+            "（regularSalary/probationSalary 为汇总只读列勿放 changes；算得目标金额须先调 sql 留回执；"
+            "hrm/salary/change-record 无独立写接口，由该更新自动生成变更记录并回读核实；到期前薪资档案当前合计保持原值）。"
         ),
-        read_contract_text="无/hrm/dept/*，组织查/system/dept/simple-list+/hrm/employee/dept-statistics。员工page用statusCategory(1-8,11-15)/deptId/deptIds/search；子资源与salary/employee-info/get、change-record/list、insurance/employee-info/get传employeeId非id。月薪/社保明细page与option-summary必传monthRecordId；考勤统计必传year+month(detail加employeeId)，按deptIds数组筛。金额元非分；考勤分Days/Minutes；pageSize<=200。",
+        read_contract_text="无/hrm/dept/*，查/system/dept/simple-list+/hrm/employee/dept-statistics。员工page用statusCategory/deptId/deptIds/search；子资源与salary/employee-info/get、change-record/list、insurance/employee-info/get传employeeId非id。月薪/社保明细必monthRecordId；部门/员工迟到早退汇总查/hrm/attendance/statistics/month-record-page(必year+month,deptIds;勿误用oa/attendance)。元;<=200。",
         default_priority=1,
         co_activate_domains=("system_infra", "oa_bpm"),
     ),
     DomainToolpack(
         domain_id="oa_bpm",
         label="OA 办公协作与 BPM 审批流",
-        aliases=("oa_bpm", "bpm_oa", "oa", "bpm", "pms", "im", "oa-bpm-system", "审批", "流程", "报销", "用车", "出差", "外出", "印章", "公告", "日程", "公文", "督办", "会议", "任务", "工作流", "项目"),
+        aliases=("oa_bpm", "bpm_oa", "oa", "bpm", "pms", "im", "oa-bpm-system", "审批", "流程", "报销", "用车", "出差", "外出", "印章", "公告", "日程", "公文", "督办", "会议", "任务", "工作流", "项目", "驳回", "已办", "待办"),
         route_prefixes=("/oa", "/bpm", "/pms", "/im"),
         write_contract_text="未入审批流扁平记录可用 create_record/update_record；流程发起与多行申请草稿走页面表单预填交接。",
-        read_contract_text="BPM:task含todo/done/manager-page(无my-todo)及list-by-process-instance-id，id/processInstanceId为String；status在instance(-1,1-4)与task(done用,-2..7)不同；list-by-return后端绑id(Swagger标taskId)；formFieldsParams为JSON串。OA:报销元，file-node必传scope，attendance周月报必传startDate或year+month。PMS:work-item/page|board必传projectId，工时小时。IM:聊天list/pull游标分页且content为JSON。",
+        read_contract_text="BPM:task/done-page已含processInstance.name/startUser.nickname/durationInMillis(耗时ms,纯查看直接读API)；task含todo/done/manager-page(无my-todo)，id/processInstanceId为String；status在instance(-1,1-4)与task(-2..7)不同；list-by-return绑id。OA:报销元，file-node必scope；oa/attendance仅个人打卡(按部门查迟到/早退汇总用/hrm/attendance/statistics/month-record-page)。PMS:必projectId。IM:游标分页。",
         default_priority=1,
         co_activate_domains=("hrm", "system_infra"),
     ),
@@ -141,10 +141,10 @@ YUDAO_DOMAIN_PACKS: tuple[DomainToolpack, ...] = (
     DomainToolpack(
         domain_id="system_infra",
         label="系统组织权限与基础设施",
-        aliases=("system_infra", "system", "infra", "ai", "mp", "系统", "部门", "岗位", "用户", "角色", "菜单", "字典", "通知", "日志", "定时任务", "租户", "配置", "公众号"),
+        aliases=("system_infra", "system", "infra", "ai", "mp", "系统", "部门", "岗位", "用户", "角色", "菜单", "字典", "通知", "日志", "定时任务", "租户", "配置", "公众号", "站内信", "消息", "公告"),
         route_prefixes=("/system", "/infra", "/ai", "/mp"),
         write_contract_text="system/user 新建含密码硬排除（direct=cannot；仅草稿预填可填非密码项），用户分配角色用 assign_record_relations。",
-        read_contract_text="system:user/page筛username/mobile/deptId，昵称list-by-nickname；dept/list无分页(同名双查dept/user)；notice无发送人而notify-message含templateNickname；login/operate-log的username按账号非姓名(查user/page)，login-log.status布尔。infra:get_next_times，duration毫秒，size字节。mp/account/page筛name/account/appId，余必accountId。ai:list-by-conversation-id，segment/search必knowledgeId+content。",
+        read_contract_text="system:user/page筛username/mobile/deptId，昵称list-by-nickname；dept/list无分页(同名双查dept/user)；system/notice/page仅系统公告无发送人字段，按发送人查通知/公告/消息须查站内信/system/notify-message/page(发送人templateNickname、内容templateContent)；login/operate-log的username按账号非姓名(先查user/page)，login-log.status布尔。infra:get_next_times，duration毫秒。mp:余必accountId。ai:必knowledgeId+content。",
         default_priority=2,
     ),
 )
@@ -248,13 +248,21 @@ def search_write_directory(
             for bg in needed_bigrams:
                 if bg in lbl_cf:
                     bigram_entities.setdefault(bg, set()).add(ent_key)
+    query_cf = str(query or "").strip().strip("/").casefold()
     scored: list[tuple[float, dict]] = []
     for entry in directory:
         ent = str(entry.get("entity") or "").casefold()
+        rel_ents = [
+            str(x).strip().strip("/").casefold()
+            for x in (*(entry.get("related_entities") or ()), *(entry.get("entities") or ()))
+            if str(x or "").strip()
+        ]
         lbl = str(entry.get("label") or "").casefold()
         tool = str(entry.get("tool") or "").casefold()
         segments = _stripped_label_segments(entry)
         score = 0.0
+        if query_cf and (query_cf == ent or query_cf in rel_ents):
+            score += 30.0
         for tok in subject_tokens:
             hit_tok = False
             if tok in segments:
@@ -263,7 +271,7 @@ def search_write_directory(
             elif tok in lbl:
                 score += 6.0 + len(tok)
                 hit_tok = True
-            if tok in ent:
+            if tok in ent or any(tok in re_ent for re_ent in rel_ents):
                 score += 5.0 + len(tok)
                 hit_tok = True
             if tok in tool:

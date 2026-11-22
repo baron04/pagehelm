@@ -792,8 +792,15 @@ class ActorKnowledge:
             prepared["last_keys"] = tuple(str(key) for key in keys)
             blanked = {k for row in (rows if rows is not None else [data]) if isinstance(row, dict)
                        for k, v in row.items() if v == REDACTED}
+            missing = (
+                [f for f in fields if f != "id" and f not in keys and f not in props]
+                if fields
+                else []
+            )
+            expand_tiny_guessed = bool(
+                use_row_sink and fields and missing and rows is not None and whole and 1 <= len(rows) <= 5
+            )
             if fields:
-                missing = [f for f in fields if f != "id" and f not in keys and f not in props]
                 if missing:
                     out.append("提示：本次 fields 中请求的以下列名在返回记录中不存在："
                                + "、".join(missing)
@@ -801,7 +808,7 @@ class ActorKnowledge:
                 other = [key for key in dict.fromkeys(k for row in (rows if rows is not None else [data])
                          if isinstance(row, dict) for k in row) if key in props
                          and key not in ("id", *fields) and key not in blanked]
-                if other:
+                if other and not expand_tiny_guessed:
                     out.append("本次只展示 fields 指定的列；下面是已返回但未展示的列，需要时在 sql 中直接按列名查询（无需重复 call_api），不能据此说接口没有这些字段：")
                     data_lines.add(len(out))
                     out.append("; ".join(key + ("（" + str(self._deref(props[key]).get("description") or "")[:40] + "）"
@@ -853,7 +860,7 @@ class ActorKnowledge:
                         and "id" in data and str(filters["id"]) != str(data["id"])):
                     raise TurnReadError("record_identity_mismatch", "详情接口返回的记录编号与请求不符。")
                 observed = rows if rows is not None else ([] if data is None else [data])
-                shown_rows = [self._row(r, fields) if isinstance(r, dict) else r for r in observed]
+                shown_rows = [self._row(r, () if expand_tiny_guessed else fields) if isinstance(r, dict) else r for r in observed]
                 clock_notes: list = []
                 if rows is not None:
                     row_keys = tuple(dict.fromkeys(
@@ -1033,11 +1040,27 @@ class ActorKnowledge:
             if observed:
                 data_lines.add(len(out))
                 shown_rows = prepared["shown_rows"]
+                has_int_time = any(
+                    isinstance(v, int) and not isinstance(v, bool)
+                    for r in observed[:10] if isinstance(r, dict)
+                    for k, v in r.items() if _TIME_KEY.search(str(k))
+                )
+                has_str_time = any(
+                    isinstance(v, str) and v
+                    for r in observed[:10] if isinstance(r, dict)
+                    for k, v in r.items() if _TIME_KEY.search(str(k))
+                )
+                if has_str_time and not has_int_time:
+                    sql_time_note = "注意 SQL 行表内时间列存日期时间字符串，请与字符串区间比较，切勿与毫秒整数做 >= / <= 比较（SQLite 中文本恒大于整数）"
+                elif has_str_time and has_int_time:
+                    sql_time_note = "注意 SQL 行表内部分时间列为毫秒整数、部分为日期时间字符串，比较前先核对列值类型，切勿拿字符串列与毫秒整数做大小比较"
+                else:
+                    sql_time_note = "注意 SQL 行表内时间列仍存原始毫秒整数"
                 inline = (json.dumps(shown_rows, ensure_ascii=False)
                           if info["complete"] and len(observed) <= 30 else "")
                 if inline and len(inline) <= 9000:
                     out.append(f"全部行（共 {len(observed)} 行，已读完所有页；内联时间字段已按本应用时区换算为 YYYY-MM-DD HH:MM:SS，单表原样字段或名单可直接引用上方读取回执交付，"
-                               f"无需再调 tables/sql 重复取行；若需分转元÷100.0 等单位换算、子集计数、多行聚合、差额、分组或排序极值，须调 sql 计算，注意 SQL 行表内时间列仍存原始毫秒整数）：" + inline)
+                               f"无需再调 tables/sql 重复取行；若需分转元÷100.0 等单位换算、子集计数、多行聚合、差额、分组或排序极值，须调 sql 计算，{sql_time_note}）：" + inline)
                 else:
                     out.append("样例（不是全表）：" + json.dumps(shown_rows[:3], ensure_ascii=False)[:2600])
             else:
@@ -1046,7 +1069,7 @@ class ActorKnowledge:
                     cond_desc = json.dumps(filters_used, ensure_ascii=False)[:300]
                     out.append(
                         f"[精确过滤已核实为 0 条记录] 精确绑定空集核实（complete=True，0 行）：在已绑定筛选参数 {cond_desc} 下当前账号可见记录确为 0 条；"
-                        "若主体对象已核实存在，关联子集为 0 条即完整事实结论（可用 completed 如实回答暂无记录/0 条，勿误报无法执行 cannot 或臆测权限受限，也无需反复尝试无关查询）。"
+                        "若主体对象已核实存在，关联子集为 0 条即完整事实结论（请直接调用 finish(status='done') 正面如实回答当前为 0 条/无满足条件项，切勿误报 finish(status='cannot') 或臆测权限受限，也无需再拉全表核对）。"
                     )
             out.extend(prepared["clock_notes"])
             sib = prepared.get("sib_prepared")

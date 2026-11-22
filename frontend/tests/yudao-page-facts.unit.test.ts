@@ -1529,4 +1529,88 @@ describe('native editor mode is current application state', () => {
       expect(facts.readPageQuery()).toBeUndefined()
     } finally { facts.dispose() }
   })
+  it('classifies body-teleported popover query controls owned by the active page query ElForm', () => {
+    const state = mountedPage('/erp/purchase/order', 'ErpPurchaseOrder')
+    state.element.innerHTML = '<form class="el-form"></form>'
+    const queryForm = state.element.querySelector('form')!
+    queryForm.getBoundingClientRect = () => ({width: 500, height: 80} as DOMRect)
+
+    const popover = document.createElement('div')
+    popover.className = 'el-popover'
+    popover.innerHTML = '<div class="el-form-item"><input></div><button class="el-button">确定</button>'
+    for (const node of [popover, ...popover.querySelectorAll('*')]) {
+      node.getBoundingClientRect = () => ({width: 120, height: 32} as DOMRect)
+    }
+    document.body.append(popover)
+
+    const itemRoot = popover.querySelector('.el-form-item')!
+    const input = popover.querySelector('input')!
+    const button = popover.querySelector('button')!
+    const model = {pageNo: 1, pageSize: 10, name: ''}
+
+    const formOwner = {
+      ...state.instance,
+      type: {name: 'ElForm'},
+      props: {model},
+      vnode: {ctx: state.instance},
+      parent: state.instance,
+      subTree: {type: 'form', el: queryForm, children: [] as NativeVNode[]},
+    }
+    const itemInst = {
+      ...state.instance,
+      type: {name: 'ElFormItem'},
+      props: {prop: 'name'},
+      parent: formOwner,
+      subTree: {type: 'div', el: itemRoot},
+    }
+    const buttonInst = {
+      ...state.instance,
+      type: {name: 'ElButton'},
+      props: {},
+      parent: formOwner,
+      subTree: {type: 'button', el: button},
+    }
+    const popoverInst = {
+      ...state.instance,
+      type: {name: 'ElPopover'},
+      props: {},
+      parent: formOwner,
+      subTree: {
+        type: 'div',
+        el: popover,
+        children: [{component: itemInst}, {component: buttonInst}] as unknown as NativeVNode[],
+      },
+    }
+    formOwner.subTree.children = [{component: popoverInst}] as unknown as NativeVNode[]
+    state.instance.subTree.children = [{component: formOwner}] as unknown as NativeVNode[]
+
+    expect(readElementPageControl(input)).toEqual({kind: 'query', field: 'name'})
+    expect(readElementPageControl(button)).toEqual({kind: 'query'})
+
+    const strayPopover = document.createElement('div')
+    strayPopover.className = 'el-popover'
+    strayPopover.innerHTML = '<div class="el-form-item"><input></div><button class="el-button">确定</button>'
+    for (const node of [strayPopover, ...strayPopover.querySelectorAll('*')]) {
+      node.getBoundingClientRect = () => ({width: 120, height: 32} as DOMRect)
+    }
+    document.body.append(strayPopover)
+    expect(readElementPageControl(strayPopover.querySelector('input')!)).toBeUndefined()
+    expect(readElementPageControl(strayPopover.querySelector('button')!)).toBeUndefined()
+
+    const dialog = document.createElement('div')
+    dialog.setAttribute('role', 'dialog')
+    const dialogPopover = document.createElement('div')
+    dialogPopover.className = 'el-popover'
+    dialogPopover.innerHTML = '<div class="el-form-item"><input></div>'
+    for (const node of [dialog, dialogPopover, ...dialogPopover.querySelectorAll('*')]) {
+      node.getBoundingClientRect = () => ({width: 120, height: 32} as DOMRect)
+    }
+    dialog.append(dialogPopover)
+    document.body.append(dialog)
+    expect(readElementPageControl(dialogPopover.querySelector('input')!)).toBeUndefined()
+
+    popover.remove()
+    strayPopover.remove()
+    dialog.remove()
+  })
 })

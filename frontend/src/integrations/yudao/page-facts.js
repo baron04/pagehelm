@@ -744,7 +744,7 @@ function pageComponentForRoot(root, name, allowDialog = false) {
     : Array.isArray(appView?.subTree?.children) ? appView.subTree.children : []
   const sections = roots.filter(node => node?.type === 'section' && node.el?.isConnected)
   if (sections.length !== 1 || !sections[0].el.contains(root)
-      && !(allowDialog && root.closest('[role="dialog"],dialog'))) return undefined
+      && !(allowDialog && root.closest('[role="dialog"],dialog,.el-popover'))) return undefined
   return findOwnedElComponent({owner, root, componentName: name, allowDialog})
 }
 
@@ -859,6 +859,41 @@ export function readElementPageControl(element) {
     const value = typeof field === 'string' ? model[field] : undefined
     // Only an actor-rendered select's scalar native ID/code. Text and other
     // component state stay in the browser; this binds later applied-query proof.
+    const choice = element.closest('.el-select') &&
+      (typeof value === 'boolean' || Number.isSafeInteger(value) && value >= 0 ||
+        typeof value === 'string' && /^(?:[0-9]{1,20}|true|false)$/.test(value))
+    return {kind: 'query', ...(typeof field === 'string' ? {field} : {}),
+      ...(choice ? {queryValue: String(value)} : {})}
+  }
+  const popover = element.closest('.el-popover')
+  if (popover && !popover.closest('[role="dialog"],dialog')) {
+    const owner = currentPageComponent()
+    if (!owner) return undefined
+    const itemRoot = element.closest('.el-form-item')
+    const anchorTarget = itemRoot
+      ? pageComponentForRoot(itemRoot, 'ElFormItem', true)
+      : element.matches('button,a,[role="button"]')
+        ? pageComponentForRoot(element, 'ElButton', true)
+        : undefined
+    let formInst
+    for (let cur = anchorTarget?.instance?.parent, depth = 0; cur && depth < 24; depth++, cur = cur.parent) {
+      if (cur.appContext !== owner.appContext || !isLiveComponent(cur)) break
+      if ((cur.type?.name || cur.type?.__name) === 'ElForm') {
+        formInst = cur
+        break
+      }
+    }
+    const formEl = formInst?.subTree?.el
+    const formBinding = formEl instanceof HTMLElement ? pageComponentForRoot(formEl, 'ElForm') : undefined
+    const model = formBinding?.instance?.props?.model
+    if (!formBinding || formBinding.owned.length !== 1 || formBinding.owned[0] !== formInst ||
+        !model || typeof model !== 'object' || !Number.isSafeInteger(model.pageNo) ||
+        model.pageNo < 1 || !Number.isSafeInteger(model.pageSize) || model.pageSize < 1) {
+      return undefined
+    }
+    const item = itemRoot && anchorTarget?.instance
+    const field = item?.props?.prop
+    const value = typeof field === 'string' ? model[field] : undefined
     const choice = element.closest('.el-select') &&
       (typeof value === 'boolean' || Number.isSafeInteger(value) && value >= 0 ||
         typeof value === 'string' && /^(?:[0-9]{1,20}|true|false)$/.test(value))

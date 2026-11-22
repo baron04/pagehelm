@@ -2508,6 +2508,270 @@ class Phase51G0Tests(unittest.TestCase):
                     offenders.append(str(py.relative_to(wt_root)))
         self.assertEqual(offenders, [], f"Unexpected benchmark case IDs in reusable/adapter code: {offenders}")
 
+    def test_step2r2_salary_change_record_related_entity_ranks_first(self):
+        from web_operation_agent_yudao.executor.domain_toolpacks import search_write_directory
+        from web_operation_agent_yudao.writes.convention_writes import build_yudao_write_directory
+
+        docs = {
+            "paths": {
+                "/admin-api/hrm/salary/employee-info/page": {
+                    "get": {
+                        "tags": ["管理后台 - HRM 员工薪资信息"],
+                        "parameters": [
+                            {"name": "employeeId", "in": "query"},
+                            {"name": "pageNo", "in": "query", "required": True},
+                            {"name": "pageSize", "in": "query", "required": True},
+                        ],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/SalPageResp"}}}}},
+                    }
+                },
+                "/admin-api/hrm/salary/employee-info/get": {
+                    "get": {
+                        "tags": ["管理后台 - HRM 员工薪资信息"],
+                        "parameters": [{"name": "employeeId", "in": "query", "required": True}],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/SalGetResp"}}}}},
+                    }
+                },
+                "/admin-api/hrm/salary/employee-info/update": {
+                    "put": {
+                        "tags": ["管理后台 - HRM 员工薪资信息"],
+                        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/SalUpdateVO"}}}},
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                    }
+                },
+                "/admin-api/hrm/salary/change-template/get": {
+                    "get": {
+                        "tags": ["管理后台 - HRM 调薪模板"],
+                        "parameters": [{"name": "id", "in": "query", "required": True}],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/TplGetResp"}}}}},
+                    }
+                },
+                "/admin-api/hrm/salary/change-template/create": {
+                    "post": {
+                        "tags": ["管理后台 - HRM 调薪模板"],
+                        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/TplCreateVO"}}}},
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                    }
+                },
+            },
+            "components": {
+                "schemas": {
+                    "CommonResultLong": {"properties": {"code": {"type": "integer"}, "data": {"type": "integer", "format": "int64"}}},
+                    "SalPageResp": {"properties": {"data": {"$ref": "#/components/schemas/SalPage"}}},
+                    "SalPage": {"properties": {"list": {"type": "array", "items": {"$ref": "#/components/schemas/SalRespVO"}}}},
+                    "SalGetResp": {"properties": {"data": {"$ref": "#/components/schemas/SalRespVO"}}},
+                    "SalRespVO": {
+                        "properties": {
+                            "id": {"type": "integer"},
+                            "employeeId": {"type": "integer"},
+                            "effectTime": {"type": "integer"},
+                            "salaryOptions": {"type": "array", "items": {"$ref": "#/components/schemas/SalOptVO"}},
+                        }
+                    },
+                    "SalUpdateVO": {
+                        "properties": {
+                            "id": {"type": "integer"},
+                            "employeeId": {"type": "integer"},
+                            "effectTime": {"type": "string", "format": "date-time"},
+                            "salaryOptions": {"type": "array", "items": {"$ref": "#/components/schemas/SalOptVO"}},
+                        }
+                    },
+                    "SalOptVO": {
+                        "required": ["code", "value"],
+                        "properties": {"code": {"type": "integer"}, "name": {"type": "string"}, "value": {"type": "number"}},
+                    },
+                    "TplGetResp": {"properties": {"data": {"$ref": "#/components/schemas/TplCreateVO"}}},
+                    "TplCreateVO": {
+                        "required": ["name"],
+                        "properties": {"id": {"type": "integer"}, "name": {"type": "string"}},
+                    },
+                }
+            },
+        }
+        directory = build_yudao_write_directory(docs=docs, source=None, ui=None)
+        emp_entry = next(e for e in directory if e.get("entity") == "hrm/salary/employee-info")
+        self.assertEqual(emp_entry.get("related_entities"), ["hrm/salary/change-record"])
+
+        ranked = search_write_directory("hrm/salary/change-record", docs=docs, source=None, ui=None, limit=4)
+        self.assertTrue(ranked)
+        self.assertEqual(ranked[0]["entity"], "hrm/salary/employee-info")
+
+        proc = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        proc.knowledge = NS(_loaded_docs=docs)
+        proc.goal_port = NS(data=NS(_source=None, _ui=None))
+        lines = proc._entity_compiled_write_lines("hrm/salary/change-record", "update")
+        contract_blob = "\n".join(lines)
+        self.assertIn("hrm/salary/employee-info", contract_blob)
+        emp_pos = contract_blob.find("hrm/salary/employee-info")
+        tpl_pos = contract_blob.find("hrm/salary/change-template")
+        if tpl_pos != -1:
+            self.assertLess(emp_pos, tpl_pos)
+
+    def test_step2r2_domain_pack_selection_and_read_contract_bounds(self):
+        from web_operation_agent.goal.domain_packs import select_active_domains
+        from web_operation_agent_yudao.executor.domain_toolpacks import YUDAO_DOMAIN_PACKS
+        from web_operation_agent_yudao.executor.page_prompts import SYSTEM_READ
+
+        for pack in YUDAO_DOMAIN_PACKS:
+            self.assertLessEqual(len(pack.read_contract_text), 350, pack.domain_id)
+
+        selected_att = select_active_domains(YUDAO_DOMAIN_PACKS, prompt="把芋道源码上个月的迟到次数和早退次数合计一下")
+        self.assertEqual([d.domain_id for d in selected_att], ["hrm", "system_infra", "oa_bpm"])
+
+        selected_bpm = select_active_domains(YUDAO_DOMAIN_PACKS, prompt="这周我驳回过的申请")
+        self.assertEqual(selected_bpm[0].domain_id, "oa_bpm")
+
+        selected_msg = select_active_domains(YUDAO_DOMAIN_PACKS, prompt="查某人发过的站内信或公告")
+        self.assertIn("system_infra", [d.domain_id for d in selected_msg])
+
+        self.assertIn("查无结果要说清条件和范围", SYSTEM_READ)
+
+    def test_step2r2_actor_knowledge_str_time_tiny_guessed_and_zero_row_finish(self):
+        class _MixedClient:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def get(self, path, **params):
+                return {"list": list(self._rows), "total": len(self._rows)}
+
+        docs = {
+            "paths": {
+                "/admin-api/promotion/coupon-template/page": {
+                    "get": {
+                        "tags": ["管理后台 - 优惠券模板"],
+                        "parameters": [
+                            {"name": "status", "in": "query"},
+                            {"name": "pageNo", "in": "query", "required": True},
+                            {"name": "pageSize", "in": "query", "required": True},
+                        ],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CouponPageResp"}}}}},
+                    }
+                },
+                "/admin-api/erp/product/page": {
+                    "get": {
+                        "tags": ["管理后台 - ERP 产品"],
+                        "parameters": [
+                            {"name": "name", "in": "query"},
+                            {"name": "pageNo", "in": "query", "required": True},
+                            {"name": "pageSize", "in": "query", "required": True},
+                        ],
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/ProdPageResp"}}}}},
+                    }
+                },
+            },
+            "components": {
+                "schemas": {
+                    "CouponPageResp": {"properties": {"data": {"$ref": "#/components/schemas/CouponPage"}}},
+                    "CouponPage": {"properties": {"list": {"type": "array", "items": {"$ref": "#/components/schemas/CouponVO"}}}},
+                    "CouponVO": {
+                        "properties": {
+                            "id": {"type": "integer"},
+                            "name": {"type": "string", "description": "名称"},
+                            "validEndTime": {"type": "string", "description": "有效结束时间"},
+                            "status": {"type": "integer", "description": "状态"},
+                        }
+                    },
+                    "ProdPageResp": {"properties": {"data": {"$ref": "#/components/schemas/ProdPage"}}},
+                    "ProdPage": {"properties": {"list": {"type": "array", "items": {"$ref": "#/components/schemas/ProdVO"}}}},
+                    "ProdVO": {
+                        "properties": {
+                            "id": {"type": "integer"},
+                            "name": {"type": "string", "description": "产品名称"},
+                            "standard": {"type": "string", "description": "规格"},
+                            "unitName": {"type": "string", "description": "单位名称"},
+                        }
+                    },
+                }
+            },
+        }
+        tables = TurnTables(BASELINE_SESSION_HANDOFFS)
+        self.addCleanup(tables.close)
+
+        str_know = ActorKnowledge(_MixedClient([{"id": 1, "name": "国庆券", "validEndTime": "2026-10-31 23:59:59", "status": 0}]), docs)
+        str_out = str_know.call_api("promotion/coupon-template/page", {"pageNo": 1, "pageSize": 20}, row_sink=tables.add)
+        self.assertIn("时间列存日期时间字符串", str_out)
+        self.assertIn("切勿与毫秒整数", str_out)
+
+        int_know = ActorKnowledge(_MixedClient([{"id": 1, "name": "国庆券", "validEndTime": 1793462399000, "status": 0}]), docs)
+        int_out = int_know.call_api("promotion/coupon-template/page", {"pageNo": 1, "pageSize": 20}, row_sink=tables.add)
+        self.assertIn("时间列仍存原始毫秒整数", int_out)
+
+        prod_know = ActorKnowledge(_MixedClient([{"id": 9, "name": "M6螺栓", "standard": "M6*20", "unitName": "盒"}]), docs)
+        prod_out = prod_know.call_api("erp/product/page", {"name": "M6螺栓", "pageNo": 1, "pageSize": 20}, ["spec", "unit"], row_sink=tables.add)
+        self.assertIn("本轮行表已保留接口返回的全部真实列", prod_out)
+        self.assertIn("M6*20", prod_out)
+        self.assertIn("unitName", prod_out)
+
+        empty_know = ActorKnowledge(_MixedClient([]), docs)
+        empty_out = empty_know.call_api("promotion/coupon-template/page", {"status": 0, "pageNo": 1, "pageSize": 20}, row_sink=tables.add)
+        self.assertIn("finish(status='done')", empty_out)
+        self.assertNotIn("可用 completed", empty_out)
+
+    def test_step2r2_fill_fields_label_for_placeholder_and_then_click_expand(self):
+        from dataclasses import replace
+        from web_operation_agent.execution.model_loop_contracts import LoopToolResult
+        from web_operation_agent.privacy import SessionHandoffPolicy
+        from web_operation_agent_yudao.executor.page_prompts import SlimTurnContext
+        from web_operation_agent_yudao.tests.slim_loop_support import element, observation
+
+        proc = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        proc.knowledge = NS(handoffs=SessionHandoffPolicy.extending(()))
+        proc.goal_port = NS(data=NS(choice_label=lambda route, label, value: value))
+        proc.turn_context = SlimTurnContext(current_request="筛选编号并点更多后点击查询")
+        turn_state = {"touched": [], "trace": []}
+        proc._ctx = lambda: NS(executor_turn=turn_state, write_intent=None, current_request=proc.turn_context.current_request, earlier_requests=())
+        proc._note = lambda *a, **kw: None
+        proc.form_fill = None
+
+        more_btn = element(1, "button", "更多", "button")
+        search_btn = element(2, "button", "查询", "button")
+        obs_collapsed = replace(
+            observation(),
+            page_route="/fms/voucher",
+            render_state="ready",
+            elements=[more_btn, search_btn],
+            content="[1]<button>更多</button>\n[2]<button>查询</button>",
+        )
+        lbl_el = ElementRef(ref="e3", role="label", name="凭证号:", tag="label", attrs={"for": "voucher-no-input"}, epoch=2)
+        for_input = ElementRef(ref="e4", role="textbox", name="", tag="input", attrs={"id": "voucher-no-input"}, epoch=2)
+        ph_input = ElementRef(ref="e5", role="textbox", name="请输入制单人", tag="input", attrs={"placeholder": "请输入制单人"}, epoch=2)
+        obs_expanded = replace(
+            obs_collapsed,
+            epoch=2,
+            elements=[replace(more_btn, epoch=2), replace(search_btn, epoch=2), lbl_el, for_input, ph_input],
+            content="[1]<button>更多</button>\n[2]<button>查询</button>\n[3]<label for=voucher-no-input>凭证号:</label>\n[4]<input id=voucher-no-input />\n[5]<input placeholder=请输入制单人 />",
+        )
+
+        actions = []
+        state = NS(obs=obs_collapsed, terminal_reason="", operation=None, page=NS())
+
+        def fake_act(s, action, args, **kw):
+            actions.append((action, args))
+            if action == "click" and args.get("ref") == "e1":
+                s.obs = obs_expanded
+                return None
+            if action == "click" and args.get("ref") == "e2":
+                return LoopToolResult("查询动作已核验。", kind="page", dispatch="acknowledged", completion_command="cmd-more-search")
+            return None
+
+        proc._act = fake_act
+        proc._settled = lambda s, **kw: "still"
+
+        out = proc._fill_fields(
+            state,
+            [{"label": "凭证号", "value": "记-001"}, {"label": "制单人", "value": "芋道源码"}],
+            "查询",
+            turn_state,
+            query_only=False,
+        )
+        self.assertEqual(out.completion_command, "cmd-more-search")
+        self.assertEqual([(a, ar.get("ref"), ar.get("value")) for a, ar in actions], [
+            ("click", "e1", None),
+            ("fill", "e4", "记-001"),
+            ("fill", "e5", "芋道源码"),
+            ("click", "e2", None),
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1070,9 +1070,39 @@ class YudaoProceduresBase:
                 e for e in s.obs.elements
                 if e.ref[1:] in vis_shown and target_label and target_label in (
                     str(e.attrs.get("field_label") or "").rstrip(":：").strip(),
-                    str(e.attrs.get("title") or ""),
+                    str(e.attrs.get("title") or "").strip(),
                 ) and (not query_only or e.attrs.get("page_control") == "query")
             ]
+            if not matches and target_label:
+                for_ids = {
+                    str(e.attrs.get("for") or "").strip()
+                    for e in s.obs.elements
+                    if e.tag == "label"
+                    and e.attrs.get("for")
+                    and str(e.name or "").rstrip(":：").strip() == target_label
+                }
+                if for_ids:
+                    matches = [
+                        e for e in s.obs.elements
+                        if e.ref[1:] in vis_shown
+                        and str(e.attrs.get("id") or "").strip() in for_ids
+                        and (not query_only or e.attrs.get("page_control") == "query")
+                    ]
+            if not matches and target_label:
+                for e in s.obs.elements:
+                    if (
+                        e.ref[1:] not in vis_shown
+                        or e.attrs.get("field_label")
+                        or e.attrs.get("title")
+                        or (query_only and e.attrs.get("page_control") != "query")
+                    ):
+                        continue
+                    hint = str(e.attrs.get("placeholder") or "").strip()
+                    if not hint and e.role in {"combobox", "textbox", "searchbox"}:
+                        hint = (str(e.name or "").splitlines() or [""])[0].strip()
+                    stripped = re.sub(r"^(?:请输入|请选择)\s*", "", hint).rstrip(":：").strip()
+                    if stripped == target_label:
+                        matches.append(e)
             return vis_shown, matches
 
         for field_idx, item in enumerate(fields):
@@ -1095,9 +1125,9 @@ class YudaoProceduresBase:
                 if missing:
                     return missing
             shown, found = _visible_named(label)
-            if not found and query_only and not expanded_filters:
+            if not found and (query_only or bool(then_click)) and not expanded_filters:
                 expanded_filters = True
-                expand_tokens = ("展开", "高级筛选", "更多筛选", "展开筛选", "更多条件", "高级搜索")
+                expand_tokens = ("展开", "更多", "高级筛选", "更多筛选", "展开筛选", "更多条件", "高级搜索")
                 expand_btns = [
                     e for e in s.obs.elements
                     if e.ref[1:] in shown
@@ -1359,11 +1389,20 @@ class YudaoProceduresBase:
         q = str(target or "").strip().casefold()
         matched_set = set(matched_entities or ())
         hits: list[dict] = []
+        prioritized: list[dict] = []
         for entry in directory:
             ent = str(entry.get("entity") or "")
             lbl = str(entry.get("label") or "").casefold()
-            if ent in matched_set or (q and (q == ent.casefold() or q in ent.casefold() or q in lbl)):
+            rel_ents = [
+                str(x).strip().strip("/").casefold()
+                for x in (*(entry.get("related_entities") or ()), *(entry.get("entities") or ()))
+                if str(x or "").strip()
+            ]
+            if q and (q == ent.casefold() or q in rel_ents):
+                prioritized.append(entry)
+            elif ent in matched_set or (q and (q in ent.casefold() or q in lbl or any(q in r for r in rel_ents))):
                 hits.append(entry)
+        hits = prioritized + [e for e in hits if e not in prioritized]
         if not hits:
             hits = search_write_directory(f"{target} {operation}".strip(), docs=docs, source=source, ui=ui, limit=4)
         if not hits:
