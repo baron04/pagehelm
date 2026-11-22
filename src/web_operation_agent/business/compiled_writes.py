@@ -71,7 +71,7 @@ _CANDIDATE_ID_SUFFIX = re.compile(
 
 
 _PLACEHOLDER_ENUM_ZERO_LABELS = frozenset({
-    "未知", "无", "未选择", "未设置", "未指定", "未定", "未定薪",
+    "未知", "无", "未选择", "未设置", "未指定", "未定",
     "默认", "请选择", "空", "不详",
     "unknown", "none", "unset", "unselected", "default", "null", "n/a",
 })
@@ -83,7 +83,7 @@ def is_placeholder_enum_label(label: str | None) -> bool:
     cleaned = str(label).strip().casefold()
     if not cleaned:
         return True
-    return cleaned in _PLACEHOLDER_ENUM_ZERO_LABELS or cleaned.startswith(("未知", "未选择", "未设置", "请选择"))
+    return cleaned in _PLACEHOLDER_ENUM_ZERO_LABELS or cleaned.startswith(("未知", "未选择", "未设置", "未定", "请选择"))
 
 
 def is_rejected_ui_sentinel(

@@ -346,7 +346,7 @@ def program_summary(content: str) -> str:
     extra = [
         line[:240]
         for line in trusted[1:]
-        if line.startswith(("本轮行表 ", "库存流水旁路对照"))
+        if line.startswith(("本轮行表 ", "Table ")) or ("关联行表 " in line and "读取回执 " in line)
     ]
     return "\n".join([first, *extra][:3])[:360]
 
