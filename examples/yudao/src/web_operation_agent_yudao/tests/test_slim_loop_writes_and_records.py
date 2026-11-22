@@ -762,7 +762,7 @@ class WriteTurnTests(unittest.TestCase):
     def test_writes_are_told_only_to_an_actor_who_is_offered_an_operation(self):
         plain = system_text(user="u", date="2026-10-13", tz="Asia/Shanghai")
         self.assertEqual(plain, SYSTEM.format(user="u",
-            date="2026-10-13 周二；ISO周[2026-10-12,2026-10-19)", tz="Asia/Shanghai"))
+            date="2026-10-13 周二；ISO周[2026-10-12,2026-10-19)；第4季度(Q4)", tz="Asia/Shanghai"))
         catalog = SkillWrites(self.application, self.state().approvals).catalog()
         self.assertEqual(len(catalog), 25)
         told = system_text(user="u", date="2026-10-13", tz="Asia/Shanghai", catalog=catalog)

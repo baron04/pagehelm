@@ -63,7 +63,7 @@ class DefaultHandoffTests(unittest.TestCase):
                 loop = Loop([fill(), finish(status)])
                 answer = self._run_loop(loop)
                 self.assertEqual(loop.actions, ["fill", "handoff_form"])
-                self.assertIn("尚未提交", answer)
+                self.assertNotIn("「保存」已标出（尚未提交）", answer)
                 self.assertEqual(loop.turn["handoff"][1], "保存")
                 # Re-observation and another unfinished close do not dismiss the handoff.
                 loop._closing(loop.state, loop.turn, {"status": status, "answer": answer})
@@ -129,11 +129,10 @@ class DefaultHandoffTests(unittest.TestCase):
 
     def test_clean_form_handoff_prevents_refused_close_even_with_cannot(self):
         self.intent("save", "帮我建个联系人：陈斌")
-        loop = Loop([fill(), finish("cannot")])
+        loop = Loop([fill(then_highlight="保存"), finish("cannot")])
         answer = self._run_loop(loop)
         self.assertEqual(loop.state.terminal_reason, "")
         self.assertEqual(loop.actions, ["fill", "handoff_form"])
-        self.assertIn("尚未提交", answer)
         self.assertIn("手动点击「保存」提交", answer)
 
     def test_blocked_or_missing_handoff_with_cannot_stays_refused(self):

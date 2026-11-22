@@ -59,7 +59,7 @@ DOCS = {
                                 "level": _prop("integer", "客户等级")}),
         **_schemas("Instance", {"id": _prop("string", "编号"), "name": _prop("string", "流程名称")}),
         **_schemas("Supplier", {"id": _prop("integer", "编号"), "name": _prop("string", "供应商名称"),
-                                "status": _prop("integer", "开启状态")}),
+                                "status": _prop("integer", "开启状态（0开启 1关闭）")}),
     }},
 }
 

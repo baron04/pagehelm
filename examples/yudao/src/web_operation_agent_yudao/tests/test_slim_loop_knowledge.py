@@ -188,7 +188,7 @@ class KnowledgeTests(unittest.TestCase):
     def test_row_window_arguments_are_validated_before_reading(self):
         from web_operation_agent_yudao.executor.slim_loop import QueryParametersError
         for offset, fields in ((-1, ["name"]), (True, ["name"]), (1.5, ["name"]),
-                               (5001, ["name"]), (1, [])):
+                               (20001, ["name"]), (1, [])):
             with self.subTest(offset=offset, fields=fields):
                 with self.assertRaises(QueryParametersError):
                     self.know.call_api("orders/page", {"pageNo": 1}, fields, row_offset=offset)
@@ -431,7 +431,7 @@ class KnowledgeTests(unittest.TestCase):
                 if path != "leads/page":
                     return super().get(path, **params)
                 self.calls.append((path, params))
-                records = range(1, 5201)
+                records = range(1, 20201)
                 start = (params["pageNo"] - 1) * params["pageSize"]
                 return {"total": len(records), "list": [
                     {"id": n, "name": f"Synthetic {n}"}
@@ -439,11 +439,11 @@ class KnowledgeTests(unittest.TestCase):
         client = LargeClient()
         knowledge = ActorKnowledge(client, lambda: DOCS)
         count = knowledge.call_api("leads/page", {"pageNo": 1, "pageSize": 10})
-        self.assertIn("total=5200", count)
+        self.assertIn("total=20200", count)
         self.assertEqual(len([p for p, _ in client.calls if p == "leads/page"]), 1)
         projected = knowledge.call_api("leads/page", {"pageNo": 1, "pageSize": 100}, ["name"])
         self.assertFalse(knowledge.last_read["complete"])
-        self.assertEqual(knowledge.last_read["declared_total"], 5200)
+        self.assertEqual(knowledge.last_read["declared_total"], 20200)
         self.assertIn("没有读完", projected)
         self.assertNotIn("已读完所有页", projected)
         self.assertTrue(all("sceneType" not in params for path, params in client.calls if path == "leads/page"))
@@ -787,19 +787,19 @@ class KnowledgeTests(unittest.TestCase):
                     return super().get(path, **params)
                 self.calls.append((path, params))
                 page, size = params["pageNo"], params["pageSize"]
-                return {"total": 5001, "list": [
-                    {"id": n + 1, "totalPrice": 999999 if n == 5000 else 1}
-                    for n in range((page - 1) * size, min(page * size, 5001))]}
+                return {"total": 20001, "list": [
+                    {"id": n + 1, "totalPrice": 999999 if n == 20000 else 1}
+                    for n in range((page - 1) * size, min(page * size, 20001))]}
 
         client = LargeClient()
         text = ActorKnowledge(client, lambda: DOCS).call_api(
             "deals/page", {"pageNo": 1, "pageSize": 100}, ["totalPrice"])
-        self.assertIn("total=5001（符合条件的总数），本次读了 5000 行", text)
+        self.assertIn("total=20001（符合条件的总数），本次读了 20000 行", text)
         self.assertIn("没有读完符合条件的全部记录", text)
-        self.assertNotIn("totalPrice（5000 行）", text)
+        self.assertNotIn("totalPrice（20000 行）", text)
         self.assertNotIn("最大 999999", text)
         self.assertEqual([params["pageNo"] for path, params in client.calls
-                          if path == "deals/page"], list(range(1, 51)))
+                          if path == "deals/page"], list(range(1, 201)))
 
     def test_one_thousand_one_rows_gets_a_complete_aggregate(self):
         class LargeClient(Client):
