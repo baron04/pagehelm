@@ -14,23 +14,25 @@ _RESP_VO_FIELD = re.compile(
     re.M,
 )
 _DICT_FORMAT_ANN = re.compile(r'@DictFormat\(\s*(?:[\w.]+\.)?(?:([A-Z][A-Z0-9_]+)|"([^"]+)")\s*\)')
+_IN_ENUM_ANN = re.compile(r"@InEnum\(\s*(?:value\s*=\s*)?(?:[\w.]+\.)?([A-Za-z0-9_]+Enum)\.class")
 _ENUM_LINK_HINT = re.compile(r"(?:\{@link\s+|参见\s*)(?:[\w.]+\.)?([A-Za-z0-9_]+Enum)\b(?!#)")
 _SCALAR_VO_TYPES = frozenset({"Integer", "Long", "Short", "Byte", "String", "Boolean", "int", "long", "boolean"})
 
 
 def parse_resp_vo_code_bindings(text: str, dict_consts: dict[str, str]) -> dict[str, tuple[str, str]]:
-    """Extract field -> ('dict', dict_type) | ('enum', enum_class) from a *RespVO.java file."""
+    """Extract field -> ('dict', dict_type) | ('enum', enum_class) from a Java VO or DO file."""
+    masked = _mask(text)
     bindings: dict[str, tuple[str, str]] = {}
-    for m in _RESP_VO_FIELD.finditer(text):
+    for m in _RESP_VO_FIELD.finditer(masked):
         field_type = m.group(1).strip()
         field = m.group(2)
         if field_type not in _SCALAR_VO_TYPES:
             continue
         start = m.start()
-        sep_semi = text.rfind(";", 0, start)
-        sep_brace = text.rfind("{", 0, start)
+        sep_semi = masked.rfind(";", 0, start)
+        sep_brace = max(masked.rfind("{", 0, start), masked.rfind("}", 0, start))
         sep = max(sep_semi, sep_brace)
-        nl = text.find("\n", sep) if sep >= 0 else -1
+        nl = masked.find("\n", sep) if sep >= 0 else -1
         cut = (nl + 1) if 0 <= nl < start else max(sep + 1, 0)
         line_end = text.find("\n", m.end())
         same_line = text[m.end():line_end if line_end >= 0 else len(text)]
@@ -42,6 +44,10 @@ def parse_resp_vo_code_bindings(text: str, dict_consts: dict[str, str]) -> dict[
             if dtype:
                 bindings[field] = ("dict", dtype)
                 continue
+        in_e = _IN_ENUM_ANN.search(ctx)
+        if in_e:
+            bindings[field] = ("enum", in_e.group(1))
+            continue
         e = _ENUM_LINK_HINT.search(ctx)
         if e:
             bindings[field] = ("enum", e.group(1))

@@ -335,7 +335,7 @@ class ReadSummaryTests(unittest.TestCase):
         self.assertRefused("invalid_input", replace, source, rows=(source.rows[0], source.rows[0]), matched_count=2, records_scanned=2)
         self.assertRefused("invalid_input", replace, source, matched_count=2)
         self.assertRefused("invalid_input", replace, source, actor_digest="")
-        self.assertRefused("invalid_input", replace, source, rows=tuple(SummaryRow(str(i), ("A",)) for i in range(5001)), matched_count=5001, records_scanned=5001)
+        self.assertRefused("invalid_input", replace, source, rows=tuple(SummaryRow(str(i), ("A",)) for i in range(20001)), matched_count=20001, records_scanned=20001)
         self.assertRefused("missing_column", replace, source, rows=(SummaryRow("1", ()),))
 
     def test_inconsistent_relation_labels_and_unrankable_nulls_fail_closed(self):

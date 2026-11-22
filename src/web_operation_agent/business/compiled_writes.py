@@ -70,9 +70,28 @@ _CANDIDATE_ID_SUFFIX = re.compile(
 )
 
 
+_PLACEHOLDER_ENUM_ZERO_LABELS = frozenset({
+    "未知", "无", "未选择", "未设置", "未指定", "未定", "未定薪",
+    "默认", "请选择", "空", "不详",
+    "unknown", "none", "unset", "unselected", "default", "null", "n/a",
+})
+
+
+def is_placeholder_enum_label(label: str | None) -> bool:
+    if label is None:
+        return True
+    cleaned = str(label).strip().casefold()
+    if not cleaned:
+        return True
+    return cleaned in _PLACEHOLDER_ENUM_ZERO_LABELS or cleaned.startswith(("未知", "未选择", "未设置", "请选择"))
+
+
 def is_rejected_ui_sentinel(
     value: object,
     *,
+    is_fk: bool = False,
+    is_enum: bool = False,
+    enum_zero_label: str | None = None,
     is_fk_or_enum: bool = False,
     is_hierarchy_parent: bool = False,
 ) -> bool:
@@ -81,16 +100,27 @@ def is_rejected_ui_sentinel(
         return True
     if isinstance(value, float) and math.isnan(value):
         return True
+    eff_fk = bool(is_fk or (is_fk_or_enum and not is_enum))
     if isinstance(value, str):
         cleaned = value.strip().casefold()
         if cleaned in {"", "undefined", "null", "nan"}:
             return True
-        if (is_fk_or_enum or is_hierarchy_parent) and cleaned in {"0", "-1"}:
+        if cleaned == "-1" and (eff_fk or is_enum or is_fk_or_enum or is_hierarchy_parent):
             return True
+        if cleaned == "0":
+            if eff_fk or is_hierarchy_parent:
+                return True
+            if is_enum:
+                return is_placeholder_enum_label(enum_zero_label)
         return False
     if not isinstance(value, bool) and isinstance(value, (int, float)):
-        if (is_fk_or_enum or is_hierarchy_parent) and value in (0, -1):
+        if value == -1 and (eff_fk or is_enum or is_fk_or_enum or is_hierarchy_parent):
             return True
+        if value == 0:
+            if eff_fk or is_hierarchy_parent:
+                return True
+            if is_enum:
+                return is_placeholder_enum_label(enum_zero_label)
     return False
 
 
@@ -684,10 +714,22 @@ class CompiledCreateHandler:
             f_spec = target_spec.resolve_field(d_spec.field)
             if f_spec is None:
                 continue
+            zero_lbl: str | None = None
+            if f_spec.enum_type and not f_spec.reference_entity and str(d_spec.value).strip() == "0":
+                if d_spec.display and str(d_spec.display).strip() not in {"", "0"}:
+                    zero_lbl = str(d_spec.display).strip()
+                else:
+                    tokens_fn = getattr(self.port, "enum_provenance_tokens", None)
+                    if callable(tokens_fn):
+                        toks = [str(t).strip() for t in (tokens_fn(f_spec, 0) or ()) if str(t).strip() and str(t).strip() != "0"]
+                        if toks:
+                            zero_lbl = toks[0]
             if d_spec.kind != "actor" and is_rejected_ui_sentinel(
                 d_spec.value,
-                is_fk_or_enum=bool(f_spec.reference_entity or f_spec.enum_type),
-                is_hierarchy_parent=(f_spec.name == "parentId"),
+                is_fk=bool(f_spec.reference_entity),
+                is_enum=bool(f_spec.enum_type),
+                enum_zero_label=zero_lbl,
+                is_hierarchy_parent=f_spec.is_hierarchy_parent,
             ):
                 continue
             if callable(encode_default_fn):

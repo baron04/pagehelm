@@ -2266,7 +2266,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                         )
                         self._messages.append({"role": "user", "content":
                             "以下值在本轮读取中找不到：" + "、".join(untraced)
-                            + "；请改用读到的值。编号必须逐字保留；其它数值可说明计算依据或无法核实，然后重新调用 finish。"})
+                            + "；请改用读到的值。编号必须逐字保留；若需多行合计、差额或比例，请先调用 sql（如 SELECT SUM(...)）在内存行表上算出结果后再交付；其它数值可说明计算依据或无法核实，然后重新调用 finish。"})
                         return self._loop(s, prompt, turn, verified=verified)
                     # Two terminal outcomes once no correction turn remains (retry spent
                     # or budget exhausted): a value inside a deliverable item marks that

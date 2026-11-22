@@ -12,6 +12,7 @@ Provides:
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 import json
 import math
 import re
@@ -28,7 +29,7 @@ from ..privacy import (
 
 
 MAX_COLUMNS = 128
-MAX_ROWS = 5000
+MAX_ROWS = 20000
 MAX_TABLES = 36
 MAX_SQL_ROWS = 200
 MAX_SQL_CHARS = 14000
@@ -339,6 +340,52 @@ def _export_cell(value, handoffs) -> str:
     return " ".join(str(cleaned).split())[:EXPORT_CELL_CHARS]
 
 
+_NON_SUM_COLUMN = re.compile(
+    r"(?:^|[a-z_])(?:id|no|code|sort|status|state|type|sex|level|enable|flag|phone|mobile|zip|postal)$"
+    r"|(?:time|date)$"
+    r"|^(?:_row|id|no|code|sort|status|state|type|sex|level|enable|flag|phone|mobile)$",
+    re.IGNORECASE,
+)
+_ASCII_LABEL_PREFIX = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,31}$")
+
+
+def _register_small_table_sums(
+    target: set[str],
+    columns: list[str] | tuple[str, ...],
+    rows: list,
+    *,
+    is_dict_rows: bool,
+    excluded_cols: set[str] | frozenset[str] = frozenset(),
+) -> None:
+    if not (2 <= len(rows) <= 50):
+        return
+    for col_idx, col_name in enumerate(columns):
+        if (
+            not isinstance(col_name, str)
+            or col_name.casefold() in excluded_cols
+            or col_name.endswith("_label")
+            or _NON_SUM_COLUMN.search(col_name)
+        ):
+            continue
+        nums: list[Decimal] = []
+        non_numeric = False
+        for row in rows:
+            val = row.get(col_name) if is_dict_rows else (row[col_idx] if col_idx < len(row) else None)
+            if val is None or val == "":
+                continue
+            if isinstance(val, bool) or not isinstance(val, (int, float)) or not math.isfinite(val):
+                non_numeric = True
+                break
+            try:
+                nums.append(Decimal(str(val)))
+            except InvalidOperation:
+                non_numeric = True
+                break
+        if not non_numeric and len(nums) >= 2:
+            total_val = sum(nums, Decimal(0))
+            target.add(format(total_val.normalize(), "f"))
+
+
 class TurnTables:
     """One per-turn in-memory SQLite database and receipt namespace, discarded at turn end."""
 
@@ -354,12 +401,16 @@ class TurnTables:
         self.receipts: set[str] = set()
         self.tables: dict[str, dict] = {}
         self.queries: dict[str, dict] = {}
+        self.decoded_ascii_labels: set[str] = set()
+        self.precomputed_column_sums: set[str] = set()
 
     def close(self) -> None:
         self.connection.close()
         self.receipts.clear()
         self.tables.clear()
         self.queries.clear()
+        self.decoded_ascii_labels.clear()
+        self.precomputed_column_sums.clear()
 
     def issue_receipt(self) -> str:
         reference = f"ev_{self.prefix}_{len(self.receipts) + 1}"
@@ -378,12 +429,14 @@ class TurnTables:
         column_labels=None,
         code_maps=None,
         table_name: str | None = None,
+        already_redacted: bool = False,
     ) -> dict:
         if len(self.tables) >= MAX_TABLES or len(rows) > MAX_ROWS:
             raise TurnReadError("table_limit", "本轮行表已达容量上限。")
+        clean_source = rows if already_redacted else redact_api_content(rows, self.handoffs)
         rows = [
             row if isinstance(row, dict) else {"value": row}
-            for row in redact_api_content(rows, self.handoffs)
+            for row in clean_source
         ]
         # SQLite resolves column names case insensitively; keep the first spelling.
         columns, seen = [], {"_row"}
@@ -477,6 +530,26 @@ class TurnTables:
                     clean_labels[lbl_col] = f"{base_lbl}字典标签"
             if clean_labels:
                 info["column_labels"] = clean_labels
+        if isinstance(code_maps, dict):
+            for cmap in code_maps.values():
+                if isinstance(cmap, dict):
+                    for raw_lbl in cmap.values():
+                        lbl_txt = str(raw_lbl or "").strip()
+                        if _ASCII_LABEL_PREFIX.fullmatch(lbl_txt):
+                            self.decoded_ascii_labels.add(lbl_txt)
+        if complete and 2 <= len(rows) <= 50:
+            coded_folded = {
+                str(k).casefold()
+                for k, v in (code_maps or {}).items()
+                if isinstance(v, dict) and v
+            }
+            _register_small_table_sums(
+                self.precomputed_column_sums,
+                raw_columns,
+                rows,
+                is_dict_rows=True,
+                excluded_cols=coded_folded,
+            )
         self.tables[name] = info
         return info
 
@@ -681,6 +754,13 @@ class TurnTables:
             "sources": out["sources"],
             "sources_complete": out["sources_complete"],
         }
+        if out["sources_complete"] and not truncated and 2 <= len(out["rows"]) <= 50:
+            _register_small_table_sums(
+                self.precomputed_column_sums,
+                columns,
+                out["rows"],
+                is_dict_rows=False,
+            )
         return out
 
     def _scalar_extremum_note(self, conn, statement, sources, rows_out, authorize, deadline) -> str:

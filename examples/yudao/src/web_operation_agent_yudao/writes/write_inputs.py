@@ -22,13 +22,45 @@ def epoch(value, goal_data):
     return int(date.timestamp() * 1000)
 
 
+_MUNICIPALITY_ALIASES = {
+    "北京": "北京市",
+    "上海": "上海市",
+    "天津": "天津市",
+    "重庆": "重庆市",
+}
+_PROVINCE_ALIASES = {
+    **_MUNICIPALITY_ALIASES,
+    "河北": "河北省", "山西": "山西省", "辽宁": "辽宁省", "吉林": "吉林省", "黑龙江": "黑龙江省",
+    "江苏": "江苏省", "浙江": "浙江省", "安徽": "安徽省", "福建": "福建省", "江西": "江西省",
+    "山东": "山东省", "河南": "河南省", "湖北": "湖北省", "湖南": "湖南省", "广东": "广东省",
+    "海南": "海南省", "四川": "四川省", "贵州": "贵州省", "云南": "云南省", "陕西": "陕西省",
+    "甘肃": "甘肃省", "青海": "青海省", "台湾": "台湾省",
+    "内蒙古": "内蒙古自治区", "广西": "广西壮族自治区", "西藏": "西藏自治区",
+    "宁夏": "宁夏回族自治区", "新疆": "新疆维吾尔自治区",
+    "香港": "香港特别行政区", "澳门": "澳门特别行政区",
+}
+
+
+def _normalize_area_label(raw_label: str) -> str:
+    parts = [p.strip() for p in re.split(r"[/\s]+", str(raw_label or "").strip()) if p.strip()]
+    if not parts:
+        return str(raw_label or "").strip()
+    parts[0] = _PROVINCE_ALIASES.get(parts[0], parts[0])
+    if len(parts) >= 2 and parts[1] in _MUNICIPALITY_ALIASES:
+        parts[1] = _MUNICIPALITY_ALIASES[parts[1]]
+    return "/".join(parts)
+
+
 def _area(client, label):
     rows = client.get("system/area/tree")
     if not isinstance(rows, list):
         raise BusinessToolRequestError("current region tree is unavailable")
-    found = []
+    norm = _normalize_area_label(label)
+    raw = str(label or "").strip()
+    found: list[tuple[dict, tuple[str, ...], dict | None]] = []
     count = 0
-    def visit(items, prefix=(), depth=0):
+
+    def visit(items, prefix=(), parent=None, depth=0):
         nonlocal count
         if depth > 8 or not isinstance(items, list):
             raise BusinessToolRequestError("region tree exceeds its bounds")
@@ -37,13 +69,38 @@ def _area(client, label):
             if count > 20000 or not isinstance(row, dict) or not isinstance(row.get("name"), str):
                 raise BusinessToolRequestError("region tree is invalid or exceeds its bounds")
             path = (*prefix, row["name"])
-            if label in (row["name"], "/".join(path)):
-                found.append(row)
-            visit(row.get("children") or [], path, depth + 1)
+            dedup_path = tuple(
+                seg for idx, seg in enumerate(path) if idx == 0 or seg != path[idx - 1]
+            )
+            candidates = {row["name"], "/".join(path), "/".join(dedup_path)}
+            if raw in candidates or norm in candidates:
+                found.append((row, path, parent))
+            visit(row.get("children") or [], path, row, depth + 1)
+
     visit(rows)
-    if len(found) != 1 or type(found[0].get("id")) is not int:
+    if not found and "/" not in norm and not norm.endswith(("省", "市", "区", "县", "州", "盟", "旗")):
+        city_norm = norm + "市"
+        visit_hits: list[dict] = []
+        def visit_city(items, depth=0):
+            if depth > 8 or not isinstance(items, list):
+                return
+            for row in items:
+                if isinstance(row, dict) and row.get("name") == city_norm:
+                    visit_hits.append(row)
+                if isinstance(row, dict):
+                    visit_city(row.get("children") or [], depth + 1)
+        visit_city(rows)
+        if len(visit_hits) == 1 and type(visit_hits[0].get("id")) is int:
+            return visit_hits[0]["id"]
+    if len(found) == 2:
+        (r0, p0, par0), (r1, p1, par1) = found
+        if par1 is r0 and r0.get("name") == r1.get("name") and "/" not in norm:
+            found = [(r0, p0, par0)]
+        elif par0 is r1 and r0.get("name") == r1.get("name") and "/" not in norm:
+            found = [(r1, p1, par1)]
+    if len(found) != 1 or type(found[0][0].get("id")) is not int:
         raise BusinessToolRequestError("region is missing or ambiguous; provide the full province/city/district path")
-    return found[0]["id"]
+    return found[0][0]["id"]
 
 
 def encode(client, goal_data, values, *, dictionaries=(), numeric_qq=False):

@@ -1758,6 +1758,15 @@ class YudaoProceduresBase:
                 policy_turn=self._ctx().executor_turn,
             )
         dates = _precomputed_dates(prompt, self._ctx().turn_tables)
+        table_ctx = self._ctx().turn_tables
+        policy_turn = self._ctx().executor_turn
+        if table_ctx is not None and isinstance(policy_turn, dict):
+            pre_vals = getattr(table_ctx[0], "precomputed_date_values", ()) or ()
+            if pre_vals:
+                from web_operation_agent.execution.value_source import note_receipt
+                for val in pre_vals:
+                    note_receipt(policy_turn, "", val)
+                policy_turn["_seeded_precomputed_dates"] = True
         domain_note = ""
         if getattr(self, "enable_domain_packs", False):
             from .domain_toolpacks import active_domain_contract_block

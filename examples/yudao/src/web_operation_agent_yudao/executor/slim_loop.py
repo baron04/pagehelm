@@ -927,8 +927,11 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
             turn["handoff_facts"] = handoff_facts
             setattr(s, "handoff_facts", handoff_facts)
             setattr(s, "handoff_payload", handoff_facts)
-        if (getattr(getattr(self, "procedures", None), "form_fill", None) and not turn.get("submit_started")
-                and not turn.get("written") and not turn.get("submit_handoff_blocked")):
+        if (args.get("status") == "done"
+                and getattr(getattr(self, "procedures", None), "form_fill", None)
+                and not turn.get("submit_started")
+                and not turn.get("written")
+                and not turn.get("submit_handoff_blocked")):
             label = self._default_handoff(s, turn)
             said = str(args.get("answer") or "")
             if not ("尚未提交" in said or "还没有提交" in said or "没有提交" in said or "停在提交前" in said):
@@ -1138,7 +1141,25 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
             return text + f"\n本轮工具回执：{reference}"
         return text
 
+    def _page(self, s, turn):
+        ctx = self._ctx() if hasattr(self, "_ctx") else getattr(self, "turn_context", None)
+        table_ctx = getattr(ctx, "turn_tables", None) if ctx is not None else None
+        if table_ctx is not None:
+            turn["turn_tables_ref"] = table_ctx[0]
+            if not turn.get("_seeded_precomputed_dates"):
+                if not getattr(table_ctx[0], "precomputed_date_values", None):
+                    from .page_prompts import _precomputed_dates
+                    _precomputed_dates(str(getattr(getattr(s, "message", None), "text", "") or ""), table_ctx)
+                turn["_seeded_precomputed_dates"] = True
+                for val in getattr(table_ctx[0], "precomputed_date_values", ()) or ():
+                    note_receipt(turn, "", val)
+        return super()._page(s, turn)
+
     def _untraced_numbers(self, prompt, answer, turn):
+        ctx = self._ctx() if hasattr(self, "_ctx") else getattr(self, "turn_context", None)
+        table_ctx = getattr(ctx, "turn_tables", None) if ctx is not None else None
+        if table_ctx is not None and "turn_tables_ref" not in turn:
+            turn["turn_tables_ref"] = table_ctx[0]
         stripped = _TABLE_TOKEN.sub("", _BARE_RECEIPT.sub("", answer or ""))
         return super()._untraced_numbers(prompt, stripped, turn)
 
@@ -1151,6 +1172,11 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
 
     def _propose(self, s, writes, operation: str, inputs: dict, turn: dict) -> LoopToolResult:
         ctx = self._ctx() if hasattr(self, "_ctx") else getattr(self, "turn_context", None)
+        table_ctx = getattr(ctx, "turn_tables", None) if ctx is not None else None
+        if table_ctx is not None and not turn.get("_seeded_precomputed_dates"):
+            turn["_seeded_precomputed_dates"] = True
+            for val in getattr(table_ctx[0], "precomputed_date_values", ()) or ():
+                note_receipt(turn, "", val)
         intent = ctx.write_intent if ctx is not None else None
         if (isinstance(intent, WriteIntent) and intent.mode == "draft") or _draft_only_request(s.message.text):
             _emit_yudao_check_fired(self, s, "draft_only")

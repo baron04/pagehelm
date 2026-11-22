@@ -123,6 +123,9 @@ class YudaoSource:
         with self._instance_lock:
             self._server_rules()
             self._ui_rules()
+            self.dict_type_constants()
+            self.enum_value_labels()
+            self.code_binding_tables()
 
     # -- citations ------------------------------------------------------------------------
     def _read(self, relative: str) -> str:
@@ -215,18 +218,125 @@ class YudaoSource:
 
     def resp_vo_code_bindings(self) -> dict[str, dict[str, tuple[str, str]]]:
         """Compile-time ``VOClass -> {field: ('dict', dict_type) | ('enum', enum_class)}``."""
+        return self.code_binding_tables()["resp_by_name"]
+
+    def code_binding_tables(self) -> dict[str, dict]:
+        """Compile-time RespVO (with BaseVO inheritance), DO, Save/Update/CreateReqVO, and Controller GET mappings."""
         with self._instance_lock:
-            cached = getattr(self, "_resp_vo_bindings_cache", None)
+            cached = getattr(self, "_code_binding_tables_cache", None)
             if cached is not None:
                 return cached
             consts = self.dict_type_constants()
-            out: dict[str, dict[str, tuple[str, str]]] = {}
+            pkg_mod_re = re.compile(r"^\s*package\s+[\w.]*\.module\.([a-z0-9_]+)\b", re.M)
+            extends_re = re.compile(r"\bclass\s+[A-Z]\w*\s+extends\s+([A-Za-z_]\w*)")
+            resp_inner_re = re.compile(r"CommonResult<\s*(?:(?:PageResult|List)<\s*)?([A-Za-z_]\w*)\b")
+
+            def _mod_of(text: str, rel: str) -> str:
+                m = pkg_mod_re.search(text)
+                if m:
+                    return m.group(1)
+                parts = rel.split("/")
+                for tok in parts:
+                    if tok.startswith("yudao-module-"):
+                        return tok[len("yudao-module-"):]
+                return ""
+
+            base_by_mod: dict[tuple[str, str], dict[str, tuple[str, str]]] = {}
+            for path in self._java_files("BaseVO.java"):
+                rel = self._relative(path)
+                txt = self._read(rel)
+                b = parse_resp_vo_code_bindings(txt, consts)
+                if b:
+                    base_by_mod[(_mod_of(txt, rel), path.stem)] = b
+
+            resp_by_mod: dict[tuple[str, str], dict[str, tuple[str, str]]] = {}
+            resp_by_name: dict[str, dict[str, tuple[str, str]]] = {}
             for path in self._java_files("RespVO.java"):
-                bindings = parse_resp_vo_code_bindings(self._read(self._relative(path)), consts)
-                if bindings:
-                    out[path.stem] = bindings
-            self._resp_vo_bindings_cache = out
-            return out
+                rel = self._relative(path)
+                txt = self._read(rel)
+                mod = _mod_of(txt, rel)
+                own = parse_resp_vo_code_bindings(txt, consts)
+                merged: dict[str, tuple[str, str]] = {}
+                m_ext = extends_re.search(txt)
+                if m_ext:
+                    parent = base_by_mod.get((mod, m_ext.group(1)))
+                    if parent:
+                        merged.update(parent)
+                merged.update(own)
+                if merged:
+                    resp_by_mod[(mod, path.stem)] = merged
+                    if path.stem not in resp_by_name or len(merged) > len(resp_by_name[path.stem]):
+                        resp_by_name[path.stem] = merged
+
+            do_by_mod: dict[tuple[str, str], dict[str, tuple[str, str]]] = {}
+            for path in self._java_files("DO.java"):
+                if "/controller/app/" in path.as_posix():
+                    continue
+                rel = self._relative(path)
+                txt = self._read(rel)
+                mod = _mod_of(txt, rel)
+                b = parse_resp_vo_code_bindings(txt, consts)
+                if b and path.stem.endswith("DO"):
+                    do_by_mod[(mod, path.stem[:-2])] = b
+
+            save_by_mod: dict[tuple[str, str], dict[str, tuple[str, str]]] = {}
+            for suffix in ("SaveReqVO.java", "UpdateReqVO.java", "CreateReqVO.java"):
+                stem_len = len(suffix) - len(".java")
+                for path in self._java_files(suffix):
+                    if "/controller/app/" in path.as_posix():
+                        continue
+                    rel = self._relative(path)
+                    txt = self._read(rel)
+                    mod = _mod_of(txt, rel)
+                    own = parse_resp_vo_code_bindings(txt, consts)
+                    merged_s: dict[str, tuple[str, str]] = {}
+                    m_ext = extends_re.search(txt)
+                    if m_ext:
+                        parent = base_by_mod.get((mod, m_ext.group(1)))
+                        if parent:
+                            merged_s.update(parent)
+                    merged_s.update(own)
+                    if merged_s:
+                        key = (mod, path.stem[:-stem_len])
+                        prev = save_by_mod.get(key)
+                        if prev is None:
+                            save_by_mod[key] = merged_s
+                        else:
+                            save_by_mod[key] = {**merged_s, **prev}
+
+            endpoint_mod_vo: dict[str, tuple[str, str]] = {}
+            for path in self._java_files("Controller.java"):
+                rel = self._relative(path)
+                if "/controller/app/" in rel:
+                    continue
+                txt = self._read(rel)
+                base = _CLASS_MAPPING.search(txt)
+                if base is None:
+                    continue
+                mod = _mod_of(txt, rel)
+                masked_ctrl = _mask(txt)
+                for _name, start, bs, _be in _methods(masked_ctrl):
+                    head = txt[max(0, start - 600):bs]
+                    head = head[head.rfind(";") + 1:] if ";" in head else head
+                    head = head[head.rfind("}") + 1:] if "}" in head else head
+                    mapping = _METHOD_MAPPING.search(head)
+                    if mapping is None or mapping.group(1) != "Get":
+                        continue
+                    url = (base.group(1).strip("/") + "/" + mapping.group(2).strip("/")).strip("/")
+                    m_rv = resp_inner_re.search(txt[start:bs])
+                    vo_cls = m_rv.group(1) if m_rv else ""
+                    endpoint_mod_vo[url] = (mod, vo_cls)
+
+            tables = {
+                "resp_by_name": resp_by_name,
+                "resp_by_mod": resp_by_mod,
+                "do_by_mod": do_by_mod,
+                "save_by_mod": save_by_mod,
+                "endpoint_mod_vo": endpoint_mod_vo,
+            }
+            self._resp_vo_bindings_cache = resp_by_name
+            self._code_binding_tables_cache = tables
+            return tables
 
     def _operations(self) -> dict[str, tuple[str, str, str, str, str, str]]:
         """URL path ("crm/contract/submit") -> (service type, service method, permission,

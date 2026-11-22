@@ -20,7 +20,7 @@ _NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,79}\Z")
 _KINDS = frozenset({"text", "number", "boolean", "date", "datetime", "relation"})
 _OPS = ("=", "!=", "contains", "prefix", "in", ">", ">=", "<", "<=", "between", "empty", "not_empty")
 _MEASURES = ("count", "count_distinct", "sum", "min", "max")
-MAX_ROWS = 5000
+MAX_ROWS = 20000
 MAX_RESULT_CHARS = 100_000
 
 

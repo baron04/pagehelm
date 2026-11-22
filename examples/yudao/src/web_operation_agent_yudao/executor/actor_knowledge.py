@@ -327,7 +327,7 @@ class ActorKnowledge:
         for p in published:
             if p.get("in") != "query":
                 continue
-            desc = (p.get("description") or "").split("，")[0][:24]
+            desc = " ".join((p.get("description") or "").split())[:80]
             if p.get("name") == "id":
                 desc = "原生记录ID" + (f"；接口说明：{desc}" if desc else "")
             kind = (p.get("schema") or {}).get("type")
@@ -608,7 +608,9 @@ class ActorKnowledge:
                 rewritten = ()
             fields = tuple(str(f) for f in fields or () if isinstance(f, str) and f)[:12]
             if type(row_offset) is not int or not 0 <= row_offset <= _ALL_ROWS or row_offset and not fields:
-                raise QueryParametersError("row_offset must be an integer from 0 to 5000; nonzero requires fields")
+                raise QueryParametersError(
+                    f"row_offset must be an integer from 0 to {_ALL_ROWS}; nonzero requires fields"
+                )
             self._load()
             prepared["reset_read"] = True
             if not path.startswith("/admin-api/"):
@@ -622,12 +624,21 @@ class ActorKnowledge:
                     prepared["text"] = "这个接口读取时会写入数据，助手不允许调用。"
                     return prepared
                 prepared["writing_get_allowed"] = path
+            published_q = {
+                q.get("name"): q for q in self._by_path[path]["op"].get("parameters", ())
+                if isinstance(q, dict) and q.get("in") == "query"
+            }
             if isinstance(params, dict):
                 params = dict(params)
-                published_q = {
-                    q.get("name"): q for q in self._by_path[path]["op"].get("parameters", ())
-                    if isinstance(q, dict) and q.get("in") == "query"
-                }
+                raw_ps = params.get("pageSize")
+                if (
+                    "pageSize" in published_q
+                    and raw_ps is not None
+                    and not isinstance(raw_ps, bool)
+                    and re.fullmatch(r"[1-9][0-9]{0,5}", str(raw_ps))
+                    and int(raw_ps) > 200
+                ):
+                    params["pageSize"] = 200
                 for k, v in list(params.items()):
                     if (isinstance(v, list) and len(v) == 2
                             and all(isinstance(item, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", item) for item in v)):
@@ -860,7 +871,12 @@ class ActorKnowledge:
                         and "id" in data and str(filters["id"]) != str(data["id"])):
                     raise TurnReadError("record_identity_mismatch", "详情接口返回的记录编号与请求不符。")
                 observed = rows if rows is not None else ([] if data is None else [data])
-                shown_rows = [self._row(r, () if expand_tiny_guessed else fields) if isinstance(r, dict) else r for r in observed]
+                effective_complete = whole if rows is not None else True
+                display_slice = observed if (effective_complete and len(observed) <= 30) else observed[:3]
+                shown_rows = [
+                    self._row(r, () if expand_tiny_guessed else fields) if isinstance(r, dict) else r
+                    for r in display_slice
+                ]
                 clock_notes: list = []
                 if rows is not None:
                     row_keys = tuple(dict.fromkeys(
@@ -874,11 +890,16 @@ class ActorKnowledge:
                     "params": filters,
                     "rows": observed,
                     "total": declared_total if rows is not None else len(observed),
-                    "complete": whole if rows is not None else True,
+                    "complete": effective_complete,
                     "published": tuple(dict.fromkeys((*props, *fields))) if not observed else (),
                     "column_labels": merged_col_labels,
                     "code_maps": code_maps,
+                    "already_redacted": True,
                 }
+                prepared["schema_owner_dept_fields"] = tuple(
+                    f for f in ("ownerUserId", "ownerUserName", "deptId", "deptName", "leaderUserId")
+                    if f in props or f in published_q
+                )
                 prepared["out"] = out
                 prepared["data_lines"] = data_lines
                 prepared["shown_rows"] = shown_rows
@@ -982,7 +1003,8 @@ class ActorKnowledge:
             sib_blanked = {k for r in dict_sib for k, v in r.items() if v == REDACTED}
             sib_labels = self._merge_column_labels(sib_col_names, sib_keys, sib_props, sib_blanked)
             sib_codes = self._extract_code_maps(sib_native, sib_keys, sib_props, sib_blanked)
-            sib_shown = [self._row(r) if isinstance(r, dict) else r for r in sib_rows]
+            sib_display_slice = sib_rows if (bool(sib_whole) and len(sib_rows) <= 30) else sib_rows[:5]
+            sib_shown = [self._row(r) if isinstance(r, dict) else r for r in sib_display_slice]
             sib_filters = {k: v for k, v in sib_params.items() if k not in {"pageNo", "pageSize"}}
             sib_cands, _ = _cell_values(sib_rows, sib_col_names, entity_slug=_entity_slug_for_path(sib_path))
             eff_total = sib_total if type(sib_total) is int and sib_total >= 0 else len(sib_rows)
@@ -1003,6 +1025,7 @@ class ActorKnowledge:
                     "published": tuple(dict.fromkeys((*sib_props,))),
                     "column_labels": sib_labels,
                     "code_maps": sib_codes,
+                    "already_redacted": True,
                 },
                 "shown_rows": sib_shown,
                 "cell_values": sib_cands,
@@ -1033,7 +1056,11 @@ class ActorKnowledge:
         data_lines = set(prepared["data_lines"])
         if row_sink is not None:
             info = row_sink(**prepared["row_sink_payload"])
-            out.append(f"本轮行表 {info['name']}，读取回执 {info['receipt']}。")
+            cols_preview = ",".join(str(c) for c in (info.get("columns") or ())[:20])
+            out.append(
+                f"本轮行表 {info['name']}，读取回执 {info['receipt']}"
+                f"（row_count={info['row_count']}，total={info['total']}，complete={info['complete']}，列={cols_preview}）。"
+            )
             data_lines.add(len(out))
             out.append(json.dumps(info, ensure_ascii=False))
             observed = prepared["row_sink_payload"]["rows"]
@@ -1065,12 +1092,36 @@ class ActorKnowledge:
                     out.append("样例（不是全表）：" + json.dumps(shown_rows[:3], ensure_ascii=False)[:2600])
             else:
                 filters_used = prepared["row_sink_payload"].get("params") or {}
-                if info.get("complete") and filters_used and not prepared.get("has_unbound_filter"):
+                sib = prepared.get("sib_prepared")
+                rel_path = str(prepared["row_sink_payload"].get("path") or "")
+                all_pos_fk = bool(filters_used) and all(
+                    (str(k).endswith("Id") or (str(k) == "id" and "-by-" in rel_path))
+                    and not isinstance(v, bool)
+                    and (
+                        (type(v) is int and v > 0)
+                        or (isinstance(v, str) and bool(re.fullmatch(r"[1-9][0-9]{0,18}", v)))
+                    )
+                    for k, v in filters_used.items()
+                )
+                if info.get("complete") and all_pos_fk and not prepared.get("has_unbound_filter") and sib is None:
                     cond_desc = json.dumps(filters_used, ensure_ascii=False)[:300]
                     out.append(
                         f"[精确过滤已核实为 0 条记录] 精确绑定空集核实（complete=True，0 行）：在已绑定筛选参数 {cond_desc} 下当前账号可见记录确为 0 条；"
                         "若主体对象已核实存在，关联子集为 0 条即完整事实结论（请直接调用 finish(status='done') 正面如实回答当前为 0 条/无满足条件项，切勿误报 finish(status='cannot') 或臆测权限受限，也无需再拉全表核对）。"
                     )
+                elif sib is not None:
+                    sib_total = (sib.get("row_sink_payload") or {}).get("total", 0)
+                    cond_desc = json.dumps(filters_used, ensure_ascii=False)[:300]
+                    out.append(
+                        f"主接口 /admin-api/{rel_path} 在条件 {cond_desc} 下返回 0 条，同账号关联接口 {sib['sib_path']} 返回 {sib_total} 条（请结合下方关联行表核实）。"
+                    )
+                elif info.get("complete") and filters_used and not all_pos_fk:
+                    owner_dept = prepared.get("schema_owner_dept_fields") or ()
+                    if owner_dept:
+                        out.append(
+                            f"当前筛选条件未命中记录（0 条）；该接口同时具备归属/部门字段 {', '.join(owner_dept)}，"
+                            "若查询对象对应负责人或部门维度，可核对上述归属字段。"
+                        )
             out.extend(prepared["clock_notes"])
             sib = prepared.get("sib_prepared")
             if sib is not None:
@@ -1349,8 +1400,8 @@ class ActorKnowledge:
             if key in {"pageNo", "pageSize"}:
                 if isinstance(value, bool) or not re.fullmatch(r"[1-9][0-9]{0,5}", str(value)):
                     raise QueryParametersError(key + ": paging requires a positive bounded integer")
-                if key == "pageSize" and int(value) > 1000:
-                    raise QueryParametersError("pageSize: maximum 1000")
+                if key == "pageSize" and int(value) > 200:
+                    raise QueryParametersError("pageSize: maximum 200")
 
     def _names(self, path: str) -> dict:
         if self._codes is None:

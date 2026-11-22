@@ -35,7 +35,14 @@ class FollowUpTarget:
             changes.append("标记已跟进")
         return "；".join(changes) + "。"
 
-    def verified(self, record, body, started_ms, ended_ms):
+    def verified(
+        self,
+        record,
+        body,
+        child_create_time_ms,
+        before_contact_last_time=None,
+        before_update_time=None,
+    ):
         if not isinstance(record, dict) or record.get("id") != body["bizId"]:
             return False
         values = self.values(body)
@@ -43,7 +50,18 @@ class FollowUpTarget:
                for field, value in values.items()):
             return False
         timestamp = record.get("contactLastTime")
-        return type(timestamp) is int and started_ms - 5000 <= timestamp <= ended_ms + 5000
+        if type(timestamp) is not int or type(child_create_time_ms) is not int:
+            return False
+        if abs(timestamp - child_create_time_ms) > 5000:
+            return False
+        if type(before_contact_last_time) is int:
+            if timestamp < before_contact_last_time:
+                return False
+            if timestamp == before_contact_last_time and not values:
+                after_ut = record.get("updateTime")
+                if type(before_update_time) is int and (type(after_ut) is not int or after_ut < before_update_time):
+                    return False
+        return True
 
 
 # The native services differ: business omits last content, contact has no

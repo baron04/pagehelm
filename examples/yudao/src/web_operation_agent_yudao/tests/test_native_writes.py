@@ -53,9 +53,11 @@ class Client:
         if entity == "crm/follow-up-record":
             if self.partial:
                 raise BusinessMutationIndeterminate("synthetic failure after insert", phase="dispatch")
+            now_ms = int(time.time() * 1000)
+            self.records[(entity, record_id)]["createTime"] = now_ms
             target = {1: "crm/clue", 2: "crm/customer", 3: "crm/contact", 4: "crm/business", 5: "crm/contract"}[body["bizType"]]
             # Model the native services independently of the product contract.
-            changes = {"contactLastTime": int(time.time() * 1000)}
+            changes = {"contactLastTime": now_ms}
             if target != "crm/contract":
                 changes["contactNextTime"] = body["nextTime"]
             if target in {"crm/customer", "crm/clue", "crm/contact"}:

@@ -870,8 +870,8 @@ class LoopTests(unittest.TestCase):
             "total=1\n" + BEGIN + "\n{}\n" + END)]
         executor._forget_old_observations()
         first, second, last = (m["content"] for m in executor._messages)
-        self.assertEqual(first, "total=9\n（更早的接口结果已省略；还要用就带 fields 重新读）")
-        self.assertEqual(second, "\n（更早的接口结果已省略；还要用就带 fields 重新读）")
+        self.assertEqual(first, "total=9\n（更早的接口结果已省略；本轮内存行表仍可直接用 sql / tables 查询，缺列再重读）")
+        self.assertEqual(second, "\n（更早的接口结果已省略；本轮内存行表仍可直接用 sql / tables 查询，缺列再重读）")
         self.assertIn(END, last)
 
     def test_read_instructions_are_short_and_do_not_offer_a_parallel_delivery_path(self):

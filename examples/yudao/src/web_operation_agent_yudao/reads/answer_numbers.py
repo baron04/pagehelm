@@ -42,9 +42,14 @@ _DATES = re.compile(
 #: Ordinals and list markers position records; they state nothing about them.
 _STRUCTURAL = re.compile(
     r"第\s*\d+(?:\.\d+)?(?:\s*[-–—~～至到]\s*\d+(?:\.\d+)?)?\s*[页行条名位步层章节期届号班排组]?"
-    r"|(?<![\d.])\d+\s*[、.。)）](?![\d.])"
+    r"|(?<![\d.,，])\d+\s*[、.。)）](?![\d.,，])"
     r"|[（(]\d{1,2}[)）]")
 _NON_VALUES = (_ADDRESSES, _ISO_DATETIME, _MIXED_IDS, _PHONES, _LABELED, _DATES, _STRUCTURAL)
+_DECODED_CHOICE_JSON_RE = re.compile(r'"choices"\s*:\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}')
+_QUERY_CHOICE_BLOCK_RE = re.compile(r"原生查询选项[^\n]*\nBEGIN_UNTRUSTED_APPLICATION_DATA\n(\{.*?\})\nEND_UNTRUSTED_APPLICATION_DATA", re.S)
+_DECODED_CHOICE_VAL_RE = re.compile(r'"[^"]+"\s*:\s*"([A-Za-z][A-Za-z0-9]{0,31})"')
+_INLINE_LABEL_VAL_RE = re.compile(r'"[A-Za-z0-9_]+_label"\s*:\s*"([A-Za-z][A-Za-z0-9]{0,31})"')
+_ADJACENT_LABEL_COUNT_RE = re.compile(r"^([A-Za-z][A-Za-z0-9]*?)([1-9]\d*|0)$")
 
 #: A `-` counts as a sign only where it cannot be a hyphen: not right after a
 #: digit (ranges "500-600"), a dot, a percent sign, an identifier character
@@ -98,23 +103,44 @@ def answer_numbers(text: str) -> list[str]:
     return [value for _token, value in stated_numbers(text)]
 
 
-def untraced(answer: str, sources) -> tuple[str, ...]:
+def untraced(answer: str, sources, *, decoded_labels=()) -> tuple[str, ...]:
     """Unseen quantities and exact identifiers; never infer or repair a similar code."""
     sources = tuple(str(text) for text in sources)
     def codes(text):
         return _IDENTIFIER.findall(_ISO_DATETIME.sub(" ", _ADDRESSES.sub(" ", text)))
     identifiers = tuple(dict.fromkeys(codes(answer)))
     shown_ids = {token for text in sources for token in codes(text)}
-    missing_ids = tuple(token for token in identifiers if token not in shown_ids)
+    raw_missing_ids = tuple(token for token in identifiers if token not in shown_ids)
     stated = stated_numbers(answer)
-    if not stated:
-        return missing_ids
+    if not stated and not raw_missing_ids:
+        return ()
     shown = set()
+    known_labels = {str(lbl) for lbl in (decoded_labels or ()) if lbl}
     for text in sources:
-        for token in re.findall(_ANY_NUMBER, _signed(str(text))):
+        s_txt = str(text)
+        for token in re.findall(_ANY_NUMBER, _signed(s_txt)):
             value = _canon(token)
             if value:
                 shown.add(value)
+        if raw_missing_ids:
+            if '"choices"' in s_txt:
+                for block in _DECODED_CHOICE_JSON_RE.findall(s_txt):
+                    known_labels.update(_DECODED_CHOICE_VAL_RE.findall(block))
+            if "原生查询选项" in s_txt:
+                for block in _QUERY_CHOICE_BLOCK_RE.findall(s_txt):
+                    known_labels.update(_DECODED_CHOICE_VAL_RE.findall(block))
+            if "_label" in s_txt:
+                known_labels.update(_INLINE_LABEL_VAL_RE.findall(s_txt))
+    if raw_missing_ids and known_labels:
+        filtered_ids = []
+        for token in raw_missing_ids:
+            m = _ADJACENT_LABEL_COUNT_RE.fullmatch(token)
+            if m and m.group(1) in known_labels and _canon(m.group(2)) in shown:
+                continue
+            filtered_ids.append(token)
+        missing_ids = tuple(filtered_ids)
+    else:
+        missing_ids = raw_missing_ids
     return (*missing_ids, *(token for token, value in stated if value not in shown))
 
 

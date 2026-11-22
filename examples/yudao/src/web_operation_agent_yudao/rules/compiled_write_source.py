@@ -95,7 +95,12 @@ _DANGEROUS_SERVICE_TYPES = re.compile(
 # Java VO / Controller AST regexes
 _PACKAGE_RE = re.compile(r"^\s*package\s+([\w.]+)\s*;", re.M)
 _IMPORT_RE = re.compile(r"^\s*import\s+(?:static\s+)?([\w.*]+)\s*;", re.M)
-_CLASS_DECL_RE = re.compile(r"\bclass\s+([A-Z]\w*)\b[^{]*\{")
+_CLASS_DECL_RE = re.compile(r"\bclass\s+([A-Z]\w*)\b(?:\s+extends\s+([A-Za-z_][\w.$]*))?[^{]*\{")
+_SCHEMA_DESC_RE = re.compile(r'@Schema\([^)]*description\s*=\s*"([^"]+)"')
+_SVC_OR_API_FIELD_RE = re.compile(r"private\s+(?:final\s+)?(\w+(?:Service|Api))(?:<[^;{}()]*>)?\s+(\w+)\s*[=;]")
+_SVC_OR_API_CALL_RE = re.compile(r"\b(\w+(?:(?:Service|Api)|service|api))\s*\.\s*(\w+)\s*\(", re.I)
+_TOKEN_REVOKE_METHOD_RE = re.compile(r"^(?:remove|revoke|delete|clear|invalidate)\w*(?:Token|Session)\w*|^logout\b")
+_TOKEN_REVOKE_TYPE_RE = re.compile(r"(?:Token|Session|OAuth2|Auth)\w*(?:Service|Api)$", re.I)
 _VO_FIELD_DECL_RE = re.compile(
     r"^[ \t]*private\s+(?!static\b|final\b)([\w<>?.,\[\]\s@$()=-]+?)\s+(\w+)\s*(?:=[^;]*)?;",
     re.M,
@@ -234,7 +239,7 @@ def _parse_vo_classes_in_text(
     pkg: str,
     imports: dict[str, str],
     wildcard_pkgs: tuple[str, ...],
-    class_spans_out: dict[str, tuple[str, dict[str, str], tuple[str, ...], str, tuple[str, ...]]],
+    class_spans_out: dict[str, tuple[str, dict[str, str], tuple[str, ...], str, tuple[str, ...], str]],
 ) -> None:
     """Walk top-level and nested static classes in one VO file, storing exact own-class snippets."""
     def walk(span_text: str, raw_span: str, outer_chain: tuple[str, ...]) -> None:
@@ -249,6 +254,7 @@ def _parse_vo_classes_in_text(
                 pos = m.end()
                 continue
             cname = m.group(1)
+            parent_raw = (m.group(2) or "").strip()
             new_chain = (*outer_chain, cname)
             full_key = f"{pkg}.{('$'.join(new_chain))}" if pkg else "$".join(new_chain)
             inner_masked = span_text[open_idx + 1:close_idx]
@@ -264,7 +270,7 @@ def _parse_vo_classes_in_text(
                     cpos = c_close + 1
             cleaned_chunks.append(inner_masked[cpos:])
             own_masked = "".join(cleaned_chunks)
-            class_spans_out[full_key] = (pkg, imports, wildcard_pkgs, own_masked, new_chain)
+            class_spans_out[full_key] = (pkg, imports, wildcard_pkgs, own_masked, new_chain, parent_raw)
             walk(inner_masked, inner_raw, new_chain)
             pos = close_idx + 1
 
@@ -302,7 +308,8 @@ def _index_java_tree_locked(
     vo_do_texts: list[tuple[str, str]],
     ctrl_texts: list[tuple[str, str]],
 ) -> tuple[dict[str, JavaVOAST], dict[str, ControllerEndpointAST]]:
-    raw_class_spans: dict[str, tuple[str, dict[str, str], tuple[str, ...], str, tuple[str, ...]]] = {}
+    raw_class_spans: dict[str, tuple[str, dict[str, str], tuple[str, ...], str, tuple[str, ...], str]] = {}
+    raw_by_key: dict[str, str] = {}
     for _rel, raw in vo_do_texts:
         masked = _mask(raw)
         m_pkg = _PACKAGE_RE.search(masked)
@@ -310,7 +317,10 @@ def _index_java_tree_locked(
         all_imports = _IMPORT_RE.findall(masked)
         imports = {imp.rsplit(".", 1)[-1]: imp for imp in all_imports if not imp.endswith(".*")}
         wildcard_pkgs = tuple(imp[:-2] for imp in all_imports if imp.endswith(".*"))
+        before_keys = set(raw_class_spans)
         _parse_vo_classes_in_text(masked, raw, pkg, imports, wildcard_pkgs, raw_class_spans)
+        for nk in set(raw_class_spans) - before_keys:
+            raw_by_key[nk] = raw
 
     known_vos = set(raw_class_spans)
     top_counts: dict[str, list[str]] = {}
@@ -322,7 +332,9 @@ def _index_java_tree_locked(
     unique_top = {simple: keys[0] for simple, keys in top_counts.items() if len(keys) == 1}
 
     vo_map: dict[str, JavaVOAST] = {}
-    for full_key, (pkg, imports, wildcard_pkgs, own_body, chain) in raw_class_spans.items():
+    vo_parents: dict[str, str] = {}
+    for full_key, (pkg, imports, wildcard_pkgs, own_body, chain, parent_raw) in raw_class_spans.items():
+        raw_src = raw_by_key.get(full_key, "")
         fields: list[JavaFieldAST] = []
         for m in _VO_FIELD_DECL_RE.finditer(own_body):
             raw_type = " ".join(m.group(1).split())
@@ -330,6 +342,12 @@ def _index_java_tree_locked(
             start = m.start()
             sep = max(own_body.rfind(";", 0, start), own_body.rfind("{", 0, start), own_body.rfind("}", 0, start))
             ctx = own_body[max(sep + 1, start - 500):start]
+            # Extract @Schema description from unmasked raw source if present near field declaration
+            raw_field_m = re.search(
+                rf"(@Schema\([^)]*\)[\s\S]{{0,240}}?private\s+[\w<>?.,\[\]\s@$()=-]+?\s+{re.escape(fname)}\s*(?:=[^;]*)?;)",
+                raw_src,
+            )
+            ann_ctx = raw_field_m.group(1) if raw_field_m else ctx
             required = bool(_NOT_REQ_ANN_RE.search(ctx))
             m_enum = _IN_ENUM_RE.search(ctx)
             enum_cls = m_enum.group(1) if m_enum else ""
@@ -348,8 +366,14 @@ def _index_java_tree_locked(
                 enum_class=enum_cls,
                 date_kind=date_kind,
                 list_element_class=list_elem,
-                raw_annotations=ctx,
+                raw_annotations=ann_ctx,
             ))
+        if parent_raw and not parent_raw.endswith("BaseDO"):
+            resolved_parent = _resolve_java_type(
+                parent_raw, pkg, imports, wildcard_pkgs, chain[:-1], known_vos, unique_top
+            )
+            if resolved_parent in known_vos and resolved_parent != full_key:
+                vo_parents[full_key] = resolved_parent
         has_pwd_assert = bool(
             _ASSERT_TRUE_RE.search(own_body) and re.search(r"\bpassword\b|isPasswordValid", own_body, re.I)
         )
@@ -363,6 +387,35 @@ def _index_java_tree_locked(
             password_create_required=bool(pwd_present and (has_pwd_assert or pwd_required_field)),
             password_optional_present=bool(pwd_present and not pwd_required_field),
         )
+
+    for full_key, p_key in list(vo_parents.items()):
+        chain_fields: list[JavaFieldAST] = []
+        cur = p_key
+        visited_p = {full_key}
+        depth = 0
+        ancestors: list[JavaVOAST] = []
+        while cur and cur in vo_map and cur not in visited_p and depth < 4:
+            visited_p.add(cur)
+            ancestors.append(vo_map[cur])
+            cur = vo_parents.get(cur, "")
+            depth += 1
+        if ancestors:
+            own_vo = vo_map[full_key]
+            seen_names = {f.name for f in own_vo.fields}
+            for anc in reversed(ancestors):
+                for pf in anc.fields:
+                    if pf.name not in seen_names:
+                        chain_fields.append(pf)
+                        seen_names.add(pf.name)
+            merged_fields = (*chain_fields, *own_vo.fields)
+            pwd_req = own_vo.password_create_required or any(a.password_create_required for a in ancestors)
+            pwd_opt = own_vo.password_optional_present or any(a.password_optional_present for a in ancestors)
+            vo_map[full_key] = replace(
+                own_vo,
+                fields=merged_fields,
+                password_create_required=pwd_req,
+                password_optional_present=bool(pwd_opt and not pwd_req),
+            )
 
     endpoints: dict[str, ControllerEndpointAST] = {}
     for rel, raw_text in ctrl_texts:
@@ -645,6 +698,17 @@ def _collect_do_fields(
     return resolved
 
 
+def _extract_conditional_trigger_fields(chunk: str, call_pos: int) -> set[str]:
+    """Identify VO/DO getter fields referenced in the enclosing ``if (...)`` guard around ``call_pos``."""
+    prefix = chunk[max(0, call_pos - 320):call_pos]
+    ifs = list(re.finditer(r"\bif\s*\(([^;{}]{1,220})\)\s*\{", prefix))
+    if not ifs:
+        return set()
+    guard_expr = ifs[-1].group(1)
+    getters = [g[0].lower() + g[1:] for g in re.findall(r"\.get([A-Z]\w*)\s*\(\s*\)", guard_expr)]
+    return {f for f in getters if f != "id"}
+
+
 def _analyze_service_method(
     source,
     ep: ControllerEndpointAST | None,
@@ -654,14 +718,15 @@ def _analyze_service_method(
     vo_field_names: tuple[str, ...] = (),
     svc_by_iface: dict[str, str] | None = None,
     parsed_svc_cache: dict[str, tuple[str, dict[str, str], dict[str, list[tuple[int, int, int]]]]] | None = None,
-) -> tuple[bool, set[str], set[str]]:
-    """Return ``(safe, unconditional_null_fields, dropped_vo_fields)`` for one service method."""
+    mode: str = "create_or_update",
+) -> tuple[bool, set[str], set[str], tuple[str, ...]]:
+    """Return ``(safe, unconditional_null_fields, dropped_or_blocked_fields, side_effects)``."""
     if ep is None or not ep.service_iface or not ep.service_method:
-        return False, set(), set()
+        return False, set(), set(), ()
     if svc_by_iface is None and (source is None or not getattr(source, "root", None)):
-        return False, set(), set()
+        return False, set(), set(), ()
     if _DANGEROUS_SERVICE_TYPES.search(ep.service_iface):
-        return False, set(), set()
+        return False, set(), set(), ()
 
     cached_svc = parsed_svc_cache.get(ep.service_iface) if parsed_svc_cache is not None else None
     if cached_svc is not None:
@@ -670,17 +735,17 @@ def _analyze_service_method(
         raw_svc = svc_by_iface.get(ep.service_iface) if svc_by_iface is not None else None
         if raw_svc is None:
             if svc_by_iface is not None:
-                return False, set(), set()
+                return False, set(), set(), ()
             target_file = None
             for path in source._java_files("ServiceImpl.java"):
                 if path.stem[:-len("Impl")] == ep.service_iface:
                     target_file = path
                     break
             if target_file is None:
-                return False, set(), set()
+                return False, set(), set(), ()
             raw_svc = source._read(source._relative(target_file))
         masked = _mask(raw_svc)
-        svc_fields = {name: kind for kind, name in _SERVICE_FIELD.findall(masked)}
+        svc_fields = {name: kind for kind, name in _SVC_OR_API_FIELD_RE.findall(masked)}
         sigs = {}
         for name, start, bs, be in _methods(masked):
             sigs.setdefault(name, []).append((start, bs, be))
@@ -688,10 +753,17 @@ def _analyze_service_method(
             parsed_svc_cache[ep.service_iface] = (masked, svc_fields, sigs)
     spans = sigs.get(ep.service_method)
     if not spans:
-        return False, set(), set()
+        return False, set(), set(), ()
+
+    entry_indices = list(range(len(spans)))
+    if len(spans) > 1 and ep.request_vo:
+        req_simple = ep.request_vo.rsplit(".", 1)[-1].rsplit("$", 1)[-1]
+        matched_idx = [i for i, (s_i, bs_i, _be_i) in enumerate(spans) if re.search(rf"\b{re.escape(req_simple)}\b", masked[s_i:bs_i])]
+        if matched_idx:
+            entry_indices = matched_idx
 
     visited: set[tuple[str, int]] = set()
-    work = [(ep.service_method, i) for i in range(len(spans))]
+    work = [(ep.service_method, i) for i in reversed(entry_indices)]
     bodies: list[tuple[str, int, int, int]] = []
     while work:
         mname, idx = work.pop()
@@ -709,15 +781,19 @@ def _analyze_service_method(
     allow_employee_station_notice = (
         ep.service_iface == "HrmEmployeeService" and ep.service_method == "createEmployee"
     )
-    if ep.verb.casefold() == "put" and bodies:
+    if ep.verb.casefold() == "put" and bodies and mode != "status":
         # Version-forking pseudo-updates disable old record and insert a new ID so GET(old_id) never updates.
         entry_chunk = masked[bodies[0][2]:bodies[0][3]]
         if ".setId(null)" in entry_chunk and re.search(r"\b\w*Mapper\.insert\s*\(", entry_chunk):
-            return False, set(), set()
+            return False, set(), set(), ()
+
+    cond_side_effect_fields: set[str] = set()
+    side_effects: list[str] = []
+    is_put_update = (mode == "create_or_update" and ep.verb.casefold() == "put")
 
     for mname, s, bs, be in bodies:
         if re.search(r"@Async\b", masked[max(0, s - 200):bs]):
-            return False, set(), set()
+            return False, set(), set(), ()
         if allow_employee_station_notice and mname in {
             "executeAfterCommit",
             "sendEmployeeOpenedMessage",
@@ -725,24 +801,45 @@ def _analyze_service_method(
         }:
             continue
         chunk = masked[bs:be]
-        # Untraceable async / broker / reflection / thread calls
-        # (Allow pure UI/IM profile-sync helper in AdminUserServiceImpl#updateUser while blocking all real MQ/async brokers.)
         if mname != "publishUserProfileUpdatedIfChanged":
             for _kind, pat in getattr(source, "_UNTRACEABLE", ()):
                 if pat.search(chunk):
-                    return False, set(), set()
-        # Own-mapper updates must use standard updateById or updateForEdit
-        for m_name, m_verb in re.findall(r"\b(\w+Mapper)\.(update\w+)\s*\(", chunk):
+                    return False, set(), set(), ()
+        # Own-mapper updates
+        mapper_updates = re.findall(r"\b(\w+Mapper)\.(update\w*)\s*\(", chunk)
+        for _m_name, m_verb in mapper_updates:
             if m_verb not in {"updateById", "updateForEdit"}:
+                if mode == "status":
+                    if "DefaultStatus" in m_verb or (m_verb == "update" and "defaultStatus" in chunk):
+                        note = "设为默认时同步取消同范围原有默认记录"
+                        if note not in side_effects:
+                            side_effects.append(note)
+                        continue
+                    if m_verb in {"update", "updateStatus"}:
+                        continue
                 if not allow_child_mappers:
-                    return False, set(), set()
-        # Check sibling Service field calls
-        for sc_var, sc_method in _SERVICE_CALL.findall(chunk):
-            sc_type = svc_fields.get(sc_var, sc_var)
+                    return False, set(), set(), ()
+        # Check sibling Service / Api field calls
+        for call_m in _SVC_OR_API_CALL_RE.finditer(chunk):
+            sc_var, sc_method = call_m.group(1), call_m.group(2)
+            if sc_var not in svc_fields:
+                continue
+            sc_type = svc_fields[sc_var]
             if _DANGEROUS_SERVICE_TYPES.search(sc_type):
-                return False, set(), set()
+                return False, set(), set(), ()
             if _READ_ONLY_SERVICE_METHOD.fullmatch(sc_method) or sc_method in _SAFE_EXTRA_SERVICE_METHODS:
                 continue
+            if _TOKEN_REVOKE_METHOD_RE.search(sc_method) and _TOKEN_REVOKE_TYPE_RE.search(sc_type):
+                if mode == "status":
+                    note = "停用/禁用时同步吊销该账号已签发的登录令牌"
+                    if note not in side_effects:
+                        side_effects.append(note)
+                    continue
+                if is_put_update:
+                    trig = _extract_conditional_trigger_fields(chunk, call_m.start())
+                    if len(trig) == 1:
+                        cond_side_effect_fields |= trig
+                        continue
             if allow_child_mappers and (
                 "ItemService" in sc_type
                 or "DetailService" in sc_type
@@ -750,12 +847,11 @@ def _analyze_service_method(
                 or "SkuService" in sc_type
             ):
                 continue
-            return False, set(), set()
+            return False, set(), set(), ()
 
-    # Check unconditional vs conditional setXxx(null) on entry method (PUT updates only; CREATE DO builders normalize derived nulls before insert)
     uncond_nulls: set[str] = set()
-    if ep.verb.casefold() == "put":
-        s0, bs0, be0 = spans[0]
+    if is_put_update:
+        s0, bs0, be0 = spans[entry_indices[0]]
         params = _signature_params(masked, s0, bs0)
         if params:
             req_var = params[0]
@@ -771,12 +867,12 @@ def _analyze_service_method(
                 if req_pat.search(ln):
                     nprops = [p[0].lower() + p[1:] for p in _SET_NULL_RE.findall(ln)]
                     if "?" in ln and "null" in ln:
-                        return False, set(), set()
+                        return False, set(), set(), ()
                     if nprops:
                         if brace_depth == 0 and not pending and not is_branch and ln.startswith(req_var + "."):
                             uncond_nulls.update(p for p in nprops if p != "id")
                         else:
-                            return False, set(), set()
+                            return False, set(), set(), ()
                 brace_depth += ln.count("{") - ln.count("}")
                 if is_branch and not ln.endswith("{") and ";" not in ln:
                     pending = True
@@ -786,13 +882,15 @@ def _analyze_service_method(
             if mname == ep.service_method:
                 continue
             if any(p != "Id" for p in _SET_NULL_RE.findall(masked[bs:be])):
-                return False, set(), set()
+                return False, set(), set(), ()
 
-    dropped: set[str] = set()
-    if do_fields and vo_field_names and bodies:
+    dropped: set[str] = set(cond_side_effect_fields)
+    if do_fields and vo_field_names and bodies and mode != "status":
         all_body_text = "\n".join(masked[bs:be] for _m, _s, bs, be in bodies)
         entry_body = masked[bodies[0][2]:bodies[0][3]]
         do_hits = re.findall(r"BeanUtils\.toBean\s*\(\s*\w+\s*,\s*(\w+DO)\.class\s*\)", entry_body)
+        if not do_hits:
+            do_hits = re.findall(r"\b(\w+DO)\s+\w+\s*=\s*\w+Convert\.INSTANCE\.convert\s*\(", entry_body)
         if len(set(do_hits)) == 1 and do_hits[0] in do_fields:
             target_do = do_fields[do_hits[0]]
             for fname in vo_field_names:
@@ -801,7 +899,7 @@ def _analyze_service_method(
                 cap = fname[0].upper() + fname[1:] if fname else ""
                 if not re.search(rf"\.(?:get|is){re.escape(cap)}\s*\(", all_body_text):
                     dropped.add(fname)
-    return True, uncond_nulls, dropped
+    return True, uncond_nulls, dropped, tuple(side_effects)
 
 
 def _infer_extended_reference(entity: str, prop: str, kind: str, desc: str, available_paths: set[str]) -> str:
@@ -926,6 +1024,22 @@ def _resp_schema_props(op: dict, schemas: dict) -> dict:
     return data_schema.get("properties") or {}
 
 
+def _resolved_resp_props(
+    get_path: str,
+    get_op: dict,
+    schemas: dict,
+    ctrl_endpoints: dict[str, ControllerEndpointAST],
+    vo_map: dict[str, JavaVOAST],
+) -> tuple[dict, JavaVOAST | None]:
+    """Return top-level detail response props, synthesizing from package-scoped Java VO when OpenAPI collided."""
+    resp_props = _resp_schema_props(get_op, schemas)
+    get_ep = ctrl_endpoints.get(f"Get:{get_path}") if get_path else None
+    resp_java_vo = vo_map.get(get_ep.response_type) if get_ep and get_ep.response_type else None
+    if resp_java_vo and any(f.name not in resp_props for f in resp_java_vo.fields if f.name != "id"):
+        resp_props = _synthesize_props_from_java_vo(resp_java_vo, schemas, resp_props)
+    return resp_props, resp_java_vo
+
+
 def _clean_desc_label(desc: str) -> str:
     if not desc:
         return ""
@@ -1009,6 +1123,7 @@ def _build_field_spec(
             unit_scale=unit_scale,
             display_unit=display_unit,
             date_kind=date_kind,
+            is_hierarchy_parent=(fname == "parentId"),
         )
     except ValueError:
         return None
@@ -1151,27 +1266,29 @@ def _compile_child_collection(
 
 
 def _synthesize_props_from_java_vo(java_vo: JavaVOAST, schemas: dict, fallback_props: dict) -> dict:
-    """Reconstruct properties dict from exact Java AST inner VO when OpenAPI schema name collided (e.g. 'Item')."""
+    """Reconstruct properties dict from exact Java AST VO when OpenAPI schema name collided."""
     out: dict[str, dict] = {}
     for jf in java_vo.fields:
         if jf.name in fallback_props and not fallback_props.get(jf.name, {}).get("$ref"):
             out[jf.name] = dict(fallback_props[jf.name])
             continue
+        m_desc = _SCHEMA_DESC_RE.search(jf.raw_annotations or "")
+        desc = m_desc.group(1).strip() if m_desc else jf.name
         jt = jf.java_type.split("<", 1)[0].strip()
         if jt in {"Long", "Integer", "Short", "Byte", "long", "int"}:
-            out[jf.name] = {"type": "integer", "description": jf.name}
+            out[jf.name] = {"type": "integer", "description": desc}
         elif jt in {"BigDecimal", "Double", "Float", "double", "float"}:
-            out[jf.name] = {"type": "number", "description": jf.name}
+            out[jf.name] = {"type": "number", "description": desc}
         elif jt in {"Boolean", "boolean"}:
-            out[jf.name] = {"type": "boolean", "description": jf.name}
+            out[jf.name] = {"type": "boolean", "description": desc}
         elif jt == "LocalDateTime":
-            out[jf.name] = {"type": "string", "format": "date-time", "description": jf.name}
+            out[jf.name] = {"type": "string", "format": "date-time", "description": desc}
         elif jt == "LocalDate":
-            out[jf.name] = {"type": "string", "format": "date", "description": jf.name}
+            out[jf.name] = {"type": "string", "format": "date", "description": desc}
         elif jt == "String":
-            out[jf.name] = {"type": "string", "description": jf.name}
+            out[jf.name] = {"type": "string", "description": desc}
         elif jt in {"List", "Set", "Collection"}:
-            out[jf.name] = {"type": "array", "items": {"type": "integer"}, "description": jf.name}
+            out[jf.name] = {"type": "array", "items": {"type": "integer"}, "description": desc}
     return out
 
 
@@ -1341,6 +1458,55 @@ def _compile_yudao_write_catalog_locked(
     }
     parsed_svc_cache: dict[str, tuple[str, dict[str, str], dict[str, list[tuple[int, int, int]]]]] = {}
     known_java_enums = frozenset(k for k, v in enum_labels.items() if v)
+    enum_by_snake = {
+        re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", cls_name.removesuffix("Enum")).lower(): vals
+        for cls_name, vals in enum_labels.items()
+        if vals
+    }
+
+    def _resolve_enum_zero_label(f_spec: ConventionFieldSpec) -> str | None:
+        et = f_spec.enum_type
+        if not et:
+            return None
+        if et == "common_status":
+            return "开启"
+        if et.startswith("__java_enum__:"):
+            cls_name = et.split(":", 1)[1]
+            return (enum_labels.get(cls_name) or {}).get("0")
+        vals = enum_by_snake.get(et)
+        if vals and "0" in vals:
+            return vals["0"]
+        for k_snake, v_map in enum_by_snake.items():
+            if (et.endswith("_" + k_snake) or k_snake.endswith("_" + et)) and "0" in v_map:
+                return v_map["0"]
+        return None
+
+    def _filter_create_defaults(
+        raw_defs: tuple[CompiledFieldDefault, ...],
+        spec_map: dict[str, ConventionFieldSpec],
+    ) -> tuple[CompiledFieldDefault, ...]:
+        kept: list[CompiledFieldDefault] = []
+        for d in raw_defs:
+            f_sp = spec_map.get(d.field)
+            if f_sp is None:
+                continue
+            if d.kind == "actor":
+                kept.append(d)
+                continue
+            zero_lbl = _resolve_enum_zero_label(f_sp) if (f_sp.enum_type and not f_sp.reference_entity and str(d.value).strip() == "0") else None
+            if is_rejected_ui_sentinel(
+                d.value,
+                is_fk=bool(f_sp.reference_entity),
+                is_enum=bool(f_sp.enum_type),
+                enum_zero_label=zero_lbl,
+                is_hierarchy_parent=f_sp.is_hierarchy_parent,
+            ):
+                continue
+            if zero_lbl and str(d.display).strip() in {"", "0"}:
+                d = replace(d, display=zero_lbl)
+            kept.append(d)
+        return tuple(kept)
+
     form_defaults, form_child_defaults = _compile_vue_create_defaults(source, ui)
 
     creates: dict[str, CompiledCreateSpec] = {}
@@ -1396,7 +1562,7 @@ def _compile_yudao_write_catalog_locked(
         read_list_path = f"{entity}/list" if not read_path and has_list else ""
         tag = ((put.get("tags") or [""])[0]).replace("管理后台 - ", "").strip() or entity
         resp_op = (paths.get(f"/admin-api/{read_path or read_list_path}") or {}).get("get") or {}
-        resp_props = _resp_schema_props(resp_op, schemas)
+        resp_props, _ = _resolved_resp_props(read_path or read_list_path, resp_op, schemas, ctrl_endpoints, vo_map)
         name_fields = tuple(k for k in _NAME_CANDIDATES if k in resp_props) or ("name",)
         qparams = [q.get("name") for q in (put.get("parameters") or ()) if isinstance(q, dict) and isinstance(q.get("name"), str)]
         bprops: dict = {}
@@ -1406,6 +1572,30 @@ def _compile_yudao_write_catalog_locked(
                 bprops = bschema.get("properties") or {}
             except (KeyError, StopIteration, TypeError, AttributeError):
                 bprops = {}
+
+        ep_st_any = ctrl_endpoints.get(f"Put:{ent_part}")
+        st_side_effects: tuple[str, ...] = ()
+        if ep_st_any is not None and source is not None and getattr(source, "root", None):
+            st_safe, _, _, st_side_effects = _analyze_service_method(
+                source,
+                ep_st_any,
+                svc_by_iface=svc_by_iface,
+                parsed_svc_cache=parsed_svc_cache,
+                mode="status",
+            )
+            if not st_safe:
+                continue
+            if tail == "enable" and f"Put:{entity}/disable" in ctrl_endpoints:
+                dis_safe, _, _, dis_effects = _analyze_service_method(
+                    source,
+                    ctrl_endpoints[f"Put:{entity}/disable"],
+                    svc_by_iface=svc_by_iface,
+                    parsed_svc_cache=parsed_svc_cache,
+                    mode="status",
+                )
+                if not dis_safe:
+                    continue
+                st_side_effects = tuple(dict.fromkeys((*st_side_effects, *dis_effects)))
 
         if tail == "update-status":
             if "ids" in bprops or "statusId" in bprops or "processStatus" in qparams or "stopReason" in bprops:
@@ -1424,10 +1614,11 @@ def _compile_yudao_write_catalog_locked(
                     action_path=ent_part,
                     param_mode="body",
                     read_path=read_path,
+                    side_effects=st_side_effects,
                 )
             elif ("id" in bprops and "status" in bprops) or ("id" in qparams and "status" in qparams):
                 # Require verified two-state CommonStatusEnum (exclude ErpAuditStatus & multi-stage workflow enums)
-                ep_st = ctrl_endpoints.get(f"Put:{ent_part}")
+                ep_st = ep_st_any
                 req_vo_st = vo_map.get(ep_st.request_vo) if ep_st and ep_st.request_vo else None
                 status_enums = [f.enum_class for f in req_vo_st.fields if f.name == "status" and f.enum_class] if req_vo_st else []
                 verified_common = "CommonStatusEnum" in status_enums
@@ -1457,6 +1648,7 @@ def _compile_yudao_write_catalog_locked(
                     param_mode=param_mode,
                     read_path=read_path,
                     read_list_path=read_list_path,
+                    side_effects=st_side_effects,
                 )
         elif tail == "update-default-status" and "id" in qparams and "defaultStatus" in qparams:
             statuses[entity] = TwoStateStatusSpec(
@@ -1472,6 +1664,7 @@ def _compile_yudao_write_catalog_locked(
                 status_param="defaultStatus",
                 read_path=read_path,
                 read_list_path=read_list_path,
+                side_effects=st_side_effects,
             )
         elif tail in {"update-enabled", "update-visible", "update-frozen", "update-favorite", "update-conversation-pinned", "update-brokerage-enable", "mute-all"}:
             if entity in statuses:
@@ -1496,6 +1689,7 @@ def _compile_yudao_write_catalog_locked(
                     status_param=bool_key,
                     read_path=read_path,
                     read_list_path=read_list_path,
+                    side_effects=st_side_effects,
                 )
         elif tail == "update-state" and "id" in bprops and "state" in bprops and len(bprops) == 2:
             statuses[entity] = TwoStateStatusSpec(
@@ -1511,6 +1705,7 @@ def _compile_yudao_write_catalog_locked(
                 status_param="state",
                 read_path=read_path,
                 read_list_path=read_list_path,
+                side_effects=st_side_effects,
             )
         elif tail == "enable" and f"/admin-api/{entity}/disable" in paths and "id" in qparams:
             statuses[entity] = TwoStateStatusSpec(
@@ -1526,6 +1721,7 @@ def _compile_yudao_write_catalog_locked(
                 param_mode="query",
                 read_path=read_path,
                 read_list_path=read_list_path,
+                side_effects=st_side_effects,
             )
 
     # ------------------------------------------------------------------
@@ -1685,7 +1881,7 @@ def _compile_yudao_write_catalog_locked(
         java_vo = vo_map.get(ep_ast.request_vo) if ep_ast and ep_ast.request_vo else None
         req_schema = _deref(req_raw, schemas)
         req_props = req_schema.get("properties") or {}
-        resp_props = _resp_schema_props(get_op, schemas)
+        resp_props, resp_java_vo_top = _resolved_resp_props(get_path, get_op, schemas, ctrl_endpoints, vo_map)
         req_required = set(req_schema.get("required") or ())
 
         # Detect nested object-array child collections vs opaque config objects
@@ -1701,7 +1897,7 @@ def _compile_yudao_write_catalog_locked(
 
         dropped_fields: set[str] = set()
         if ep_ast is not None:
-            safe_svc, uncond_nulls, dropped_fields = _analyze_service_method(
+            safe_svc, uncond_nulls, dropped_fields, _ = _analyze_service_method(
                 source,
                 ep_ast,
                 allow_child_mappers=is_aggregate,
@@ -1878,7 +2074,7 @@ def _compile_yudao_write_catalog_locked(
             continue
         create_dropped: set[str] = set()
         if ep_ast is not None:
-            safe_svc, _, create_dropped = _analyze_service_method(
+            safe_svc, _, create_dropped, _ = _analyze_service_method(
                 source,
                 ep_ast,
                 allow_child_mappers=bool(nested_cols and enable_cat5_master_detail_creates),
@@ -1890,11 +2086,10 @@ def _compile_yudao_write_catalog_locked(
             if not safe_svc:
                 continue
 
-        resp_props = _resp_schema_props(get_op, schemas)
+        resp_props, resp_java_vo_create = _resolved_resp_props(get_path, get_op, schemas, ctrl_endpoints, vo_map)
         req_required = set(req_schema.get("required") or ())
         java_fields = {f.name: f for f in java_vo.fields} if java_vo else {}
-        get_ep = ctrl_endpoints.get(f"Get:{get_path}") if nested_cols else None
-        resp_java_vo = vo_map.get(get_ep.response_type) if get_ep and get_ep.response_type else None
+        resp_java_vo = resp_java_vo_create if nested_cols else None
         resp_java_fields = {f.name: f for f in resp_java_vo.fields} if resp_java_vo else {}
         ent_labels = ui_labels.get(entity, {})
         ent_dicts = ui_dicts.get(entity, {})
@@ -1933,21 +2128,7 @@ def _compile_yudao_write_catalog_locked(
                     disqualified = True
                     break
                 col_field_map = {cf.name: cf for cf in col_spec.fields}
-                filtered_cdefs = tuple(
-                    cd
-                    for cd in raw_child_defaults
-                    if cd.field in col_field_map
-                    and (
-                        cd.kind == "actor"
-                        or not is_rejected_ui_sentinel(
-                            cd.value,
-                            is_fk_or_enum=bool(
-                                col_field_map[cd.field].reference_entity or col_field_map[cd.field].enum_type
-                            ),
-                            is_hierarchy_parent=(cd.field == "parentId"),
-                        )
-                    )
-                )
+                filtered_cdefs = _filter_create_defaults(raw_child_defaults, col_field_map)
                 req_min = max(col_spec.min_items, 1 if (fname in req_required or (jf and jf.required) or fname in svc_req_cols) else 0)
                 if filtered_cdefs or req_min != col_spec.min_items:
                     col_spec = replace(col_spec, defaults=filtered_cdefs, min_items=req_min)
@@ -1981,16 +2162,7 @@ def _compile_yudao_write_catalog_locked(
 
         raw_defaults = form_defaults.get(entity, ())
         spec_by_name = {f.name: f for f in field_specs}
-        filtered_defaults = tuple(
-            d for d in raw_defaults
-            if d.field in spec_by_name and (
-                d.kind == "actor" or not is_rejected_ui_sentinel(
-                    d.value,
-                    is_fk_or_enum=bool(spec_by_name[d.field].reference_entity or spec_by_name[d.field].enum_type),
-                    is_hierarchy_parent=(d.field == "parentId"),
-                )
-            )
-        )
+        filtered_defaults = _filter_create_defaults(raw_defaults, spec_by_name)
         computed = frozenset(k for k in req_props if k != "id" and k not in col_names and k not in resp_props)
         if child_specs:
             computed = computed | _agg_server_computed_fields(entity)

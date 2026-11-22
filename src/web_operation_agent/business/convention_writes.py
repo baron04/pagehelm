@@ -50,6 +50,7 @@ from .write_pipeline import (
     preserved_detail,
     require_append_preservation,
     restricted_snapshot_digests,
+    side_effect_detail,
     verify_entry_provenance,
     verify_preservation_snapshot,
 )
@@ -239,6 +240,8 @@ class ConventionFieldSpec:
     display_unit: str = ""
     #: Optional server timestamp representation ("epoch_ms", "datetime", "date").
     date_kind: str = ""
+    #: True when this field links a tree node to its parent node (e.g., hierarchy parent ID).
+    is_hierarchy_parent: bool = False
 
     def __post_init__(self) -> None:
         if not self.name or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", self.name):
@@ -303,6 +306,7 @@ class TwoStateStatusSpec:
     status_param: str = "status"
     read_path: str = ""
     read_list_path: str = ""
+    side_effects: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.entity or len(self.states) != 2:
@@ -666,7 +670,25 @@ def validate_single_field_provenance(
             return
         if allow_append:
             allowed_old = (old_val,) if isinstance(old_val, str) and old_val else ()
-            if _existing_append_supplied(raw_val, texts, allowed_old):
+            unquoted_prompt = re.sub(
+                r"「[^」]*」|『[^』]*』|“[^”]*”|‘[^’]*’|\"[^\"]*\"|'[^']*'",
+                " ",
+                str(prompt or ""),
+            )
+            if isinstance(old_val, str) and old_val:
+                unquoted_prompt = unquoted_prompt.replace(old_val, " ")
+            has_overwrite_verb = bool(
+                re.search(r"改成|改为|设为|设置为|替换为?|覆盖为?|重设为|更新为|\breplace\b", unquoted_prompt, re.I)
+            )
+            has_append_verb = bool(
+                re.search(r"追加|补充|附上|加上|续写|后面加|末尾加|在原.*基础上|\bappend\b", unquoted_prompt, re.I)
+            )
+            if has_overwrite_verb and not has_append_verb:
+                if _existing_append_supplied(raw_val, texts, allowed_old):
+                    raise BusinessToolRequestError(
+                        f"用户本轮要求将字段「{label}」直接改为指定新内容，请只传本次要求的新值，不要拼接原有旧值前缀。"
+                    )
+            elif _existing_append_supplied(raw_val, texts, allowed_old):
                 return
         if allow_existing_candidates and raw_val in field_cands and re.search(r"同上|一样|相同|沿用|复制|照旧", joined_words):
             return
@@ -1148,6 +1170,7 @@ class ConventionStatusHandler:
             (
                 preserved_detail(spec.label, disp_name),
                 change_detail("状态", before_label, after_label),
+                *(side_effect_detail("连带影响", note) for note in spec.side_effects if note),
             ),
         )
         change = RequestedEffect(

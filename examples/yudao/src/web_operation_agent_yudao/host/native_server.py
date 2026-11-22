@@ -386,25 +386,58 @@ class YudaoHost:
         )
         self._lock = threading.RLock()
         self._writes_cond = threading.Condition(self._lock)
+        self._warm_lock = threading.RLock()
+        self._warm_done = threading.Event()
+        self._warm_ready = not bool(config.warm_index and self.rule_source is not None)
+        if self._warm_ready:
+            self._warm_done.set()
         self._draining = False
         self._inflight_writes = 0
         self._traces_pruned_at = 0.0
         self.prune_turn_traces()
+        orig_server_start = self.server.start
+
+        def _start_and_await_warm():
+            res = orig_server_start()
+            if config.warm_index and self.rule_source is not None:
+                self._warm_done.wait(timeout=120.0)
+            return res
+
+        self.server.start = _start_and_await_warm  # type: ignore[method-assign]
         if config.warm_index and self.rule_source is not None:
             threading.Thread(target=self._warm_sources, name="yudao-warm-sources",
                              daemon=True).start()
 
+    @property
+    def warm_ready(self) -> bool:
+        return self._warm_ready
+
+    def wait_warm(self, timeout_s: float = 120.0) -> bool:
+        return self._warm_done.wait(timeout=timeout_s)
+
     def _warm_sources(self) -> None:
         try:
-            if self.rule_source is not None:
-                self.rule_source.warm()
-            if self.config.native_writes or self.config.native_write_preparation:
-                docs = self._load_api_docs()
-                if isinstance(docs, dict) and docs.get("paths"):
+            with self._warm_lock:
+                if self.rule_source is not None:
+                    self.rule_source.warm()
+                documents = None
+                try:
+                    with self._documents_lock:
+                        if self._api_documents is None:
+                            loaded = _api_docs(self.config.api_base, wait_s=5.0, every_s=1.0, timeout_s=90.0)
+                            if isinstance(loaded, dict):
+                                self._api_documents = loaded
+                        documents = self._api_documents
+                except (OSError, ValueError):
+                    documents = None
+                if isinstance(documents, dict) and documents.get("paths"):
                     from ..writes.convention_writes import warm_yudao_write_catalog
-                    warm_yudao_write_catalog(docs=docs, source=self.rule_source, ui=self.ui)
+                    warm_yudao_write_catalog(docs=documents, source=self.rule_source, ui=self.ui)
         except Exception:  # noqa: BLE001 -- live turns report source unavailability directly
             pass
+        finally:
+            self._warm_ready = True
+            self._warm_done.set()
 
     # -- bootstrap ------------------------------------------------------------------------
     def _fenced_gets(self, policy: dict) -> frozenset:
@@ -1034,9 +1067,11 @@ def _handler(host: YudaoHost):
                 })
             elif self.path == "/readyz":
                 draining = host.draining
-                self._json(503 if draining else 200, {
-                    "ready": not draining,
-                    "accepting_sessions": not draining,
+                ready = (not draining) and host.warm_ready
+                self._json(200 if ready else 503, {
+                    "ready": ready,
+                    "warming": not host.warm_ready,
+                    "accepting_sessions": ready,
                     "draining": draining,
                     "sessions": host.server.session_count,
                 })

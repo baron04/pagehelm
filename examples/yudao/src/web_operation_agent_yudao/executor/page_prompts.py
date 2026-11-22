@@ -36,7 +36,7 @@ _PAGE_CHARS = 9_000
 #: the run's input-token ceiling before it can answer.
 _API_CHARS = 5_000
 #: How many rows a read of chosen columns follows the pages for.
-_ALL_ROWS = 5_000
+_ALL_ROWS = 20_000
 #: The most kinds a chosen column's rows are counted and summed by.
 _GROUPS = 32
 
@@ -127,7 +127,7 @@ TOOLS = [
         "path": {"type": "string"},
         "params": {"type": "string", "maxLength": 8000, "description": "查询参数的 JSON 对象字符串，例如 {\"pageNo\":1,\"pageSize\":20}"},
         "fields": {"type": "array", "items": {"type": "string"}, "description":
-                   "指定用于行表的接口字段；给 fields 时分页接口最多读取5000行。"
+                   "指定用于行表的接口字段；给 fields 时分页接口最多读取20000行。"
                    "未指定只读所请求的页；以行表完整性为准。"}},
         ["path"]),
     _tool("highlight", "把当前页面中已确认属于目标记录的业务按钮标出来，交给用户自己点（例如删除、审核、启停或表单确定）。不会点击或完成该业务动作。", {
@@ -512,7 +512,8 @@ def system_text(*, user: str, date: str, tz: str, conventions=(), catalog=(), kn
         pass
     else:
         monday = day - timedelta(days=day.weekday())
-        calendar = f" 周{'一二三四五六日'[day.weekday()]}；ISO周[{monday},{monday + timedelta(days=7)})"
+        q_num = (day.month - 1) // 3 + 1
+        calendar = f" 周{'一二三四五六日'[day.weekday()]}；ISO周[{monday},{monday + timedelta(days=7)})；第{q_num}季度(Q{q_num})"
     text = SYSTEM.format(user=user, date=date + calendar, tz=tz)
     if catalog:
         text = text.replace("你能做三类事", "你能做四类事", 1).replace(
@@ -1057,8 +1058,15 @@ def _precomputed_dates(prompt: str, table_context) -> str:
         for v in _date_range_receipt_values(r):
             if v not in values:
                 values.append(v)
+        shown_label = label
+        if kw.get("unit") == "quarter" and isinstance(r.get("start"), str) and len(r["start"]) >= 7:
+            try:
+                q_idx = (int(r["start"][5:7]) - 1) // 3 + 1
+                shown_label = f"{label}（第{q_idx}季度 / Q{q_idx}）"
+            except ValueError:
+                pass
         lines.append(
-            f"- {label}：{r['start']} ~ {r['end_inclusive']}（左闭右开 < {r['end_exclusive']}；"
+            f"- {shown_label}：{r['start']} ~ {r['end_inclusive']}（左闭右开 < {r['end_exclusive']}；"
             f"毫秒 [{r['start_ms']}, {r['end_exclusive_ms']})）"
         )
     if not lines:

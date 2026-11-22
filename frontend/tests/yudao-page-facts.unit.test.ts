@@ -513,6 +513,31 @@ describe('native Yudao record and read completion facts', () => {
     expect(facts.readPageRecordRoute()).toBeUndefined()
     expect(facts.readPageBlocker()).toBe('pending')
   })
+  it('isolates auxiliary subcard and simple-list 403s once primary detail or list succeeds while blocking primary 403s', () => {
+    window.history.replaceState({}, '', '/member/user/detail/105')
+    document.body.innerHTML = '<div class="detail-body">Member 105</div>'
+    const facts = createPageFacts()
+    // Before primary get succeeds, auxiliary 403 still blocks
+    facts.begin('/admin-api/pay/wallet/get?userId=105')!(200, {code: 403, msg: '没有该操作权限'})
+    document.body.insertAdjacentHTML('beforeend', '<div class="el-message--error">没有该操作权限</div>')
+    for (const el of document.querySelectorAll('*')) {
+      el.getBoundingClientRect = () => ({width: 50, height: 20} as DOMRect)
+    }
+    expect(facts.readPageBlocker()).toBe(true)
+    // Primary detail get fails with 403 -> strictly blocked
+    facts.begin('/admin-api/member/user/get?id=105')!(200, {code: 403, msg: '没有该操作权限'})
+    expect(facts.readPageBlocker()).toBe(true)
+    // Primary detail get succeeds -> auxiliary subcard 403 + permission toast are isolated
+    facts.begin('/admin-api/member/user/get?id=105')!(200, {code: 0, data: {id: 105, nickname: 'Member 105'}})
+    facts.begin('/admin-api/member/level/list-all-simple')!(403, null)
+    expect(facts.readPageBlocker()).toBe(false)
+    // Non-permission error toast still blocks immediately
+    document.body.insertAdjacentHTML('beforeend', '<div class="el-message--error">系统内部异常</div>')
+    for (const el of document.querySelectorAll('.el-message--error')) {
+      el.getBoundingClientRect = () => ({width: 50, height: 20} as DOMRect)
+    }
+    expect(facts.readPageBlocker()).toBe(true)
+  })
 })
 
 /** The native AppView / RouterView / KeepAlive shape, without importing Vue or
@@ -1203,7 +1228,9 @@ describe('the application opens its own page through its router, in this documen
         if (refuses) return {type: 4}
         show(to.fullPath)
         // The application's redirect view replaces itself with the page it was asked for.
-        if (arrives) setTimeout(() => show(to.fullPath.slice('/redirect'.length)), 10)
+        if (arrives && to.fullPath.startsWith('/redirect/')) {
+          setTimeout(() => show(to.fullPath.slice('/redirect'.length)), 10)
+        }
         return undefined
       },
     }
@@ -1240,11 +1267,9 @@ describe('the application opens its own page through its router, in this documen
       expect(tab.opener).toBeNull()
     }
   })
-  it('leaves the page to be loaded when there is nothing to ask or nothing would change', async () => {
+  it('leaves the page to be loaded when there is nothing to ask, while idempotently succeeding on same route or direct push without redirect', async () => {
     for (const [url, options] of [
       ['https://synthetic.test/system/post', {tabs: false}],       // no tab store: a fresh page cannot be promised
-      ['https://synthetic.test/system/post', {redirect: false}],   // no redirect route to enter through
-      ['https://synthetic.test/crm/customer', {}],                 // already shown: only a load rebuilds it provably
       ['https://synthetic.test/system/post#part', {}],             // the redirect route carries no fragment
       ['https://elsewhere.invalid/system/post', {}],
     ] as const) {
@@ -1252,6 +1277,15 @@ describe('the application opens its own page through its router, in this documen
       await expect(openPage(url, app.options)).resolves.toBe(false)
       expect(app.calls).toEqual([])
     }
+    // Same fullPath already shown: succeed idempotently without reloading or destroying main-frame state
+    const sameApp = application({})
+    await expect(openPage('https://synthetic.test/crm/customer', sameApp.options)).resolves.toBe(true)
+    expect(sameApp.calls).toEqual([])
+    // No /redirect route: push wanted route directly via Vue Router
+    const noRedirectApp = application({redirect: false})
+    await expect(openPage('https://synthetic.test/system/post', noRedirectApp.options)).resolves.toBe(true)
+    expect(noRedirectApp.calls).toEqual(['drop kept pages', 'push /system/post'])
+    expect(noRedirectApp.location.pathname).toBe('/system/post')
     await expect(openPage('/system/post', {view: window, doc: document})).resolves.toBe(false)   // no application mounted
   })
   it('a closed dialog still in the document does not stop it', async () => {

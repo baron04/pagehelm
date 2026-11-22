@@ -63,8 +63,10 @@ from .write_status_ops import ERP_DOCUMENT_ENTITIES
 ENABLE_CAT5_MASTER_DETAIL_CREATES: bool = True
 
 _CACHE_LOCK = RLock()
+_COMPILE_SINGLEFLIGHT_LOCK = RLock()
 _COMPILED_SPECS_CACHE: OrderedDict[tuple[int, int, int, str, bool], dict] = OrderedDict()
 _DOCS_OBJECT_CACHE: OrderedDict[tuple[int, bool], tuple[object, bool, dict]] = OrderedDict()
+_WRITE_DIR_CACHE: OrderedDict[tuple[int, bool, bool], tuple[object, list[dict]]] = OrderedDict()
 
 _SECRET = DEFAULT_SECRET_FIELD_PATTERN
 _NAME_CANDIDATES = (
@@ -250,11 +252,11 @@ _CANDIDATE_SUFFIX = re.compile(r"^(.+?)\s*[ï¼ˆ(](?:[A-Za-z][A-Za-z0-9_]*Id\s*[=ï
 _API_IMPORT_RE = re.compile(r"import\s+(?:\*\s+as\s+(\w+)|\{([^}]*)\})\s+from\s+['\"]@/api/([^'\"]+)['\"]")
 _PUT_URL_ARROW_RE = re.compile(
     r"\b(\w+)\s*[:=]\s*(?:async\s*)?\([^)]*\)\s*(?::[^=>{]+)?=>\s*\{?\s*"
-    r"(?:return\s+)?(?:await\s+)?request\.put\(\{\s*url:\s*[`'\"]([^`'\"?$]+)"
+    r"(?:return\s+)?(?:await\s+)?request\.put(?:<[^>]+>)?\(\{\s*url:\s*[`'\"]([^`'\"?$]+)"
 )
 _PUT_URL_FN_RE = re.compile(
     r"(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\([^)]*\)\s*(?::[^{]+)?\{\s*"
-    r"(?:return\s+)?(?:await\s+)?request\.put\(\{\s*url:\s*[`'\"]([^`'\"?$]+)"
+    r"(?:return\s+)?(?:await\s+)?request\.put(?:<[^>]+>)?\(\{\s*url:\s*[`'\"]([^`'\"?$]+)"
 )
 _FORM_ITEM_RE = re.compile(r"<el-form-item\b([^>]*)>(.*?)</el-form-item>", re.S)
 _DICT_CALL_RE = re.compile(r"get(?:Int|Str|Bool)?DictOptions\(\s*DICT_TYPE\.([A-Z][A-Z0-9_]*)\s*\)")
@@ -344,6 +346,7 @@ def _compile_ui_metadata(source, ui=None) -> tuple[dict[str, dict[str, str]], di
                     local = parts[-1].strip()
                     if orig and local:
                         direct_fns[local] = f"{mod}:{orig}"
+                        imports.setdefault(local, mod)
 
         entities: set[str] = set()
         for obj, fn in re.findall(r"\b(\w+)\.(\w+)\(", text):
@@ -2175,7 +2178,7 @@ def _store_cached_catalog(cache_key: tuple[int, int, int, str, bool], docs: dict
 
 
 def warm_yudao_write_catalog(*, docs: dict, source, ui=None) -> None:
-    """Precompile the write catalog outside live turns."""
+    """Precompile the write catalog and write directory once under a single-flight lock."""
     if not isinstance(docs, dict) or not docs.get("paths"):
         return
     rel = str(getattr(source, "release", "")) if source is not None else ""
@@ -2184,18 +2187,25 @@ def warm_yudao_write_catalog(*, docs: dict, source, ui=None) -> None:
     with _CACHE_LOCK:
         if cache_key in _COMPILED_SPECS_CACHE:
             _COMPILED_SPECS_CACHE.move_to_end(cache_key)
-            return
-    catalog = compile_yudao_write_catalog(
-        docs=docs,
-        source=source,
-        ui=ui,
-        dedicated_creates=frozenset(_DEDICATED_CREATES),
-        dedicated_updates=frozenset(_DEDICATED_UPDATES),
-        dedicated_statuses=frozenset(_DEDICATED_STATUSES),
-        ui_metadata_fn=_compile_ui_metadata,
-        enable_cat5_master_detail_creates=cat5_on,
-    )
-    _store_cached_catalog(cache_key, docs, source, catalog)
+            has_dir = (id(docs), bool(source is not None), cat5_on) in _WRITE_DIR_CACHE
+            if has_dir:
+                return
+    with _COMPILE_SINGLEFLIGHT_LOCK:
+        with _CACHE_LOCK:
+            cached = _COMPILED_SPECS_CACHE.get(cache_key)
+        if cached is None:
+            catalog = compile_yudao_write_catalog(
+                docs=docs,
+                source=source,
+                ui=ui,
+                dedicated_creates=frozenset(_DEDICATED_CREATES),
+                dedicated_updates=frozenset(_DEDICATED_UPDATES),
+                dedicated_statuses=frozenset(_DEDICATED_STATUSES),
+                ui_metadata_fn=_compile_ui_metadata,
+                enable_cat5_master_detail_creates=cat5_on,
+            )
+            _store_cached_catalog(cache_key, docs, source, catalog)
+        build_yudao_write_directory(docs=docs, source=source, ui=ui)
 
 
 def get_yudao_write_catalog(*, docs: dict | None = None, source=None, ui=None) -> dict:
@@ -2263,10 +2273,13 @@ def _valid_create_default_fields(spec: CompiledCreateSpec) -> tuple[set[str], li
         f = spec.resolve_field(d.field)
         if f is None:
             continue
+        zero_lbl = str(d.display).strip() if (d.display and str(d.display).strip() not in {"", "0"}) else None
         if d.kind == "actor" or not is_rejected_ui_sentinel(
             d.value,
-            is_fk_or_enum=bool(f.reference_entity or f.enum_type),
-            is_hierarchy_parent=(f.name == "parentId"),
+            is_fk=bool(f.reference_entity),
+            is_enum=bool(f.enum_type),
+            enum_zero_label=zero_lbl,
+            is_hierarchy_parent=f.is_hierarchy_parent,
         ):
             if d.field not in default_fields:
                 default_fields.add(d.field)
@@ -2312,6 +2325,27 @@ def _format_create_collections(spec: CompiledCreateSpec) -> tuple[list[str], lis
 
 def build_yudao_write_directory(*, docs: dict | None = None, source=None, ui=None) -> list[dict]:
     """Programmatically assemble all Yudao write tools and compiled entities from source/OpenAPI."""
+    cat5_on = bool(ENABLE_CAT5_MASTER_DETAIL_CREATES)
+    has_rich = source is not None
+    with _CACHE_LOCK:
+        if isinstance(docs, dict):
+            dir_key = (id(docs), has_rich, cat5_on)
+            hit = _WRITE_DIR_CACHE.get(dir_key)
+            if hit is not None and hit[0] is docs:
+                _WRITE_DIR_CACHE.move_to_end(dir_key)
+                return list(hit[1])
+            if not has_rich:
+                rich_hit = _WRITE_DIR_CACHE.get((id(docs), True, cat5_on))
+                if rich_hit is not None and rich_hit[0] is docs:
+                    return list(rich_hit[1])
+        elif _WRITE_DIR_CACHE:
+            for dkey in reversed(_WRITE_DIR_CACHE):
+                if dkey[2] is cat5_on:
+                    return list(_WRITE_DIR_CACHE[dkey][1])
+            for dkey in reversed(_DOCS_OBJECT_CACHE):
+                if dkey[1] is cat5_on:
+                    docs = _DOCS_OBJECT_CACHE[dkey][0]
+                    break
     entries: list[dict] = []
     for c in RECORD_CONTRACTS:
         if "create" in c.operations:
@@ -2473,6 +2507,13 @@ def build_yudao_write_directory(*, docs: dict | None = None, source=None, ui=Non
             "required": [],
             "relations": [],
         })
+    if isinstance(docs, dict) and docs.get("paths"):
+        dir_key = (id(docs), bool(source is not None), cat5_on)
+        with _CACHE_LOCK:
+            _WRITE_DIR_CACHE[dir_key] = (docs, list(entries))
+            _WRITE_DIR_CACHE.move_to_end(dir_key)
+            while len(_WRITE_DIR_CACHE) > 8:
+                _WRITE_DIR_CACHE.popitem(last=False)
     return entries
 
 

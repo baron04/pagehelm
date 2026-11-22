@@ -542,7 +542,7 @@ class Phase51G0Tests(unittest.TestCase):
         tables2 = TurnTables(BASELINE_SESSION_HANDOFFS)
         self.addCleanup(tables2.close)
         empty_text = know_empty.call_api("erp/sale/page", {"no": "NOPE", "pageNo": 1, "pageSize": 20}, row_sink=tables2.add)
-        self.assertIn("精确绑定空集核实（complete=True，0 行）", empty_text)
+        self.assertNotIn("精确绑定空集核实（complete=True，0 行）", empty_text)
 
     def test_cell_values_large_table_and_verified_turn_id_source_ledger(self):
         from web_operation_agent.execution.value_source import SourceLedger
@@ -1320,8 +1320,7 @@ class Phase51G0Tests(unittest.TestCase):
         text = know.call_api("promotion/article/page", {"pageNo": 1, "pageSize": 20}, row_sink=tables.add)
         self.assertNotIn("内联全表同值统计", text)
         zero_text = know.call_api("promotion/article/page", {"status": 0, "pageNo": 1, "pageSize": 20}, row_sink=tables.add)
-        self.assertIn("精确过滤已核实为 0 条记录", zero_text)
-        self.assertIn("精确绑定空集核实（complete=True，0 行）", zero_text)
+        self.assertNotIn("精确过滤已核实为 0 条记录", zero_text)
 
         # entity_rules under writes_enabled surfaces compiled write contracts & auto-defaults
         from web_operation_agent.goal.index import ApplicationIndex, IndexEntity
@@ -2652,6 +2651,7 @@ class Phase51G0Tests(unittest.TestCase):
                         "tags": ["管理后台 - ERP 产品"],
                         "parameters": [
                             {"name": "name", "in": "query"},
+                            {"name": "categoryId", "in": "query"},
                             {"name": "pageNo", "in": "query", "required": True},
                             {"name": "pageSize", "in": "query", "required": True},
                         ],
@@ -2703,7 +2703,9 @@ class Phase51G0Tests(unittest.TestCase):
         self.assertIn("unitName", prod_out)
 
         empty_know = ActorKnowledge(_MixedClient([]), docs)
-        empty_out = empty_know.call_api("promotion/coupon-template/page", {"status": 0, "pageNo": 1, "pageSize": 20}, row_sink=tables.add)
+        empty_status_out = empty_know.call_api("promotion/coupon-template/page", {"status": 0, "pageNo": 1, "pageSize": 20}, row_sink=tables.add)
+        self.assertNotIn("精确过滤已核实为 0 条记录", empty_status_out)
+        empty_out = empty_know.call_api("erp/product/page", {"categoryId": 10, "pageNo": 1, "pageSize": 20}, row_sink=tables.add)
         self.assertIn("finish(status='done')", empty_out)
         self.assertNotIn("可用 completed", empty_out)
 

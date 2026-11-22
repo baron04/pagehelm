@@ -59,7 +59,7 @@ _SCENES = (1, 2, 3)
 _PAGE_SIZE = 200
 #: The most records one read filters in memory; beyond it the read is refused rather
 #: than answered from part of the records.
-_MAX_ROWS = 4000
+_MAX_ROWS = 20000
 #: Built-in entities every account may list: the people and departments links name.
 _USERS, _DEPTS = "system/user", "system/dept"
 
@@ -744,9 +744,14 @@ class YudaoGoalData:
                          f"{entity.module}_{last}_{word}_type", f"{entity.module}_{word}_type"):
                 if name in self._dicts:
                     return name
-        # yudao's own convention: a record's status is on or off (CommonStatusEnum).
-        if snake == "status" and "common_status" in self._dicts:
-            return "common_status"
+        if self._source is None and snake == "status" and "common_status" in self._dicts:
+            raw_desc = str((entity.props.get(field) or {}).get("description") or "")
+            if (
+                "CommonStatusEnum" in raw_desc
+                or ("开启" in raw_desc and "关闭" in raw_desc)
+                or ("启用" in raw_desc and "停用" in raw_desc)
+            ):
+                return "common_status"
         return ""
 
     # -- reads ------------------------------------------------------------------------------
@@ -965,7 +970,9 @@ class YudaoGoalData:
     def code_names(self, list_path: str) -> dict[str, dict[str, str]]:
         """Coded values of the exact entity's list or detail API, by field.
 
-        Unknown paths do not inherit another entity's dictionary.
+        Priority: response VO > exact same-module stem DO (stripped of Page/Detail/Simple/Export
+        and intersected with response fields; non-empty maps only) > save/update VO > frontend
+        view & query-bar dictionaries. Unknown paths never inherit another entity's dictionary.
         """
         if not list_path.strip("/"):
             return {}
@@ -975,37 +982,92 @@ class YudaoGoalData:
             keys = [k for k, spec in self._entities.items()
                     if rel in {spec.list_path.strip("/"),
                                spec.get_path.strip("/") if spec.get_path else ""}]
+            entity_spec = self._entities.get(keys[0]) if len(keys) == 1 else None
             dicts_copy = dict(self._dicts)
             docs = self._docs
             source = self._source
         entity = schema.entity(keys[0]) if len(keys) == 1 else None
-        out: dict[str, dict[str, str]] = (
-            {f.key: {c.key: c.label for c in f.choices} for f in entity.fields if f.choices}
-            if entity is not None else {}
-        )
+        op = (docs.get("paths") or {}).get(f"/admin-api/{rel}", {}).get("get", {})
+        schemas = (docs.get("components") or {}).get("schemas") or {}
+        vo_name = _endpoint_resp_vo(op, schemas)
+        resp_schema_props = dict((schemas.get(vo_name) or {}).get("properties") or {}) if vo_name else {}
+        if entity_spec is not None and entity_spec.props:
+            for pk, pv in entity_spec.props.items():
+                resp_schema_props.setdefault(pk, pv)
+        resp_field_set = set(resp_schema_props)
+
+        out: dict[str, dict[str, str]] = {}
         if source is not None:
-            op = (docs.get("paths") or {}).get(f"/admin-api/{rel}", {}).get("get", {})
-            schemas = (docs.get("components") or {}).get("schemas") or {}
-            vo_name = _endpoint_resp_vo(op, schemas)
-            if vo_name:
-                bindings = source.resp_vo_code_bindings().get(vo_name) or {}
-                if bindings:
-                    enum_labels = source.enum_value_labels()
-                    enum_by_snake = {
-                        re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", cls_name.removesuffix("Enum")).lower(): vals
-                        for cls_name, vals in enum_labels.items()
-                    }
-                    for field, (kind, ref_name) in bindings.items():
-                        if field in out:
-                            continue
-                        if kind == "enum" and ref_name in enum_labels:
-                            out[field] = dict(enum_labels[ref_name])
-                        elif kind == "dict":
-                            pairs = dicts_copy.get(ref_name)
-                            if pairs:
-                                out[field] = {str(k): str(v) for k, v in pairs}
-                            elif ref_name in enum_by_snake:
-                                out[field] = dict(enum_by_snake[ref_name])
+            enum_labels = source.enum_value_labels() if hasattr(source, "enum_value_labels") else {}
+            enum_by_snake = {
+                re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", cls_name.removesuffix("Enum")).lower(): vals
+                for cls_name, vals in enum_labels.items()
+            }
+
+            def _resolve_binding(kind: str, ref_name: str) -> dict[str, str]:
+                if kind == "enum" and ref_name in enum_labels:
+                    vals = enum_labels[ref_name]
+                    return {str(k): str(v) for k, v in vals.items()} if vals else {}
+                if kind == "dict":
+                    pairs = dicts_copy.get(ref_name)
+                    if pairs:
+                        return {str(k): str(v) for k, v in pairs}
+                    if ref_name in enum_by_snake and enum_by_snake[ref_name]:
+                        return {str(k): str(v) for k, v in enum_by_snake[ref_name].items()}
+                return {}
+
+            def _apply_tier(bindings: dict[str, tuple[str, str]], *, intersect_resp: bool) -> None:
+                for field, (kind, ref_name) in bindings.items():
+                    if field in out:
+                        continue
+                    if intersect_resp and resp_field_set and field not in resp_field_set:
+                        continue
+                    resolved = _resolve_binding(kind, ref_name)
+                    if resolved:
+                        out[field] = resolved
+
+            if hasattr(source, "code_binding_tables"):
+                tables = source.code_binding_tables()
+                ep_mod, ep_vo = tables["endpoint_mod_vo"].get(rel, ("", ""))
+                mod = ep_mod or (entity_spec.module if entity_spec is not None else rel.split("/", 1)[0])
+                eff_vo = ep_vo or vo_name
+                # Tier 1: Response VO (module-scoped first to defeat OpenAPI simple-name collisions)
+                if eff_vo:
+                    resp_b = tables["resp_by_mod"].get((mod, eff_vo)) or (
+                        tables["resp_by_name"].get(eff_vo) if not ep_mod else None
+                    )
+                    if resp_b:
+                        _apply_tier(resp_b, intersect_resp=False)
+                # Tier 2 & 3: Exact same-module stem DO, then Save/Update/Create VO
+                if eff_vo and eff_vo.endswith("RespVO") and mod:
+                    raw_stem = eff_vo[:-len("RespVO")]
+                    clean_stem = re.sub(r"(?:Page|Detail|Simple|Export)$", "", raw_stem) or raw_stem
+                    cap_mod = mod[0].upper() + mod[1:]
+                    stems = tuple(dict.fromkeys((raw_stem, clean_stem, cap_mod + clean_stem)))
+                    for s_cand in stems:
+                        do_b = tables["do_by_mod"].get((mod, s_cand))
+                        if do_b:
+                            _apply_tier(do_b, intersect_resp=True)
+                            break
+                    for s_cand in stems:
+                        save_b = tables["save_by_mod"].get((mod, s_cand))
+                        if save_b:
+                            _apply_tier(save_b, intersect_resp=True)
+                            break
+            elif vo_name and hasattr(source, "resp_vo_code_bindings"):
+                resp_b = (source.resp_vo_code_bindings() or {}).get(vo_name) or {}
+                _apply_tier(resp_b, intersect_resp=False)
+
+        # Tier 4: Frontend view dictionaries & query-bar dictionaries
+        if entity is not None:
+            for f in entity.fields:
+                if f.choices and f.key not in out:
+                    mapped = {str(c.key): str(c.label) for c in f.choices}
+                    if mapped:
+                        out[f.key] = mapped
+        for qfield, qmap in self.query_choices(rel).items():
+            if qfield not in out and qmap and (not resp_field_set or qfield in resp_field_set):
+                out[qfield] = {str(k): str(v) for k, v in qmap.items()}
         return out
 
     def query_choices(self, read_path: str) -> dict[str, dict[str, str]]:

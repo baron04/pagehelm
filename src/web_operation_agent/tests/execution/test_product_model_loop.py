@@ -976,17 +976,17 @@ class UntracedNumberFeedbackTests(unittest.TestCase):
         executor.profile = NS(untraced_numbers=hook)
         return executor
 
-    def test_a_number_only_in_the_deliverable_item_is_checked_and_marks_that_item(self):
+    def test_a_number_only_in_the_deliverable_item_is_checked_and_annotated_after_recheck(self):
         items=[{"item":"金额负500元","kind":"data","status":"delivered","receipts":[]}]
         ending=reply(call("finish",status="done",answer="结果见交付项。",items=items))
         executor=self.fixture(lambda text,sources:("-500",) if "负500" in text else (),ending,ending)
         tool=DeliveryCorrectionTests().fixture()._finish_tool({})
         executor._finish_tool=lambda _:tool
         result=executor.run()
-        self.assertEqual(executor.state.terminal_reason,"agent_refused")
-        self.assertIn("该项与本轮均标为未完成",result)
+        self.assertEqual(executor.state.terminal_reason,"")
+        self.assertIn("以下数值未在本轮读取中找到出处：-500",result)
         rows=[facts for event,facts in executor.events if event=="untraced_numbers"]
-        self.assertEqual(rows[-1]["undelivered_indices"],[0])
+        self.assertEqual(rows[-1]["deliverable"],["金额负500元"])
 
     def test_narrative_number_keeps_done_with_a_warning_when_correction_provider_fails(self):
         from web_operation_agent.modeling.provider import ProviderError
@@ -1007,11 +1007,12 @@ class UntracedNumberFeedbackTests(unittest.TestCase):
         executor=self.fixture(lambda text,_sources:("-500",) if "-500" in text else ("-600",),
                               ending(-500),ending(-600))
         executor._finish_tool=DeliveryCorrectionTests().fixture()._finish_tool
-        self.assertIn("该项与本轮均标为未完成",executor.run())
+        self.assertIn("以下数值未在本轮读取中找到出处：-600",executor.run())
+        self.assertEqual(executor.state.terminal_reason,"")
         self.assertEqual(len(executor.state.chat.seen),2)
         events=[facts for event,facts in executor.events if event=="untraced_numbers"]
         self.assertEqual([e["sent_back"] for e in events],[True,False])
-        self.assertEqual(events[-1]["undelivered_indices"],[0])
+        self.assertEqual(events[-1]["deliverable"],["金额-600元"])
 
     def test_narrative_five_does_not_fail_an_adjacent_fifteen_item(self):
         executor=self.fixture(lambda *_:("5",),reply(call("finish",status="done",answer="另有5条。",items=[
@@ -1048,7 +1049,7 @@ class UntracedNumberFeedbackTests(unittest.TestCase):
                                   {"numbers": ["999"], "sent_back": False,
                                    "deliverable": [], "narrative": ["999"]}])
 
-    def test_an_untraced_value_inside_a_deliverable_item_marks_the_turn_incomplete(self):
+    def test_an_untraced_value_inside_a_deliverable_item_preserves_answer_with_note(self):
         hook = lambda answer, sources: ("999",) if "999" in answer else ()
         executor = self.fixture(hook,
             reply(call("finish", status="done", answer="共 999 条")),
@@ -1064,9 +1065,9 @@ class UntracedNumberFeedbackTests(unittest.TestCase):
                 "additionalProperties": False}}
         executor._finish_tool = lambda turn: tool
         result, reason = executor.run(), executor.state.terminal_reason
-        self.assertEqual(reason, "agent_refused")
-        self.assertIn("应收 999 元的明细", result)
-        self.assertIn("该项与本轮均标为未完成", result)
+        self.assertEqual(reason, "")
+        self.assertIn("应收 999 元。", result)
+        self.assertIn("以下数值未在本轮读取中找到出处：999", result)
         audits = [facts for event, facts in executor.events if event == "untraced_numbers"]
         self.assertEqual(audits[-1]["deliverable"], ["应收 999 元的明细"])
         self.assertEqual(audits[-1]["sent_back"], False)

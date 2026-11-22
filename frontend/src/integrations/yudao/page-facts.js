@@ -50,6 +50,9 @@ const PAGE_LAYERS = '.el-overlay, .el-image-viewer__wrapper'
 // opened on the destination itself must remain observable for prefill and handoff.
 const carriedLayers = new WeakMap()
 const recordDetailRoute = route => /^\/(crm\/(?:customer|contract|business|contact|clue|product)|hrm\/employee)\/detail\/([0-9]+)$/.exec(route)
+const genericDetailRoute = route => /^\/([a-z0-9-]+(?:\/[a-z0-9-]+)*)\/detail\/([0-9]+)$/i.exec(route)
+const SIMPLE_LOOKUP_PATH = /(?:\/|-)(?:simple-list|list-all-simple|simple)$/i
+const PERMISSION_TOAST_TEXT = /^(?:没有该操作权限|无权限|权限不足)[!！。.\s]*$/
 const FORM_ID = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,119}$/
 
 function carriedLayerBlocks(doc) {
@@ -282,7 +285,9 @@ export function createPageFacts({view = window, doc = document} = {}) {
       lists.set(url.pathname, list)
     }
     const detail = recordDetailRoute(route)
+    const genericDetail = genericDetailRoute(route)
     const isRecord = Boolean(detail && url.pathname === `/admin-api/${detail[1]}/get`)
+    const isPrimaryDetail = Boolean(isRecord || (genericDetail && url.pathname === `/admin-api/${genericDetail[1]}/get`))
     const ids = url.searchParams.getAll('id')
     const matchesRecord = !isRecord || ids.length === 1 && ids[0] === detail[2]
     const selected = Array.from(doc.querySelectorAll('[role="tab"][aria-selected="true"]'))
@@ -295,6 +300,7 @@ export function createPageFacts({view = window, doc = document} = {}) {
     if (!reads.has(key) && reads.size >= 64) { reads.set('overflow', {pending: 0, failed: true, panel: '*'}); return null }
     const prior = reads.get(key)
     const state = {pending: (prior?.pending || 0) + 1, failed: prior?.failed || false,
+      auxForbidden: prior?.auxForbidden || false,
       conflicts: (prior?.conflicts || 0) + Number(!matchesRecord),
       panel: readPanel, serial: (prior?.serial || 0) + 1}
     reads.set(key, state)
@@ -320,6 +326,10 @@ export function createPageFacts({view = window, doc = document} = {}) {
         }
       }
       latest.failed = !ok
+      const isRbacForbidden = matchesRecord && !isPrimaryDetail && body?.error !== 'page_write_blocked'
+        && (status === 403 || (status >= 200 && status < 300 && body?.code === 403))
+      latest.auxForbidden = Boolean(!ok && isRbacForbidden
+        && (SIMPLE_LOOKUP_PATH.test(url.pathname) || (genericDetail && (!detail || !scoped))))
       if (ledger && ok && query && Array.isArray(body?.data)) appliedLedger = query
       const records = Array.isArray(body?.data?.list) ? body.data.list : Array.isArray(body?.data) ? body.data : null
       if (list && lists.get(url.pathname) === list && ok && records) {
@@ -356,6 +366,18 @@ export function createPageFacts({view = window, doc = document} = {}) {
       }
     }
   }
+  function primaryReady() {
+    if (recordDetailRoute(route)) return Boolean(record && record.route === route)
+    const gd = genericDetailRoute(route)
+    if (gd) return formReads.get(`/admin-api/${gd[1]}/get`) === gd[2]
+    return Boolean(appliedLedger || pageList())
+  }
+  function hasBlockingElError(allowPermissionToast) {
+    if (!hasVisibleElError(doc)) return false
+    if (!allowPermissionToast) return true
+    const errors = Array.from(doc.querySelectorAll('.el-message--error, .el-notification--error')).filter(isElVisible)
+    return errors.some(el => !PERMISSION_TOAST_TEXT.test((el.textContent || '').trim()))
+  }
   function readPageBlocker() {
     current()
     if (disposed) return true
@@ -364,8 +386,10 @@ export function createPageFacts({view = window, doc = document} = {}) {
       .filter(e => isElVisible(e) && !e.closest('[role="dialog"],dialog'))
     const panel = selected[0]?.getAttribute('aria-controls') || ''
     const relevant = Array.from(reads.values()).filter(s => s.panel === '*' || !s.panel || s.panel === panel)
-    if (relevant.some(s => s.failed || s.conflicts)) return true
-    if (hasVisibleElError(doc)) return true
+    const canExemptAux = primaryReady()
+    if (relevant.some(s => s.conflicts || (s.failed && !(canExemptAux && s.auxForbidden)))) return true
+    const hasAuxFailure = canExemptAux && relevant.some(s => s.failed && s.auxForbidden)
+    if (hasBlockingElError(hasAuxFailure)) return true
     if (relevant.some(s => s.pending)) return 'pending'
     const loading = hasVisibleElLoading(doc)
     if (!recordDetailRoute(route)) return loading ? 'pending' : false
@@ -489,7 +513,7 @@ export function createPageFacts({view = window, doc = document} = {}) {
           render.push(...node.children)
         }
       }
-      if (render.length || !content || hasVisibleElLoading(doc) || hasVisibleElError(doc) || readPageBlocker()) return undefined
+      if (render.length || !content || hasVisibleElLoading(doc) || readPageBlocker()) return undefined
       return route
     } catch { return undefined }
   }
@@ -647,8 +671,8 @@ export const readPageRead = () => installed?.readPageRead()
 export const readPageFacets = () => installed ? installed.readPageFacets() : []
 export const disposeInstalledPageFacts = () => installed?.dispose()
 
-const OPEN_WAIT_MS = 3000
-const MOUNT_WAIT_MS = 2500
+const OPEN_WAIT_MS = 6000
+const MOUNT_WAIT_MS = 6000
 
 export async function openPage(url, {view = window, doc = document,
                                       mounted = () => Boolean(currentPageComponent())} = {}) {
@@ -665,15 +689,25 @@ export async function openPage(url, {view = window, doc = document,
     wanted = router.resolve(target.pathname + target.search)
     between = router.resolve({path: '/redirect' + wanted.path, query: wanted.query})
   } catch { return false }
-  if (!wanted?.matched?.length || wanted.fullPath === shown() || between?.name !== 'Redirect') return false
+  if (!wanted?.matched?.length) return false
+  if (wanted.fullPath === shown()) {
+    const built = Date.now() + MOUNT_WAIT_MS
+    try {
+      while (shown() === wanted.fullPath && !mounted() && Date.now() < built) {
+        await new Promise(resolve => view.setTimeout(resolve, 25))
+      }
+    } catch { /* next observation verifies readiness */ }
+    return true
+  }
   const layers = Array.from(doc.querySelectorAll(PAGE_LAYERS)).filter(element => {
     const box = element.getBoundingClientRect()
     return box.width && box.height
   })
+  const pushTarget = between?.name === 'Redirect' ? between : wanted
   try {
     tabs.delAllViews()
     await new Promise(resolve => view.setTimeout(resolve, 0))
-    if (await router.push(between)) return false
+    if (await router.push(pushTarget)) return false
     const until = Date.now() + OPEN_WAIT_MS
     while (shown() !== wanted.fullPath) {
       if (Date.now() > until) return false

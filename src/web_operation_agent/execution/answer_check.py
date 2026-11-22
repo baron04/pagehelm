@@ -192,22 +192,13 @@ def finalize_untraced(executor, s, turn, finish, untraced):
     else:
         deliverable = []
         narrative = list(untraced)
-    failed_indices = (
-        [i for i, item in enumerate(items) if any(in_item(token, item) for token in untraced)]
-        if items
-        else []
-    )
-    for i in failed_indices:
-        items[i]["status"] = "undelivered"
-    if failed_indices:
-        finish = {**finish, "items": items, "status": "cannot"}
+    shortcut_bypass = bool(not items and items_required)
     s.ledger.append(
         "untraced_numbers",
         numbers=list(untraced),
         sent_back=False,
         deliverable=list(deliverable),
         narrative=list(narrative),
-        **({"undelivered_indices": failed_indices} if failed_indices else {}),
     )
     record_check_fired(
         s.ledger,
@@ -219,7 +210,7 @@ def finalize_untraced(executor, s, turn, finish, untraced):
         answer_preserved=bool(str(finish.get("answer") or "").strip()),
     )
     max_chars = getattr(getattr(executor, "config", None), "max_user_answer_chars", 4000)
-    if deliverable:
+    if shortcut_bypass:
         status = "cannot"
         note = (
             "\n\n交付项「"
@@ -285,8 +276,21 @@ def untraced_numbers(executor, prompt: str, answer: str, turn) -> tuple[str, ...
     hook = getattr(getattr(executor, "profile", None), "untraced_numbers", None)
     if hook is None:
         return ()
-    sources = (prompt, *executor._earlier_words, *turn.get("tool_texts", ()))
-    return tuple(str(item) for item in hook(answer, sources))[:20]
+    tables = None
+    if hasattr(turn, "get"):
+        tables = turn.get("turn_tables") or turn.get("turn_tables_ref")
+    if isinstance(tables, tuple) and tables:
+        tables = tables[0]
+    extra_sums = tuple(sorted(getattr(tables, "precomputed_column_sums", ()) or ())) if tables is not None else ()
+    decoded_labels = tuple(sorted(getattr(tables, "decoded_ascii_labels", ()) or ())) if tables is not None else ()
+    sources = (prompt, *executor._earlier_words, *turn.get("tool_texts", ()), *extra_sums)
+    import inspect
+    try:
+        accepts_labels = "decoded_labels" in inspect.signature(hook).parameters
+    except (TypeError, ValueError):
+        accepts_labels = False
+    found = hook(answer, sources, decoded_labels=decoded_labels) if accepts_labels else hook(answer, sources)
+    return tuple(str(item) for item in found)[:20]
 
 
 def with_not_executed(s, turn, answer: str) -> str:

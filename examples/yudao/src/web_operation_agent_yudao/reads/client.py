@@ -93,7 +93,7 @@ class YudaoClient:
         self._account, self._timeout = account, timeout_s
         self._token: str | None = token
         self._tenant = str(account.tenant if account is not None else tenant or "1")
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self.calls: list[str] = []
         self._read_generation = 0
 
@@ -186,7 +186,8 @@ class YudaoClient:
         class NoRedirect(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, req, fp, code, msg, headers, newurl): return None
         opener = urllib.request.build_opener(NoRedirect())
-        self.calls.append(f"{method} {path}")
+        with self._lock:
+            self.calls.append(f"{method} {path}")
         from web_operation_agent.business.dispatch_evidence import mutation_transport
         with mutation_transport() as transport:
             try:
@@ -288,7 +289,8 @@ class YudaoClient:
         if token:
             headers["Authorization"] = f"Bearer {token}"
         data = json.dumps(body).encode() if body is not None else None
-        self.calls.append(f"{method} {path}")
+        with self._lock:
+            self.calls.append(f"{method} {path}")
         request = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=self._timeout) as response:

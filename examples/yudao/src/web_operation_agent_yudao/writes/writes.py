@@ -250,6 +250,8 @@ class NativeWriteHandler:
                     raise BusinessMutationRefusedError("related record changed after approval; prepare again", reason="precondition_changed")
                 if relation.get("field") in {"contactIds", "businessIds"}:
                     self._require_related_write(relation["entity"], relation["id"], actor)
+            before_contact_last_time = None
+            before_update_time = None
             if self.operation == "crm_follow_up_create":
                 follow_up = follow_up_target(entity)
                 current = self.client.get(entity + "/get", id=body["bizId"])
@@ -257,6 +259,8 @@ class NativeWriteHandler:
                 self._require_follow_up_target_write(body["bizType"], body["bizId"])
                 if current.get("id") != body["bizId"] or body["bizType"] != follow_up.biz_type:
                     raise BusinessMutationRefusedError("follow-up target changed after approval", reason="precondition_changed")
+                before_contact_last_time = current.get("contactLastTime")
+                before_update_time = current.get("updateTime")
                 choices = [row for row in self.client.get("system/dict-data/simple-list") or []
                     if row.get("dictType") == "crm_follow_up_type" and row.get("label") == args["follow_up_type"]]
                 if len(choices) != 1 or str(choices[0].get("value")) != str(body["type"]):
@@ -274,10 +278,11 @@ class NativeWriteHandler:
             path = (entity + ("/update" if is_update else "/create")
                     if self.operation in RECORD_OPERATIONS else "crm/follow-up-record/create")
             return {"preserved": preserved, "path": path,
-                    "method": "PUT" if is_update else "POST", "started_ms": 0}
+                    "method": "PUT" if is_update else "POST",
+                    "before_contact_last_time": before_contact_last_time,
+                    "before_update_time": before_update_time}
 
         def dispatch_once(_actor, reread_state):
-            reread_state["started_ms"] = int(time.time() * 1000)
             return self.client.write_once(reread_state["method"], reread_state["path"],
                                           body=body, operation=self.operation)
 
@@ -312,7 +317,13 @@ class NativeWriteHandler:
             if self.operation == "crm_follow_up_create":
                 follow_up = follow_up_target(entity)
                 main = self.client.get(entity + "/get", id=body["bizId"])
-                verified = follow_up.verified(main, body, reread_state["started_ms"], int(time.time() * 1000))
+                verified = follow_up.verified(
+                    main,
+                    body,
+                    actual.get("createTime"),
+                    reread_state.get("before_contact_last_time"),
+                    reread_state.get("before_update_time"),
+                )
                 effects.append({"effect": "main_follow_up", "verified": verified, "id": body["bizId"]})
                 if not verified:
                     raise BusinessMutationIndeterminate("follow-up record exists; main object is not verified",

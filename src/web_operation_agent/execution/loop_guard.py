@@ -338,9 +338,17 @@ def program_summary(content: str) -> str:
             inside = True
         elif line == "END_UNTRUSTED_APPLICATION_DATA":
             inside = False
-        elif not inside:
+        elif not inside and line:
             trusted.append(line)
-    return next(iter(trusted), "")[:200]
+    if not trusted:
+        return ""
+    first = trusted[0][:200]
+    extra = [
+        line[:240]
+        for line in trusted[1:]
+        if line.startswith(("本轮行表 ", "库存流水旁路对照"))
+    ]
+    return "\n".join([first, *extra][:3])[:360]
 
 
 def forget_old_observations(messages: list[dict], *, api_history_chars: int) -> None:
@@ -360,7 +368,7 @@ def forget_old_observations(messages: list[dict], *, api_history_chars: int) -> 
             if kept > api_history_chars:
                 message["content"] = (
                     program_summary(message["content"])
-                    + "\n（更早的接口结果已省略；还要用就带 fields 重新读）"
+                    + "\n（更早的接口结果已省略；本轮内存行表仍可直接用 sql / tables 查询，缺列再重读）"
                 )
                 message["_api"] = False
 
