@@ -44,7 +44,7 @@ export interface Freshness {
 const PASSIVE_ACTIONS = new Set(['observe', 'wait_for', 'scroll', 'form_model'])
 
 /** How long an application is given to open one of its own pages before it is loaded. */
-const APPLICATION_OPEN_MS = 6_000
+const APPLICATION_OPEN_MS = 8_000
 
 function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return promise
@@ -755,7 +755,8 @@ export async function dispatchAction(
     }
     ctx.save()
     const result = await ctx.execute(action.command) as CommandOutcome | null
-    if (result?.native_navigation_expected || ctx.mayNavigate(action.command)) {
+    const inPlaceDone = result?.message === 'already on page' || result?.message === 'application navigation requested'
+    if (!inPlaceDone && (result?.native_navigation_expected || ctx.mayNavigate(action.command))) {
       // What the expectation did not name is left to the wait's defaults: the top-level
       // window and document.
       const outcome = await waitForNavigation({

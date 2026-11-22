@@ -672,7 +672,23 @@ export const readPageFacets = () => installed ? installed.readPageFacets() : []
 export const disposeInstalledPageFacts = () => installed?.dispose()
 
 const OPEN_WAIT_MS = 6000
-const MOUNT_WAIT_MS = 6000
+
+function shownMatchesWanted(shownFullPath, wanted, origin) {
+  if (!shownFullPath) return false
+  if (shownFullPath === wanted.fullPath) return true
+  try {
+    const cur = new URL(shownFullPath, origin)
+    const req = new URL(wanted.fullPath, origin)
+    if (cur.pathname !== req.pathname) return false
+    for (const key of new Set(req.searchParams.keys())) {
+      const a = cur.searchParams.getAll(key), b = req.searchParams.getAll(key)
+      if (a.length !== b.length || a.some((v, i) => v !== b[i])) return false
+    }
+    return true
+  } catch {
+    return false
+  }
+}
 
 export async function openPage(url, {view = window, doc = document,
                                       mounted = () => Boolean(currentPageComponent())} = {}) {
@@ -684,16 +700,15 @@ export async function openPage(url, {view = window, doc = document,
   try { target = new URL(String(url), view.location.href) } catch { return false }
   if (target.origin !== view.location.origin || target.hash) return false
   const shown = () => router.currentRoute?.value?.fullPath
-  const before = view.location.pathname + view.location.search
   try {
     wanted = router.resolve(target.pathname + target.search)
     between = router.resolve({path: '/redirect' + wanted.path, query: wanted.query})
   } catch { return false }
   if (!wanted?.matched?.length) return false
+  const deadline = Date.now() + OPEN_WAIT_MS
   if (wanted.fullPath === shown()) {
-    const built = Date.now() + MOUNT_WAIT_MS
     try {
-      while (shown() === wanted.fullPath && !mounted() && Date.now() < built) {
+      while (shown() === wanted.fullPath && !mounted() && Date.now() < deadline) {
         await new Promise(resolve => view.setTimeout(resolve, 25))
       }
     } catch { /* next observation verifies readiness */ }
@@ -708,17 +723,17 @@ export async function openPage(url, {view = window, doc = document,
     tabs.delAllViews()
     await new Promise(resolve => view.setTimeout(resolve, 0))
     if (await router.push(pushTarget)) return false
-    const until = Date.now() + OPEN_WAIT_MS
-    while (shown() !== wanted.fullPath) {
-      if (Date.now() > until) return false
+    while (!shownMatchesWanted(shown(), wanted, view.location.origin)) {
+      if (Date.now() > deadline) return false
       await new Promise(resolve => view.setTimeout(resolve, 25))
     }
   } catch { return false }
-  if (view.location.pathname + view.location.search === before) return false
+  const currentShown = shown()
+  if (!shownMatchesWanted(currentShown, wanted, view.location.origin) ||
+      view.location.pathname + view.location.search !== currentShown) return false
   if (layers.length) carriedLayers.set(doc, new Set([...(carriedLayers.get(doc) || []), ...layers]))
-  const built = Date.now() + MOUNT_WAIT_MS
   try {
-    while (shown() === wanted.fullPath && !mounted() && Date.now() < built) {
+    while (shownMatchesWanted(shown(), wanted, view.location.origin) && !mounted() && Date.now() < deadline) {
       await new Promise(resolve => view.setTimeout(resolve, 25))
     }
   } catch { /* the page is open; whether it is built yet is the next observation's to say */ }

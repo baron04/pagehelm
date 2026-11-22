@@ -25,6 +25,11 @@ describe('an application asked to open its own page has opened it only when it s
     vi.useFakeTimers()
     const waiting = runtime(() => new Promise(() => {}))._openInApplication('/a')
     await vi.advanceTimersByTimeAsync(6_000)
+    let settled = false
+    waiting.then(() => { settled = true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(2_000)
     await expect(waiting).resolves.toBe(false)
   })
 })

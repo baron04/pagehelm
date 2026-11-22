@@ -1338,6 +1338,62 @@ describe('the application opens its own page through its router, in this documen
     } finally { Date.now = realNow }
     expect(lost.calls).toEqual(['drop kept pages', 'push /redirect/system/post'])
   })
+  it('succeeds when a destination page canonicalizes default query parameters on mount without reloading', async () => {
+    const calls: string[] = []
+    const location = {href: 'https://synthetic.test/index', origin: 'https://synthetic.test',
+      pathname: '/index', search: '', hash: ''}
+    const current = {value: {fullPath: '/index'}}
+    const show = (fullPath: string) => {
+      const url = new URL(fullPath, location.origin)
+      Object.assign(location, {href: url.href, pathname: url.pathname, search: url.search})
+      current.value = {fullPath}
+    }
+    const router = {
+      currentRoute: current,
+      resolve(to: string | {path: string; query?: Record<string, string>}) {
+        if (typeof to === 'string') {
+          const url = new URL(to, location.origin)
+          return {fullPath: url.pathname + url.search, path: url.pathname,
+            query: Object.fromEntries(url.searchParams), name: 'Page', matched: [{}]}
+        }
+        const search = new URLSearchParams(to.query || {}).toString()
+        return {fullPath: to.path + (search ? '?' + search : ''), path: to.path, query: to.query || {},
+          name: to.path.startsWith('/redirect/') ? 'Redirect' : 'Page', matched: [{}]}
+      },
+      async push(to: {fullPath: string; path: string}) {
+        calls.push('push ' + to.fullPath)
+        show(to.fullPath)
+        if (to.fullPath === '/redirect/pms/pm/project/list') {
+          setTimeout(() => show('/pms/pm/project/list?tabs=participate'), 10)
+        } else if (to.fullPath.startsWith('/redirect/')) {
+          setTimeout(() => show(to.fullPath.slice('/redirect'.length)), 10)
+        }
+        return undefined
+      },
+    }
+    const store = {delAllViews: () => { calls.push('drop kept pages') }}
+    const doc = {querySelectorAll: () => [],
+      getElementById: (id: string) => id === 'app' ? {__vue_app__: {config: {globalProperties: {
+        $router: router, $pinia: {_s: new Map([['tagsView', store]])}}}}} : null}
+    const opts = {view: {location, setTimeout}, doc, mounted: () => true}
+    // Initial navigation where onMounted immediately adds ?tabs=participate
+    await expect(openPage('https://synthetic.test/pms/pm/project/list', opts)).resolves.toBe(true)
+    expect(location.pathname + location.search).toBe('/pms/pm/project/list?tabs=participate')
+    // Re-navigating to bare /pms/pm/project/list when already on ?tabs=participate also stays in SPA
+    await expect(openPage('https://synthetic.test/pms/pm/project/list', opts)).resolves.toBe(true)
+    // Explicit mismatched query parameter must fail when overridden to a conflicting value
+    const realNow = Date.now
+    let now = realNow()
+    Date.now = () => (now += 1500)
+    try {
+      router.push = async (to: {fullPath: string; path: string}) => {
+        show(to.fullPath)
+        setTimeout(() => show('/pms/pm/project/list?tabs=participate'), 5)
+        return undefined
+      }
+      await expect(openPage('https://synthetic.test/pms/pm/project/list?tabs=owner', opts)).resolves.toBe(false)
+    } finally { Date.now = realNow }
+  })
 })
 
 describe('native editor mode is current application state', () => {
