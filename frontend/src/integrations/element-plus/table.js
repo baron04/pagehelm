@@ -10,6 +10,7 @@ export function collectVisibleElTableData(doc, findComponent, visibleFn = isElVi
   const tables = []
   for (const root of Array.from(doc.querySelectorAll('.el-table'))) {
     if (!visibleFn(root) || root.closest('[role="dialog"],dialog')) continue
+    if (root.parentElement?.closest('.el-table')) continue
     const data = findComponent(root, 'ElTable')?.instance?.props?.data
     if (Array.isArray(data)) tables.push(data)
   }

@@ -756,6 +756,25 @@ class LoopTests(unittest.TestCase):
         self.assertIn("订单时间：已填", said)
         self.assertEqual(turn["touched"], [("订单时间", "2026-10-01 ~ 2026-10-28")])
 
+    def test_a_prepopulated_range_keeps_first_input_uncommitted(self):
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        executor.knowledge, sent = None, []
+        executor._settled = lambda s, **kw: None
+        state, turn = State(), {"touched": [], "trace": []}
+        attrs = {"aria-haspopup": "dialog", "aria-controls": "range", "form_scope": "form:query",
+                 "form_instance": "query-instance"}
+        state.obs = PageObservation(1, 1, "https://synthetic.test/periods", "Periods", [], [
+            element(3, "combobox", "开始月份", "input", field_label="会计期间", value="2026-09", **attrs),
+            element(4, "combobox", "结束月份", "input", value="2026-09", **attrs),
+        ], content="[3]<input />\n[4]<input />")
+        executor._act = lambda s, action, args, **kw: sent.append((action, args)) or ""
+        result = executor._tool(state, "fill_fields", {"fields": [
+            {"label": "会计期间", "value": "2026-10 ~ 2026-10"}]}, turn)
+        self.assertEqual(sent, [
+            ("fill", {"ref": "e3", "value": "2026-10", "commit": False}),
+            ("fill", {"ref": "e4", "value": "2026-10", "commit": True})])
+        self.assertIn("会计期间：已填", result.feedback)
+
     def test_a_range_requires_two_visible_inputs_of_one_popup_and_form(self):
         attrs = {"aria-haspopup": "dialog", "aria-controls": "range", "form_scope": "form:query",
                  "form_instance": "query-instance"}

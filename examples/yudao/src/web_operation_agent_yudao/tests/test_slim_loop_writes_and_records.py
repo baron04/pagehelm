@@ -1093,6 +1093,97 @@ class Phase47Step1BaseTests(unittest.TestCase):
         self.assertFalse(data.name_searchable("system/login-log", "远辰"))
         self.assertFalse(data.name_searchable("report/writing", "远辰"))
 
+    def test_goal_data_name_searchable_and_page_size_cap_rules(self):
+        from web_operation_agent_yudao.goal_compat.goal import YudaoGoalData, _Entity
+
+        calls = []
+
+        class SyntheticClient:
+            read_generation = 1
+
+            def get(self, path, **params):
+                calls.append((path, dict(params)))
+                if path == "alpha/parent/list":
+                    return [{"id": 77, "name": "唯一父组"}]
+                if path == "alpha/small-item/page":
+                    if params.get("pageSize", 0) > 200:
+                        raise DataRefused("400 每页条数最大值为 200")
+                    return {"total": 2, "list": [{"id": 1, "name": "甲项"}, {"id": 2, "name": "乙项"}]}
+                return {"total": 0, "list": []}
+
+        array_resp = {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/ArrayResp"}}}}}
+        docs = {
+            "paths": {
+                "/admin-api/alpha/id-free-paged/page": {"get": {"parameters": [{"name": "pageNo", "in": "query"}, {"name": "pageSize", "in": "query"}]}},
+                "/admin-api/alpha/id-free-unpaged/list": {"get": {"parameters": [], "responses": array_resp}},
+                "/admin-api/alpha/kw-item/page": {"get": {"parameters": [{"name": "keyword", "in": "query"}, {"name": "pageNo", "in": "query"}, {"name": "pageSize", "in": "query"}]}},
+                "/admin-api/alpha/parent/list": {"get": {"parameters": [], "responses": array_resp}},
+                "/admin-api/alpha/child-cfg/list": {"get": {"parameters": [{"name": "parentId", "in": "query", "required": True}], "responses": array_resp}},
+                "/admin-api/alpha/small-item/page": {"get": {"parameters": [{"name": "pageNo", "in": "query"}, {"name": "pageSize", "in": "query"}]}},
+            },
+            "components": {"schemas": {"ArrayResp": {"properties": {"data": {"type": "array", "items": {}}}}}},
+        }
+        data = YudaoGoalData(SyntheticClient(), lambda: docs)
+        data._entities = {
+            "alpha/id-free-paged": _Entity(
+                key="alpha/id-free-paged", module="alpha", resource="id-free-paged", label="无主键分页",
+                list_path="alpha/id-free-paged/page", name_field="docCode",
+                params={"docCode": {"type": "string"}, "pageNo": {"type": "integer"}, "pageSize": {"type": "integer"}},
+                props={"docCode": {"type": "string"}},
+                required=frozenset(), fixed_params={}, has_get=False, operations=frozenset({"read"}), view=None,
+                lists={}, money={},
+            ),
+            "alpha/id-free-unpaged": _Entity(
+                key="alpha/id-free-unpaged", module="alpha", resource="id-free-unpaged", label="无主键全表",
+                list_path="alpha/id-free-unpaged/list", name_field="code",
+                params={"code": {"type": "string"}}, props={"code": {"type": "string"}},
+                required=frozenset(), fixed_params={}, has_get=False, operations=frozenset({"read"}), view=None,
+                lists={}, money={},
+            ),
+            "alpha/kw-item": _Entity(
+                key="alpha/kw-item", module="alpha", resource="kw-item", label="关键字分页",
+                list_path="alpha/kw-item/page", name_field="name",
+                params={"keyword": {"type": "string"}, "pageNo": {"type": "integer"}, "pageSize": {"type": "integer"}},
+                props={"id": {"type": "integer"}, "name": {"type": "string"}},
+                required=frozenset(), fixed_params={}, has_get=True, operations=frozenset({"read"}), view=None,
+                lists={}, money={},
+            ),
+            "alpha/parent": _Entity(
+                key="alpha/parent", module="alpha", resource="parent", label="父组",
+                list_path="alpha/parent/list", name_field="name",
+                params={}, props={"id": {"type": "integer"}, "name": {"type": "string"}},
+                required=frozenset(), fixed_params={}, has_get=False, operations=frozenset({"read"}), view=None,
+                lists={}, money={},
+            ),
+            "alpha/child-cfg": _Entity(
+                key="alpha/child-cfg", module="alpha", resource="child-cfg", label="子配置",
+                list_path="alpha/child-cfg/list", name_field="name",
+                params={"parentId": {"type": "integer"}},
+                props={"id": {"type": "integer"}, "parentId": {"type": "integer"}, "name": {"type": "string"}},
+                required=frozenset({"parentId"}), fixed_params={}, has_get=False, operations=frozenset({"read"}), view=None,
+                lists={}, money={},
+            ),
+            "alpha/small-item": _Entity(
+                key="alpha/small-item", module="alpha", resource="small-item", label="小表",
+                list_path="alpha/small-item/page", name_field="name",
+                params={"pageNo": {"type": "integer"}, "pageSize": {"type": "integer"}},
+                props={"id": {"type": "integer"}, "name": {"type": "string"}},
+                required=frozenset(), fixed_params={}, has_get=True, operations=frozenset({"read"}), view=None,
+                lists={}, money={},
+            ),
+        }
+        # Identifier-free paged endpoint is skipped even with narrowing param, while unpaged stays allowed.
+        self.assertFalse(data.name_searchable("alpha/id-free-paged", "DOC-1"))
+        self.assertTrue(data.name_searchable("alpha/id-free-unpaged", "C-1"))
+        # `keyword` param narrows search even when `keyword` is absent from response VO props.
+        self.assertTrue(data.name_searchable("alpha/kw-item", "候选人甲"))
+        # Sole-parent *Id resolves required parameter automatically.
+        self.assertTrue(data.name_searchable("alpha/child-cfg", "配置项"))
+        # Small paged table without name filter succeeds and remembers server max_page_size=200 after 400 cap error.
+        self.assertTrue(data.name_searchable("alpha/small-item", "甲项"))
+        self.assertEqual(data._entities["alpha/small-item"].max_page_size, 200)
+        self.assertTrue(any(p == ("alpha/small-item/page", {"pageNo": 1, "pageSize": 200}) for p in calls))
+
 
 if __name__ == "__main__":
     unittest.main()

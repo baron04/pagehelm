@@ -1,12 +1,24 @@
 /** Application-owned wrapper around the pinned generic controller, never a new harness. */
 import {PageController as GenericPageController, getElementByIndex as controllerElement,
   scrollIntoViewIfNeeded} from './page-controller.js'
-import {isElDateRangeInput} from '../element-plus/date-picker.js'
 import {findElSelectWrapperForClick, isElSubMenuContainer,
   shouldAvoidSelectInnerInput} from '../element-plus/select.js'
-import {lineControls, nativeControlElement, nativeRangeDateCell, nativeRangeDateStep,
-  withLineControls, withTreeQueryControls, withUserStatusControls, withObservedRowColumns,
-  withObservedSurfaceDetails} from './page-facts.js'
+import {
+  isElMonthRangeInput,
+  isElRangePickerInput,
+  isElRangePopupOpen,
+  lineControls,
+  nativeControlElement,
+  nativeMonthRangeCell,
+  nativeMonthRangeStep,
+  nativeRangeDateCell,
+  nativeRangeDateStep,
+  withLineControls,
+  withTreeQueryControls,
+  withUserStatusControls,
+  withObservedRowColumns,
+  withObservedSurfaceDetails,
+} from './page-facts.js'
 import {boundClick, boundInput, boundRecord, readElementPageControl as ordinaryControl} from './page-facts.js'
 import {installOverlayOffset} from './form-surface.js'
 
@@ -16,19 +28,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 let pressed = null
 const notify = callback => { try { callback() } catch { /* Diagnostics never stop a page action. */ } }
 
-/** The generic controller's click on an element: the same events to the same targets in the
- * same order, without the 0.4 s it first spends moving a pointer. That pointer is drawn by
- * the controller's mask, which the runtime keeps off, so the pause shows nobody anything.
- * The pause after the click, in which the page reacts before it is observed, is kept. */
-export async function clickElement(element, invoked = () => {}) {
-  if (pressed) {
-    pressed.dispatchEvent(new PointerEvent('pointerout', {bubbles: true}))
-    pressed.dispatchEvent(new PointerEvent('pointerleave', {bubbles: false}))
-    pressed.dispatchEvent(new MouseEvent('mouseout', {bubbles: true}))
-    pressed.dispatchEvent(new MouseEvent('mouseleave', {bubbles: false}))
-    pressed.blur()
-  }
-  pressed = element
+async function dispatchPointerClick(element, focusTarget, pauseMs, invoked) {
   await scrollIntoViewIfNeeded(element)
   const frame = element.ownerDocument.defaultView?.frameElement
   if (frame) await scrollIntoViewIfNeeded(frame)
@@ -46,11 +46,35 @@ export async function clickElement(element, invoked = () => {}) {
   target.dispatchEvent(new MouseEvent('mouseenter', {...mouse, bubbles: false}))
   target.dispatchEvent(new PointerEvent('pointerdown', pointer))
   target.dispatchEvent(new MouseEvent('mousedown', mouse))
-  element.focus({preventScroll: true})
+  focusTarget.focus({preventScroll: true})
   target.dispatchEvent(new PointerEvent('pointerup', pointer))
   target.dispatchEvent(new MouseEvent('mouseup', mouse))
   target.click()
-  await pause(200)
+  if (focusTarget !== element) focusTarget.focus({preventScroll: true})
+  await pause(pauseMs)
+}
+
+/** The generic controller's click on an element: the same events to the same targets in the
+ * same order, without the 0.4 s it first spends moving a pointer. That pointer is drawn by
+ * the controller's mask, which the runtime keeps off, so the pause shows nobody anything.
+ * The pause after the click, in which the page reacts before it is observed, is kept. */
+export async function clickElement(element, invoked = () => {}) {
+  if (pressed) {
+    pressed.dispatchEvent(new PointerEvent('pointerout', {bubbles: true}))
+    pressed.dispatchEvent(new PointerEvent('pointerleave', {bubbles: false}))
+    pressed.dispatchEvent(new MouseEvent('mouseout', {bubbles: true}))
+    pressed.dispatchEvent(new MouseEvent('mouseleave', {bubbles: false}))
+    pressed.blur()
+  }
+  pressed = element
+  await dispatchPointerClick(element, element, 200, invoked)
+}
+
+/** Click inside an open Element Plus range popup without `pressed.blur()`, keeping focus
+ * on `ownerInput` so `useFocusController` never dismisses range-selection state. */
+async function clickRangePopupElement(target, ownerInput, invoked = () => {}) {
+  pressed = ownerInput
+  await dispatchPointerClick(target, ownerInput, 150, invoked)
 }
 
 /** The generic controller's typing into an input or a text area, over the click above. */
@@ -127,23 +151,55 @@ export class PageController extends GenericPageController {
     if (bindings && await boundInput(element, text, () => record('binding'))) {
       return finish({success: true, message: 'component input binding'})
     }
-    const range = isElDateRangeInput(element)
+    if (isElRangePickerInput(element)) {
+      const monthRange = isElMonthRangeInput(element)
+      const root = element.closest('.el-date-editor')
+      const inputs = root ? [...root.querySelectorAll(':scope > .el-range-input')] : []
+      const end = inputs.indexOf(element)
+      if (!isElRangePopupOpen(element)) {
+        await clickElement(element, () => record('ordinary'))
+      }
+      const findCell = () => monthRange ? nativeMonthRangeCell(element, text) : nativeRangeDateCell(element, text)
+      const findStep = () => monthRange ? nativeMonthRangeStep(element, text) : nativeRangeDateStep(element, text)
+      let cell = findCell()
+      for (let turns = 0; !cell && turns < 48; turns++) {
+        const step = findStep()
+        if (!step) break
+        await clickRangePopupElement(step, element, () => record('ordinary'))
+        cell = findCell()
+      }
+      if (!cell || !cell.isConnected || !cell.getBoundingClientRect().width) {
+        return finish({success: false, message: 'Failed to input text: the exact native calendar day is unavailable'})
+      }
+      await clickRangePopupElement(cell, element, () => record('ordinary'))
+      if (root?.classList.contains('el-date-editor--datetimerange') && end >= 0) {
+        const popupId = element.getAttribute('aria-controls')
+        const popup = popupId && document.getElementById(popupId)
+        const timeMatch = / (\d{2}:\d{2}:\d{2})$/.exec(text || '')
+        const desiredTime = timeMatch ? timeMatch[1] : (end === 1 ? '23:59:59' : '')
+        if (popup && desiredTime) {
+          const wraps = [...popup.querySelectorAll('.el-date-range-picker__time-header .el-date-range-picker__editors-wrap')]
+          const timeInput = wraps[end]?.querySelectorAll('input')?.[1]
+          if (timeInput instanceof HTMLInputElement && !timeInput.readOnly && !timeInput.disabled) {
+            if (timeMatch || (end === 1 && timeInput.value === '00:00:00')) {
+              Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(timeInput, desiredTime)
+              timeInput.dispatchEvent(new Event('input', {bubbles: true}))
+              timeInput.dispatchEvent(new Event('change', {bubbles: true}))
+            }
+          }
+        }
+        if (popup && end === 1) {
+          const confirmBtn = popup.querySelector('.el-picker-panel__footer button.is-plain:not(.is-text)')
+          if (confirmBtn instanceof HTMLButtonElement && !confirmBtn.disabled && confirmBtn.isConnected) {
+            await dispatchPointerClick(confirmBtn, confirmBtn, 250, () => record('ordinary'))
+            pressed = confirmBtn
+            element.blur()
+          }
+        }
+      }
+      return finish({success: true, message: `Input text (${text}) into element (${this.elementTextMap.get(index) ?? index}).`})
+    }
     const result = await this.typed(index, element, text, () => record('ordinary'))
-    if (!range || result?.success !== true) return finish(result)
-    let cell = nativeRangeDateCell(element, text)
-    for (let turns = 0; !cell && turns < 48; turns++) {
-      const step = nativeRangeDateStep(element, text)
-      if (!step) break
-      await clickElement(step, () => record('ordinary'))
-      cell = nativeRangeDateCell(element, text)
-    }
-    if (!cell || !cell.isConnected || !cell.getBoundingClientRect().width) {
-      throw new Error('the exact native calendar day is unavailable')
-    }
-    // Stay inside the owned popup before the generic controller's pre-click blur.
-    // Native calendar selection preserves the application's default endpoint times.
-    cell.focus({preventScroll: true})
-    await clickElement(cell, () => record('ordinary'))
     return finish(result)
   }
 

@@ -13,6 +13,12 @@ import sys
 import threading
 import urllib.request
 
+from evals.yudao.env_lease import (
+    DEFAULT_LEASE_LOCK_FILE,
+    DEFAULT_LEASE_STATE_FILE,
+    EnvLeaseGuard,
+)
+
 ROOT = Path(__file__).resolve().parents[3]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT / "examples/yudao/src"), str(ROOT / "examples/yudao/deploy/local")]
 
@@ -43,35 +49,61 @@ def login(origin: str, accounts: Path, name: str) -> dict:
 
 
 class Stack:
-    def __init__(self, environment: int, state: Path, accounts: Path, account: str = "admin", *, front_port: int = 48200):
+    def __init__(
+        self,
+        environment: int,
+        state: Path,
+        accounts: Path,
+        account: str = "admin",
+        *,
+        front_port: int = 48200,
+        lease_token: str | None = None,
+        lease_state_file: Path = DEFAULT_LEASE_STATE_FILE,
+        lease_lock_file: Path = DEFAULT_LEASE_LOCK_FILE,
+    ):
         self.environment, self.state, self.accounts, self.account = environment, Path(state), accounts, account
         # The environment's published entry is its own same-origin front, which only answers a
         # request that names `localhost`; this stack stands in front of it and leaves it as found.
         self.upstream = f"http://localhost:{40000 + environment}"
         self.ports = (front_port, front_port + 1, front_port + 2, front_port + 3)
         self.origin = f"http://localhost:{front_port}"
+        self.lease_token = lease_token
+        self._lease_state_file = Path(lease_state_file)
+        self._lease_lock_file = Path(lease_lock_file)
+        self._lease: EnvLeaseGuard | None = None
         self.front = self.proxy = self.guard = self.port = None
         self.token = None
 
     def start(self):
-        self.state.mkdir(parents=True, exist_ok=True)
-        settings = serve.Settings(self.environment, "phase46-write-contract", self.origin, upstream=self.upstream,
-                                  state=self.state, ports=self.ports, listen_host="127.0.0.1")
-        self.front = serve.Front(settings)
-        self.front.ready = True
-        threading.Thread(target=self.front.serve_forever, daemon=True).start()
-        fence = json.loads(POLICY.read_text(encoding="utf-8"))
-        self.guard = NativePageGuard(frozenset(), writing_gets=frozenset(fence["writing_gets"]),
-                                     journal=self.state / "guard.sqlite3")
-        self.proxy = NativeGuardProxy(upstream=self.upstream, origin=self.origin, guard=self.guard,
-                                      resolve_actor=GuardIdentity(self.upstream), host="127.0.0.1",
-                                      port=self.ports[3], application_window=True, ingress_base=self.origin).start()
-        self.proxy.verify_ingress()
-        self.token = login(self.upstream, self.accounts, self.account)
-        self.client = YudaoClient.for_token(self.upstream, self.token["access"], self.token["tenant"])
-        self._docs = None
-        self.port = YudaoSubmitPort(self.client, self.proxy, self.api_docs)
-        return self
+        self._lease = EnvLeaseGuard(
+            (self.environment,),
+            experiment="write-contract",
+            lease_token=self.lease_token,
+            state_file=self._lease_state_file,
+            lock_file=self._lease_lock_file,
+        ).__enter__()
+        try:
+            self.state.mkdir(parents=True, exist_ok=True)
+            settings = serve.Settings(self.environment, "phase46-write-contract", self.origin, upstream=self.upstream,
+                                      state=self.state, ports=self.ports, listen_host="127.0.0.1")
+            self.front = serve.Front(settings)
+            self.front.ready = True
+            threading.Thread(target=self.front.serve_forever, daemon=True).start()
+            fence = json.loads(POLICY.read_text(encoding="utf-8"))
+            self.guard = NativePageGuard(frozenset(), writing_gets=frozenset(fence["writing_gets"]),
+                                         journal=self.state / "guard.sqlite3")
+            self.proxy = NativeGuardProxy(upstream=self.upstream, origin=self.origin, guard=self.guard,
+                                          resolve_actor=GuardIdentity(self.upstream), host="127.0.0.1",
+                                          port=self.ports[3], application_window=True, ingress_base=self.origin).start()
+            self.proxy.verify_ingress()
+            self.token = login(self.upstream, self.accounts, self.account)
+            self.client = YudaoClient.for_token(self.upstream, self.token["access"], self.token["tenant"])
+            self._docs = None
+            self.port = YudaoSubmitPort(self.client, self.proxy, self.api_docs)
+            return self
+        except Exception:
+            self.close()
+            raise
 
     def api_docs(self):
         if self._docs is None:
@@ -82,11 +114,16 @@ class Stack:
         return self.proxy.resolve_actor(self.token["access"], self.token["tenant"])
 
     def close(self):
-        if self.proxy is not None:
-            self.proxy.close()
-        if self.front is not None:
-            self.front.shutdown()
-            self.front.server_close()
+        try:
+            if self.proxy is not None:
+                self.proxy.close()
+            if self.front is not None:
+                self.front.shutdown()
+                self.front.server_close()
+        finally:
+            if self._lease is not None:
+                self._lease.release()
+                self._lease = None
 
     def __enter__(self):
         return self.start()

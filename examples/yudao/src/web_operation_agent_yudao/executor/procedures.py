@@ -1204,12 +1204,14 @@ class YudaoProceduresBase:
                 else:
                     if _unavailable_already_matches(element, text):
                         continue
-                    failed = self._act(s, "fill", {"ref": element.ref, "value": text,
-                                                   "commit": _commits(element, s.obs.elements)})
+                    commit = False if (pair and at == 0) else _commits(element, s.obs.elements)
+                    failed = self._act(s, "fill", {"ref": element.ref, "value": text, "commit": commit})
                 if failed or s.terminal_reason:
                     break
                 dispatched_any = True
                 expected.append((field_identity(element), text))
+                if pair and at == 0:
+                    continue
                 coalesce_plain = False
                 if kind == "" and not pair and field_idx + 1 < len(fields):
                     nxt_label = str(fields[field_idx + 1].get("label", "")).strip().rstrip(":：").strip()
@@ -1449,7 +1451,7 @@ class YudaoProceduresBase:
                 else:
                     hits = self.goal_port.records_named(name, context=context, entities=among)
                     failures = ()
-                hits = hits[:4]
+                hits = hits[:12]
                 scope_notes.extend(f"{entity} 的列表读取" + ("被应用明确拒绝" if denied else "未完成")
                                    for entity, denied, _read_failed in failures)
                 near, lists = [], []
@@ -1509,7 +1511,7 @@ class YudaoProceduresBase:
             else:
                 global_hits = self.goal_port.records_named(name, context=context, entities=None)
                 global_failures = ()
-            global_hits = global_hits[:4]
+            global_hits = global_hits[:12]
             if global_hits:
                 hits = global_hits
                 scope_notes.extend(

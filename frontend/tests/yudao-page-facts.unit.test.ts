@@ -1619,6 +1619,52 @@ describe('native editor mode is current application state', () => {
       expect(facts.readPageQuery()).toBeUndefined()
     } finally { facts.dispose() }
   })
+  it('supports hyphenated list paths, benign keyword filters, >16 empty-param pruning, tree rows, and unpaged id-free lists', async () => {
+    const state = mountedPage('/synthetic/items', 'SyntheticItems')
+    const tableProps = pageTable(state, [{id: 1, children: [{id: 2}]}])
+    class Request extends EventTarget {
+      responseType = 'json'
+      response: unknown = {code: 0, data: {list: [{id: 1}, {id: 2}], total: 2}}
+      status = 200
+      open() {}
+      send() { this.dispatchEvent(new Event('loadend')) }
+    }
+    const facts = installPageFacts({location: window.location, fetch: window.fetch,
+      XMLHttpRequest: Request, crypto: window.crypto}, document)
+    try {
+      const sendReq = (url: string, response: unknown) => {
+        const req = new Request()
+        req.response = response
+        // @ts-expect-error Installed XHR wrapper accepts URL strings.
+        req.open('GET', url)
+        req.send()
+      }
+      const empties = Array.from({length: 14}, (_, i) => `f${i}=`).join('&')
+      sendReq(
+        `/admin-api/synthetic/item-page?pageNo=1&pageSize=10&alphaKeyword=abc&${empties}`,
+        {code: 0, data: {list: [{id: 1}, {id: 2}], total: 2}},
+      )
+      await vi.waitFor(() => {
+        expect(facts.readPageQuery()).toEqual({
+          path: '/admin-api/synthetic/item-page',
+          parameters: {pageNo: '1', pageSize: '10', alphaKeyword: 'abc'},
+        })
+      })
+      sendReq('/admin-api/synthetic/item-page?apiKey=secret-key', {code: 0, data: {list: [{id: 1}, {id: 2}], total: 2}})
+      expect(facts.readPageQuery()).toBeUndefined()
+      sendReq('/admin-api/synthetic/item-simple-list?pageNo=1', {code: 0, data: [{id: 1}, {id: 2}]})
+      expect(facts.readPageQuery()).toBeUndefined()
+
+      tableProps.data = [{code: 'R1', amount: 10}]
+      sendReq('/admin-api/synthetic/item-list?period=2026-01', {code: 0, data: [{code: 'R1', amount: 10}]})
+      await vi.waitFor(() => {
+        expect(facts.readPageQuery()).toEqual({
+          path: '/admin-api/synthetic/item-list',
+          parameters: {period: '2026-01'},
+        })
+      })
+    } finally { facts.dispose() }
+  })
   it('classifies body-teleported popover query controls owned by the active page query ElForm', () => {
     const state = mountedPage('/erp/purchase/order', 'ErpPurchaseOrder')
     state.element.innerHTML = '<form class="el-form"></form>'

@@ -1,12 +1,12 @@
 import {afterEach, describe, expect, it} from 'vitest'
 // @ts-expect-error Generic Element Plus modules ship as framework-free JS.
-import {isElDateRangeInput, nativeRangeDateCell} from '../src/integrations/element-plus/date-picker.js'
+import {isElDateRangeInput, isElMonthRangeInput, isElRangePickerInput, nativeMonthRangeCell, nativeMonthRangeStep, nativeRangeDateCell, nativeRangeDateStep} from '../src/integrations/element-plus/date-picker.js'
 // @ts-expect-error Generic Element Plus modules ship as framework-free JS.
 import {installElOverlayOffset, pressElConfirmButton, readElConfirmBox, readElFormFacets} from '../src/integrations/element-plus/form.js'
 // @ts-expect-error Generic Element Plus modules ship as framework-free JS.
 import {findElSelectWrapperForClick, resolveElControlElement} from '../src/integrations/element-plus/select.js'
 // @ts-expect-error Generic Element Plus modules ship as framework-free JS.
-import {annotateElLineControls, collectElFormLineControls} from '../src/integrations/element-plus/table.js'
+import {annotateElLineControls, collectElFormLineControls, collectVisibleElTableData} from '../src/integrations/element-plus/table.js'
 // @ts-expect-error Generic Element Plus modules ship as framework-free JS.
 import {annotateElDescriptions} from '../src/integrations/element-plus/descriptions.js'
 // @ts-expect-error Generic Element Plus modules ship as framework-free JS.
@@ -176,5 +176,65 @@ describe('generic Element Plus integration helpers', () => {
     expect(out).toContain('tree half-checked (1): 系统权限')
     expect(out).toContain('tree checked (1): 用户管理')
     expect(out).toContain('tree half-checked (1): 系统管理')
+  })
+
+  it('supports datetimerange headers, fast year stepping, monthrange cells, and ignores nested el-tables', () => {
+    const host = document.createElement('div')
+    host.innerHTML = '<div class="el-date-editor el-date-editor--datetimerange">'
+      + '<input class="el-range-input" aria-haspopup="dialog" aria-controls="dt-1"></div>'
+      + '<div id="dt-1" role="dialog">'
+      + '<div class="el-date-range-picker__content is-left">'
+      + '<div class="el-date-range-picker__header"><button type="button" class="d-arrow-left"></button><button type="button" class="arrow-left"></button>'
+      + '<div class="el-date-range-picker__header-label">2026年 10月</div></div>'
+      + '<table role="grid"><tbody><tr><td class="available"><span class="el-date-table-cell__text">15</span></td></tr></tbody></table></div>'
+      + '<div class="el-date-range-picker__content is-right">'
+      + '<div class="el-date-range-picker__header"><button type="button" class="d-arrow-right"></button><button type="button" class="arrow-right"></button>'
+      + '<div class="el-date-range-picker__header-label">2026年 11月</div></div>'
+      + '<table role="grid"><tbody><tr><td class="available"><span class="el-date-table-cell__text">20</span></td></tr></tbody></table></div>'
+      + '</div>'
+      + '<div class="el-date-editor el-date-editor--monthrange">'
+      + '<input class="el-range-input" aria-haspopup="dialog" aria-controls="mr-1"></div>'
+      + '<div id="mr-1" role="dialog">'
+      + '<div class="el-date-range-picker__content is-left"><div class="el-date-range-picker__header"><button type="button" class="d-arrow-left"></button><div>2026 年</div></div>'
+      + '<table class="el-month-table"><tbody><tr><td aria-label="1 月">Jan</td></tr></tbody></table></div>'
+      + '<div class="el-date-range-picker__content is-right"><div class="el-date-range-picker__header"><button type="button" class="d-arrow-right"></button><div>2027 年</div></div>'
+      + '<table class="el-month-table"><tbody><tr><td aria-label="12 月">Dec</td></tr></tbody></table></div>'
+      + '</div>'
+      + '<div class="el-table outer"><div class="el-table inner"></div></div>'
+    document.body.append(host)
+    for (const el of host.querySelectorAll('*')) {
+      el.getBoundingClientRect = () => ({width: 100, height: 24, top: 10, bottom: 34, left: 0, right: 100, x: 0, y: 10, toJSON: () => ({})})
+    }
+
+    const dtInput = host.querySelector('.el-date-editor--datetimerange input') as HTMLInputElement
+    expect(isElRangePickerInput(dtInput)).toBe(true)
+    expect(isElMonthRangeInput(dtInput)).toBe(false)
+    // Header label with combined "YYYY年 M月" in single element resolves both panels cleanly.
+    const leftHeader = host.querySelector('#dt-1 .is-left .el-date-range-picker__header')!
+    leftHeader.innerHTML = '<button type="button" class="d-arrow-left"></button><button type="button" class="arrow-left"></button>'
+      + '<div class="el-date-range-picker__header-label">2026年</div><div class="el-date-range-picker__header-label">10月</div>'
+    const rightHeader = host.querySelector('#dt-1 .is-right .el-date-range-picker__header')!
+    rightHeader.innerHTML = '<button type="button" class="d-arrow-right"></button><button type="button" class="arrow-right"></button>'
+      + '<div class="el-date-range-picker__header-label">2026年</div><div class="el-date-range-picker__header-label">11月</div>'
+    expect(nativeRangeDateCell(dtInput, '2026-10-15 00:00:00')).toBe(host.querySelector('#dt-1 .is-left td.available'))
+    expect(nativeRangeDateStep(dtInput, '2025-10-15 00:00:00')).toBe(host.querySelector('#dt-1 .is-left button.d-arrow-left'))
+    expect(nativeRangeDateStep(dtInput, '2026-09-15 00:00:00')).toBe(host.querySelector('#dt-1 .is-left button.arrow-left'))
+    expect(nativeRangeDateStep(dtInput, '2027-12-15 23:59:59')).toBe(host.querySelector('#dt-1 .is-right button.d-arrow-right'))
+
+    const mrInput = host.querySelector('.el-date-editor--monthrange input') as HTMLInputElement
+    expect(isElMonthRangeInput(mrInput)).toBe(true)
+    expect(isElRangePickerInput(mrInput)).toBe(true)
+    expect(nativeMonthRangeCell(mrInput, '2026-01')).toBe(host.querySelector('#mr-1 .is-left td[aria-label="1 月"]'))
+    expect(nativeMonthRangeStep(mrInput, '2025-06')).toBe(host.querySelector('#mr-1 .is-left button.d-arrow-left'))
+    expect(nativeMonthRangeStep(mrInput, '2028-06')).toBe(host.querySelector('#mr-1 .is-right button.d-arrow-right'))
+
+    const outer = host.querySelector('.outer')!
+    const inner = host.querySelector('.inner')!
+    const tables = collectVisibleElTableData(document, (root: Element, name: string) =>
+      name === 'ElTable' ? {instance: {props: {data: root === outer ? [{id: 1}] : [{sub: 2}]}}} : undefined,
+      () => true)
+    expect(tables).toEqual([[{id: 1}]])
+    expect(tables).not.toContainEqual([{sub: 2}])
+    void inner
   })
 })

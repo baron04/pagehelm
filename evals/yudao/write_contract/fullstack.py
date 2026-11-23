@@ -18,6 +18,11 @@ import threading
 
 from . import stack as _stack
 from .stack import ROOT, login, serve, native  # noqa: F401  (serve and native come from the stack module)
+from evals.yudao.env_lease import (
+    DEFAULT_LEASE_LOCK_FILE,
+    DEFAULT_LEASE_STATE_FILE,
+    EnvLeaseGuard,
+)
 from web_operation_agent_yudao.reads.client import YudaoClient
 
 POLICIES = ROOT / "examples/yudao/deploy/cloud/native-policy"
@@ -116,54 +121,86 @@ def receipt_of(request: dict) -> str:
 
 
 class FullStack:
-    def __init__(self, environment: int, state: Path, accounts: Path, script, *, account="admin", front_port=48200,
-                 model_name="deepseek-flash"):
+    def __init__(
+        self,
+        environment: int,
+        state: Path,
+        accounts: Path,
+        script,
+        *,
+        account="admin",
+        front_port=48200,
+        model_name="deepseek-flash",
+        lease_token: str | None = None,
+        lease_state_file: Path = DEFAULT_LEASE_STATE_FILE,
+        lease_lock_file: Path = DEFAULT_LEASE_LOCK_FILE,
+    ):
         self.environment, self.state, self.accounts, self.account = environment, Path(state), accounts, account
         self.upstream = f"http://localhost:{40000 + environment}"
         self.ports = (front_port, front_port + 1, front_port + 2, front_port + 3)
         self.origin = f"http://localhost:{front_port}"
+        self.lease_token = lease_token
+        self._lease_state_file = Path(lease_state_file)
+        self._lease_lock_file = Path(lease_lock_file)
+        self._lease: EnvLeaseGuard | None = None
         self.model = ScriptedModel(script)
         self.model_name = model_name
         self.front = self.host = self.boot = None
 
     def start(self):
-        self.state.mkdir(parents=True, exist_ok=True)
-        settings = serve.Settings(self.environment, "phase46-write-contract", self.origin, upstream=self.upstream,
-                                  state=self.state, ports=self.ports, listen_host="127.0.0.1")
-        self.front = serve.Front(settings)
-        threading.Thread(target=self.front.serve_forever, daemon=True).start()
-        env = {"AGENT_OPENAI_BASE_URL": self.model.url, "AGENT_OPENAI_API_KEY": "scripted", "AGENT_OPENAI_MODEL": self.model_name}
-        policy = POLICIES
-        self.host = native.YudaoHost(native.YudaoHostConfig(
-            api_base=self.upstream, public_origin=self.origin, public_agent_url=self.origin + "/woa-agent",
-            state_dir=self.state, gateway_host="127.0.0.1", gateway_port=self.ports[1],
-            bootstrap_host="127.0.0.1", bootstrap_port=self.ports[2], native_guard_port=self.ports[3],
-            native_ingress_base=self.origin, ui_source=ROOT / ".q0-cache/yudao/ui", source_release="v2026.09",
-            native_read_policy=policy / "fence.json", native_page_policy=policy / "pages.json",
-            native_money_policy=policy / "verified-money.json", native_filter_semantics=policy / "filters.json",
-            native_page_admission="read-only-window", native_writes=True, native_submit=True,
-            native_edit_prefill=True, model=self.model_name, model_env=env, daily_allowance_cny=20.0))
-        self.host.server.start()
-        self.boot = ThreadingHTTPServer(("127.0.0.1", self.ports[2]), native._handler(self.host))
-        threading.Thread(target=self.boot.serve_forever, daemon=True).start()
-        threading.Thread(target=self.host._warm_api_docs, daemon=True).start()
-        self.front.ready = True
-        self.front.api_docs_loaded = True
-        self.token = login(self.upstream, self.accounts, self.account)
-        self.client = YudaoClient.for_token(self.upstream, self.token["access"], self.token["tenant"])
-        return self
+        self._lease = EnvLeaseGuard(
+            (self.environment,),
+            experiment="write-contract",
+            lease_token=self.lease_token,
+            state_file=self._lease_state_file,
+            lock_file=self._lease_lock_file,
+        ).__enter__()
+        try:
+            self.state.mkdir(parents=True, exist_ok=True)
+            settings = serve.Settings(self.environment, "phase46-write-contract", self.origin, upstream=self.upstream,
+                                      state=self.state, ports=self.ports, listen_host="127.0.0.1")
+            self.front = serve.Front(settings)
+            threading.Thread(target=self.front.serve_forever, daemon=True).start()
+            env = {"AGENT_OPENAI_BASE_URL": self.model.url, "AGENT_OPENAI_API_KEY": "scripted", "AGENT_OPENAI_MODEL": self.model_name}
+            policy = POLICIES
+            self.host = native.YudaoHost(native.YudaoHostConfig(
+                api_base=self.upstream, public_origin=self.origin, public_agent_url=self.origin + "/woa-agent",
+                state_dir=self.state, gateway_host="127.0.0.1", gateway_port=self.ports[1],
+                bootstrap_host="127.0.0.1", bootstrap_port=self.ports[2], native_guard_port=self.ports[3],
+                native_ingress_base=self.origin, ui_source=ROOT / ".q0-cache/yudao/ui", source_release="v2026.09",
+                native_read_policy=policy / "fence.json", native_page_policy=policy / "pages.json",
+                native_money_policy=policy / "verified-money.json", native_filter_semantics=policy / "filters.json",
+                native_page_admission="read-only-window", native_writes=True, native_submit=True,
+                native_edit_prefill=True, model=self.model_name, model_env=env, daily_allowance_cny=20.0))
+            self.host.server.start()
+            self.boot = ThreadingHTTPServer(("127.0.0.1", self.ports[2]), native._handler(self.host))
+            threading.Thread(target=self.boot.serve_forever, daemon=True).start()
+            threading.Thread(target=self.host._warm_api_docs, daemon=True).start()
+            self.front.ready = True
+            self.front.api_docs_loaded = True
+            self.token = login(self.upstream, self.accounts, self.account)
+            self.client = YudaoClient.for_token(self.upstream, self.token["access"], self.token["tenant"])
+            return self
+        except Exception:
+            self.close()
+            raise
 
     def close(self):
-        for server in (self.boot, ):
-            if server is not None:
-                server.shutdown()
-                server.server_close()
-        if self.host is not None:
-            self.host.close()
-        if self.front is not None:
-            self.front.shutdown()
-            self.front.server_close()
-        self.model.close()
+        try:
+            for server in (self.boot, ):
+                if server is not None:
+                    server.shutdown()
+                    server.server_close()
+            if self.host is not None:
+                self.host.close()
+            if self.front is not None:
+                self.front.shutdown()
+                self.front.server_close()
+            self.model.close()
+        finally:
+            if self._lease is not None:
+                self._lease.release()
+                self._lease = None
 
     def __enter__(self):
         return self.start()

@@ -131,6 +131,8 @@ class YudaoGoalData:
         self._dict_names: dict[str, str] = {}
         #: entity -> (when read, id -> name), for links whose rows carry only the number.
         self._shown: dict[str, tuple[float, dict]] = {}
+        #: (generation, entity) -> whether unfiltered paged table fits in a single bounded page.
+        self._small_table: dict[tuple[int, str], bool] = {}
         #: (entity, pushed-down parameters) -> (when read, rows): one answer reads the same
         #: list several times (a count, its rows, a total).
         self._read: OrderedDict[tuple, tuple] = OrderedDict()
@@ -144,6 +146,7 @@ class YudaoGoalData:
         with self._lock:
             self._read.clear()
             self._shown.clear()
+            self._small_table.clear()
 
     @property
     def _docs(self) -> dict:
@@ -252,6 +255,7 @@ class YudaoGoalData:
                 self._lines.clear()
                 self._read.clear()
                 self._shown.clear()
+                self._small_table.clear()
                 self._menu_entries, self._menu_complete = (), False
                 self._read_generation = generation
                 self._schema_generation = generation
@@ -600,12 +604,22 @@ class YudaoGoalData:
         for suffix, op in (("create", "create"), ("update", "write"), ("delete", "delete")):
             if f"{module}:{resource.replace('/', '-')}:{suffix}" in permissions:
                 ops.add(op)
+        max_page_size = _PAGE_SIZE
+        for q in page.get("parameters", ()):
+            if q.get("in") == "query" and q.get("name") == "pageSize":
+                schema_max = (q.get("schema") or {}).get("maximum")
+                if isinstance(schema_max, int) and 1 <= schema_max < max_page_size:
+                    max_page_size = schema_max
+                desc_m = re.search(r"(?:最大值为|最大不能超过|maximum)\s*(\d+)", str(q.get("description") or ""), re.I)
+                if desc_m and 1 <= int(desc_m.group(1)) < max_page_size:
+                    max_page_size = int(desc_m.group(1))
         return _Entity(key=key, module=module, resource=resource, label=label,
                        full_label=(tag or label) if list_path.endswith(("/page", "/list")) else label,
                        props=props, params=params, required=required,
                        required_labels=required_labels, has_get=has_get,
                        get_path=get_path.removeprefix("/admin-api/"), list_path=list_path,
                        view=view, operations=frozenset({"read"} if "id" not in props else ops), component=component,
+                       max_page_size=max_page_size,
                        fixed_params={name: value for name, value in view.fixed_params if name in params}
                        if view and view.endpoint.lstrip("/") == list_path
                        else {})
@@ -1343,6 +1357,7 @@ class YudaoGoalData:
             scenes = (_SCENES if "sceneType" in spec.params and "sceneType" not in spec.fixed_params
                       and "sceneType" not in params else (None,))
         rows: dict[str, dict] = {}
+        page_size = getattr(spec, "max_page_size", _PAGE_SIZE)
         for scene in scenes:
             page = 1
             on_page = getattr(self, "_on_page_callback", None)
@@ -1352,8 +1367,7 @@ class YudaoGoalData:
                 query = {**params, **spec.fixed_params}
                 if scene is not None:
                     query["sceneType"] = scene
-                data = self._client.get(spec.list_path, pageNo=page,
-                                        pageSize=_PAGE_SIZE, **query) or {}
+                data, page_size = self._get_list_page(spec, page, page_size, query)
                 if isinstance(data, list):
                     # An unpaged list: every record at once.
                     pending = list(reversed(data))
@@ -1373,10 +1387,62 @@ class YudaoGoalData:
                     rows.setdefault(str(row.get("id")), row)
                 if len(rows) > self._max_rows:
                     raise DataRefused(f"{entity}: more than {self._max_rows} records to filter")
-                if len(batch) < _PAGE_SIZE or page * _PAGE_SIZE >= int(data.get("total") or 0):
+                if len(batch) < page_size or page * page_size >= int(data.get("total") or 0):
                     break
                 page += 1
         return list(rows.values())
+
+    def _get_list_page(self, spec: "_Entity", page: int, page_size: int, query: dict):
+        try:
+            data = self._client.get(spec.list_path, pageNo=page, pageSize=page_size, **query) or {}
+            return data, page_size
+        except DataRefused as exc:
+            if not exc.permission_denied and not exc.read_failed:
+                m = re.search(r"(?:最大值为|最大不能超过|maximum|less than or equal to)\s*(\d+)", str(exc), re.I)
+                if m and 1 <= int(m.group(1)) < page_size:
+                    capped = int(m.group(1))
+                    spec.max_page_size = capped
+                    data = self._client.get(spec.list_path, pageNo=page, pageSize=capped, **query) or {}
+                    return data, capped
+            raise
+
+    def _small_paged_table(self, entity: str, spec: "_Entity") -> bool:
+        """Whether an entity without a name/code filter fits in one bounded page."""
+        generation = getattr(self._client, "read_generation", 0)
+        now = time.monotonic()
+        with self._lock:
+            held = self._small_table.get((generation, entity))
+        if held is not None and now - held[0] < _SHOWN_FOR_S:
+            return held[1]
+        full_path = "/admin-api/" + spec.list_path.lstrip("/")
+        if full_path in self._writing_gets or spec.list_path in self._writing_gets:
+            return False
+        if "sceneType" in spec.params and "sceneType" not in spec.fixed_params:
+            return False
+        params = self._with_parent(spec, {})
+        if any(name not in params and name not in spec.fixed_params for name in spec.required):
+            return False
+        query = {**params, **spec.fixed_params}
+        page_size = getattr(spec, "max_page_size", _PAGE_SIZE)
+        try:
+            data, page_size = self._get_list_page(spec, 1, page_size, query)
+        except DataRefused:
+            return False
+        if isinstance(data, list):
+            is_small = len(data) <= self._max_rows
+        elif isinstance(data, dict):
+            batch = data.get("list") or []
+            total = int(data.get("total") or len(batch))
+            is_small = total <= page_size and len(batch) == total
+        else:
+            is_small = False
+        with self._lock:
+            if generation == getattr(self._client, "read_generation", 0):
+                self._small_table[(generation, entity)] = (now, is_small)
+        if is_small and isinstance(data, dict):
+            cache_key = (entity, tuple(sorted((k, str(v)) for k, v in params.items())))
+            self._keep_read(cache_key, tuple(data.get("list") or ()), generation)
+        return is_small
 
     def _line_rows(self, lines: "_Lines", where: Cond) -> list[dict]:
         """The lines of the owners a condition names, or of every owner the account may
@@ -1464,14 +1530,23 @@ class YudaoGoalData:
         full_path = "/admin-api/" + spec.list_path.lstrip("/")
         if full_path in self._writing_gets or spec.list_path in self._writing_gets:
             return False
-        if set(spec.required) - set(spec.fixed_params):
+        paths = self._docs.get("paths") or {}
+        if "id" not in spec.props and (spec.has_get or full_path not in paths or not _unpaged(self._docs, spec.list_path)):
+            return False
+        missing_req = [r for r in spec.required if r not in spec.fixed_params]
+        if any(not r.endswith("Id") or self._sole_parent(spec, r[:-2]) == "" for r in missing_req):
             return False
         if self._narrowing(entity, text) is not EVERYTHING:
             return True
         if is_serial and not (set(self._CODE_KEYS) & set(spec.props)):
             return False
-        return (full_path in (self._docs.get("paths") or {})
-                and _unpaged(self._docs, spec.list_path))
+        if full_path not in paths:
+            return False
+        if _unpaged(self._docs, spec.list_path):
+            return True
+        if not (spec.name_field or (set(self._CODE_KEYS) & set(spec.props))):
+            return False
+        return self._small_paged_table(entity, spec)
 
     def _narrowing(self, entity: str, text: str) -> Cond:
         """A name search pushed down where the list has a name or number parameter."""
@@ -1489,8 +1564,12 @@ class YudaoGoalData:
             if re.fullmatch(r"[A-Za-z0-9_-]{3,64}", token):
                 candidates.extend(self._CODE_KEYS)
         for key in dict.fromkeys(c for c in candidates if c):
-            if key in spec.params and (key == spec.name_field or (
-                    key in spec.props and spec.params[key].get("type") in (None, "string"))):
+            if key not in spec.params:
+                continue
+            kind = spec.params[key].get("type")
+            if key == spec.name_field or (key in ("keyword", "search") and kind in (None, "string")) or (
+                key in spec.props and kind in (None, "string")
+            ):
                 return Compare(key, "contains", text)
         return EVERYTHING
 
@@ -1552,15 +1631,23 @@ class YudaoGoalData:
         target = self._entities.get(key) if key else None
         if target is None or target.required:
             return ""
+        full_target = "/admin-api/" + target.list_path.lstrip("/")
+        if full_target in self._writing_gets or target.list_path in self._writing_gets:
+            return ""
+        generation = getattr(self._client, "read_generation", 0)
+        cache_key = ("__sole_parent__", key)
+        cached = self._cached_read(cache_key, generation)
+        if cached is not None:
+            return cached
         try:
             answer = self._client.get(target.list_path, pageNo=1, pageSize=2,
                                       **target.fixed_params) or {}
         except DataRefused:
             return ""
         rows = answer if isinstance(answer, list) else (answer.get("list") or [])
-        if len(rows) == 1 and rows[0].get("id") is not None:
-            return rows[0]["id"]
-        return ""
+        result = rows[0]["id"] if len(rows) == 1 and rows[0].get("id") is not None else ""
+        self._keep_read(cache_key, result, generation)
+        return result
 
     def _unmet_conditions(self, spec: "_Entity", params: dict, exc: DataRefused) -> DataRefused:
         """A refused read, with the conditions it left out named as the documentation names
@@ -1758,7 +1845,8 @@ class _Lines:
 class _Entity:
     __slots__ = ("key", "module", "resource", "label", "full_label", "props", "params", "required",
                  "required_labels", "has_get", "view", "operations", "links", "name_field",
-                 "derived", "get_path", "list_path", "component", "lists", "fixed_params", "money")
+                 "derived", "get_path", "list_path", "component", "lists", "fixed_params", "money",
+                 "max_page_size")
 
     def __init__(self, **kw):
         self.links, self.name_field, self.derived = {}, "", set()
@@ -1770,6 +1858,7 @@ class _Entity:
         #: dictionary naming each, or "" when they are shown as they are.
         self.lists = {}
         self.money: dict[str, str] = {}
+        self.max_page_size: int = _PAGE_SIZE
         for k, v in kw.items():
             setattr(self, k, v)
 

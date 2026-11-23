@@ -36,14 +36,23 @@ class Panel:
         return {**found, "node": self.page.locator(f'.woa-approval[data-approval-id="{found["id"]}"]').first}
 
     def running(self) -> bool:
-        return self.page.locator('.woa-work[data-running="true"]').count() > 0
+        try:
+            return self.page.locator('.woa-work[data-running="true"]').count() > 0
+        except Exception:  # noqa: BLE001 -- transient navigation destroys execution context
+            return False
 
     def reply(self) -> str:
-        results = self.page.locator(".woa-turn").last.locator(".woa-agent")
-        return results.last.inner_text() if results.count() else ""
+        try:
+            results = self.page.locator(".woa-turn").last.locator(".woa-agent")
+            return results.last.inner_text() if results.count() else ""
+        except Exception:  # noqa: BLE001 -- transient navigation destroys execution context
+            return ""
 
     def turns(self) -> int:
-        return self.page.locator(".woa-turn").count()
+        try:
+            return self.page.locator(".woa-turn").count()
+        except Exception:  # noqa: BLE001 -- transient navigation destroys execution context
+            return 0
 
     def run(self, decide, *, timeout_s: float = 180, quiet_s: float = 3.0, done=None) -> dict:
         """Answer each card with `decide(kind, text)` -> approve | deny | wait, until the turn ends."""
@@ -66,9 +75,13 @@ class Panel:
                 idle_since = None
                 time.sleep(0.5)
                 continue
-            if (not self.running() and self.turns() > self.before
-                    and (self.page.locator(".woa-turn").last.locator(".woa-took").count()
-                         or done is not None and done())):
+            try:
+                finished = (not self.running() and self.turns() > self.before
+                        and (self.page.locator(".woa-turn").last.locator(".woa-took").count()
+                             or done is not None and done()))
+            except Exception:  # noqa: BLE001 -- Wait for in-flight navigation/reload to settle.
+                finished = False
+            if finished:
                 idle_since = idle_since or time.time()
                 if time.time() - idle_since >= quiet_s:
                     break

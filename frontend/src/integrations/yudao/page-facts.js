@@ -10,6 +10,11 @@ import {annotateElDescriptions} from '../element-plus/descriptions.js'
 import {annotateActiveDialogElTrees} from '../element-plus/tree.js'
 import {
   bindElDateRangeInput,
+  isElMonthRangeInput,
+  isElRangePickerInput,
+  isElRangePopupOpen,
+  nativeMonthRangeCell,
+  nativeMonthRangeStep,
   nativeRangeDateCell,
   nativeRangeDateStep,
   readElDatePickerPrecision,
@@ -116,15 +121,19 @@ function creationRangeQuery(url) {
 }
 
 const BOUNDED_QUERY_KEY = /^[A-Za-z][A-Za-z0-9_]*(?:\[[0-9]{1,3}\])?$/
-const SENSITIVE_QUERY_KEY = /(?:pass(?:word)?|pwd|secret|token|credential|auth|cookie|session|key)/i
-const LIST_READ_PATH = /\/(?:page|list)(?:-[a-z0-9-]+)?$/
+const SENSITIVE_QUERY_KEY = /(?:pass(?:word)?|pwd|secret|token|credential|auth|cookie|session|(?:^|[_-])key$|(?:api|access|private|secret|app|encrypt|sign)key)/i
+const LIST_READ_PATH = /(?:\/|[a-z0-9]-)(?:page|list)(?:-[a-z0-9-]+)?$/
+const isListReadPath = pathname => LIST_READ_PATH.test(pathname) && !SIMPLE_LOOKUP_PATH.test(pathname)
 
 function boundedListQuery(url) {
-  if (!LIST_READ_PATH.test(url.pathname)) return null
+  if (!isListReadPath(url.pathname)) return null
   const pairs = Array.from(url.searchParams)
-  if (pairs.length > 24 || new Set(pairs.map(([key]) => key)).size !== pairs.length) return null
+  const effectivePairs = pairs.length > 16
+    ? pairs.filter(([key, value]) => value !== '' || key === 'pageNo' || key === 'pageSize')
+    : pairs
+  if (effectivePairs.length > 24 || new Set(pairs.map(([key]) => key)).size !== pairs.length) return null
   const parameters = {}
-  for (const [key, value] of pairs) {
+  for (const [key, value] of effectivePairs) {
     if (!BOUNDED_QUERY_KEY.test(key) || key.length > 64 || SENSITIVE_QUERY_KEY.test(key)) return null
     if (typeof value !== 'string' || value.length > 128 ||
         Array.from(value).some(c => c.charCodeAt(0) <= 31 || c.charCodeAt(0) === 127)) return null
@@ -137,7 +146,7 @@ function boundedListQuery(url) {
 function listReadQuery(url, view) {
   const pairs = Array.from(url.searchParams)
   const page = url.searchParams.get('pageNo'), size = url.searchParams.get('pageSize')
-  if (!LIST_READ_PATH.test(url.pathname) || pairs.length > 32 ||
+  if (!isListReadPath(url.pathname) || pairs.length > 32 ||
       !/^[1-9][0-9]*$/.test(page || '') || !/^[1-9][0-9]*$/.test(size || '') ||
       !Number.isSafeInteger(Number(page)) || !Number.isSafeInteger(Number(size)) ||
       url.searchParams.getAll('pageNo').length !== 1 || url.searchParams.getAll('pageSize').length !== 1 ||
@@ -222,12 +231,37 @@ function listRows(rows) {
   return {count: rows.length, ids: ids.every(id => id !== null) ? ids : null}
 }
 
+/** Flatten nested `children` rows (for hierarchical tables) up to a bounded node count. */
+function flattenTableRows(data) {
+  const out = []
+  const stack = [...data].reverse()
+  while (stack.length && out.length < 4096) {
+    const row = stack.pop()
+    if (!row || typeof row !== 'object') continue
+    out.push(row)
+    if (Array.isArray(row.children) && row.children.length) {
+      for (let i = row.children.length - 1; i >= 0; i--) stack.push(row.children[i])
+    }
+  }
+  return stack.length ? null : out
+}
+
 /** Whether a table's own records are this list response's rows. Without record IDs,
- * the row count and the page's one visible total must agree instead. */
+ * the row count and the page's one visible total must agree instead (or an unpaged
+ * array list when no pagination total is rendered). */
 function rendersList(list, data, totals) {
-  if (data.length !== list.rows.count) return false
-  if (!list.rows.ids) return totals.length === 1 && totals[0] === list.total
-  const shown = data.map(row => row?.id === undefined || row?.id === null ? null : String(row.id))
+  let rowsData = data
+  if (list.rows.ids && data.length !== list.rows.count &&
+      data.some(row => Array.isArray(row?.children) && row.children.length > 0)) {
+    const flat = flattenTableRows(data)
+    if (flat) rowsData = flat
+  }
+  if (rowsData.length !== list.rows.count) return false
+  if (!list.rows.ids) {
+    if (list.unpaged && totals.length === 0) return true
+    return totals.length === 1 && totals[0] === list.total
+  }
+  const shown = rowsData.map(row => row?.id === undefined || row?.id === null ? null : String(row.id))
   return shown.every(id => id !== null) && shown.sort().join('\n') === [...list.rows.ids].sort().join('\n')
 }
 
@@ -271,15 +305,15 @@ export function createPageFacts({view = window, doc = document} = {}) {
       // Application-owned scalar query observation for the first native report.
       // Retain only reviewed query fields, never headers, bodies or arbitrary URLs.
       query = ledger ? ledgerQuery(url) : order ? orderQuery(url) : creationRangeQuery(url)
-    } else if (LIST_READ_PATH.test(url.pathname) && route && route.indexOf('/detail/') < 0) {
+    } else if (isListReadPath(url.pathname) && route && route.indexOf('/detail/') < 0) {
       // Any other collection list read may be the page's applied query once a page
       // table renders it. Scalar projection stays bounded and non-sensitive.
       query = boundedListQuery(url)
     }
     // A newer request to an endpoint replaces its earlier list at send, failures included.
     let list = null
-    if (/\/(?:page|list)(?:-[a-z0-9-]+)?$/.test(url.pathname)) {
-      list = {serial: ++listSerial, path: url.pathname, query: null, read: null, rows: null, total: null}
+    if (isListReadPath(url.pathname)) {
+      list = {serial: ++listSerial, path: url.pathname, query: null, read: null, rows: null, total: null, unpaged: false}
       lists.delete(url.pathname)
       if (lists.size >= 16) lists.delete(lists.keys().next().value)
       lists.set(url.pathname, list)
@@ -335,6 +369,7 @@ export function createPageFacts({view = window, doc = document} = {}) {
       if (list && lists.get(url.pathname) === list && ok && records) {
         list.rows = listRows(records)
         list.total = Number.isSafeInteger(body.data.total) ? body.data.total : null
+        list.unpaged = Array.isArray(body.data)
         list.query = query
       }
       if (isRecord && ok) {
@@ -605,7 +640,7 @@ export function installPageFacts(view = window, doc = document) {
         const ledger = view.location.pathname === '/fms/ledger/general' && target.pathname === '/admin-api/fms/ledger/general/list'
         const order = view.location.pathname === '/erp/sale/order' && target.pathname === '/admin-api/erp/sale-order/page'
         const creation = creationRangeList(view.location.pathname, target.pathname)
-        const isList = LIST_READ_PATH.test(target.pathname)
+        const isList = isListReadPath(target.pathname)
         // Retain only a bounded scalar projection; open alone starts no read.
         const query = ledger ? ledgerQuery(target) : order ? orderQuery(target) : creation ? creationRangeQuery(target)
           : isList ? boundedListQuery(target) : null
@@ -1014,7 +1049,16 @@ export function nativeControlElement(element) {
   })
 }
 
-export {collectElFormLineControls as lineControls, nativeRangeDateCell, nativeRangeDateStep}
+export {
+  collectElFormLineControls as lineControls,
+  isElMonthRangeInput,
+  isElRangePickerInput,
+  isElRangePopupOpen,
+  nativeMonthRangeCell,
+  nativeMonthRangeStep,
+  nativeRangeDateCell,
+  nativeRangeDateStep,
+}
 
 export function withLineControls(selectorMap, html, lines) {
   return annotateElLineControls(selectorMap, html, lines,
