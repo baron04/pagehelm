@@ -19,7 +19,19 @@ from web_operation_agent.business.compiled_writes import (
     compiled_write_tool_definitions,
     is_rejected_ui_sentinel,
 )
-from web_operation_agent.business.convention_writes import ConventionFieldSpec, normalize_create_arguments
+from web_operation_agent.business.convention_writes import (
+    CompanionWriteSpec,
+    ConventionFieldSpec,
+    ConventionUpdateHandler,
+    ConventionUpdateSpec,
+    ValidationRuleSpec,
+    evaluate_validation_rules,
+    extract_projected_field_value,
+    format_companion_details,
+    normalize_create_arguments,
+    resolve_spec_field,
+    run_companion_readback,
+)
 from web_operation_agent.business.errors import BusinessMutationIndeterminate, BusinessToolRequestError
 from web_operation_agent.business.tools.contracts import BusinessMutationProposal
 
@@ -381,6 +393,318 @@ class CompiledWritesTests(unittest.TestCase):
         port.drop_child_readback = True
         with self.assertRaises(BusinessMutationIndeterminate):
             handler.dispatch(spec.args)
+
+    def test_companion_write_disclosure_and_same_actor_readback(self):
+        comp_verified = CompanionWriteSpec(
+            target="audit_log",
+            action="新增伴生记录 insert",
+            source_method="TaskService.createTask -> AuditLogMapper.insert",
+            condition="always",
+            readback_entity="audit-logs",
+            readback_query_field="taskId",
+        )
+        comp_unreadable = CompanionWriteSpec(
+            target="ledger_counter",
+            action="更新汇总统计",
+            source_method="TaskService.createTask -> LedgerCounterMapper.updateById",
+        )
+        details = format_companion_details((comp_verified, comp_unreadable))
+        self.assertEqual([d.kind for d in details], ["side_effect", "side_effect"])
+        self.assertIn("写后同账号回读：audit-logs", details[0].text)
+        self.assertIn("写后未核验（无同账号回读接口）", details[1].text)
+
+        port = _FakeCompiledPort()
+        base_task = port.create_specs()["tasks"]
+        spec_with_comp = CompiledCreateSpec(
+            entity="tasks_comp",
+            label="Task",
+            fields=base_task.fields,
+            defaults=base_task.defaults,
+            side_effects=(comp_verified, comp_unreadable),
+        )
+        port.create_specs = lambda: {"tasks_comp": spec_with_comp}
+        companion_outcomes = []
+
+        def verify_companion(sp, record_id, payload, *, before_record, after_record, side_effects):
+            if companion_outcomes and companion_outcomes[0] == "mismatch":
+                raise BusinessMutationIndeterminate("companion readback mismatch", phase="postcondition")
+            return [
+                {
+                    "effect": "companion_write",
+                    "target": se["target"],
+                    "verified": bool(se.get("readback_entity")),
+                    "note": "同账号回读一致" if se.get("readback_entity") else "写后未核验",
+                }
+                for se in side_effects
+            ]
+
+        port.verify_companion_readback = verify_companion
+        port.read_created_record = lambda sp, rid, p: dict(port.created[rid])
+        handler = CompiledCreateHandler(port)
+        mut = handler.prepare({
+            "entity": "tasks_comp",
+            "fields": [{"field": "title", "value": "T-comp"}, {"field": "parentId", "value": 99}],
+        })
+        side_texts = [d.text for d in mut.details if d.kind == "side_effect"]
+        self.assertEqual(len(side_texts), 2)
+
+        res = handler.dispatch(mut.args)
+        comp_fx = [e for e in res.content["effects"] if e.get("effect") == "companion_write"]
+        self.assertEqual([(e["target"], e["verified"]) for e in comp_fx], [("audit_log", True), ("ledger_counter", False)])
+
+        # Without port hook, run_companion_readback falls back honestly to unverified
+        no_hook = run_companion_readback(
+            object(),
+            spec_with_comp,
+            101,
+            mut.args["payload"],
+            before_record=None,
+            after_record={"id": 101},
+            side_effects=mut.args["side_effects"],
+        )
+        self.assertEqual(len(no_hook), 2)
+        self.assertTrue(all(not e["verified"] and "写后未核验" in e["note"] for e in no_hook))
+
+        # Companion mismatch raises BusinessMutationIndeterminate
+        companion_outcomes.append("mismatch")
+        with self.assertRaises(BusinessMutationIndeterminate):
+            handler.dispatch(mut.args)
+
+    def test_validation_rules_evaluate_before_card_and_label_resolution(self):
+        fields = (
+            ConventionFieldSpec("startDate", "string", label="开始日期", date_kind="date"),
+            ConventionFieldSpec("endDate", "string", label="结束日期", date_kind="date"),
+            ConventionFieldSpec("amountFen", "integer", label="金额（元）", unit_scale=100, display_unit="元"),
+            ConventionFieldSpec("primaryOwnerId", "integer", label="主负责人"),
+            ConventionFieldSpec("backupOwnerId", "integer", label="副负责人"),
+            ConventionFieldSpec("mode", "string", label="模式"),
+            ConventionFieldSpec("reason", "string", label="原因"),
+            ConventionFieldSpec("tagA", "string", label="标签A"),
+            ConventionFieldSpec("tagB", "string", label="标签B"),
+        )
+        # Exact key, case-insensitive key, exact label, unique unit-stripped label, ambiguous collision
+        self.assertEqual(resolve_spec_field(fields, "startDate").name, "startDate")
+        self.assertEqual(resolve_spec_field(fields, "startdate").name, "startDate")
+        self.assertEqual(resolve_spec_field(fields, "金额（元）").name, "amountFen")
+        self.assertEqual(resolve_spec_field(fields, "金额").name, "amountFen")
+        ambig_fields = (
+            ConventionFieldSpec("qtyBox", "integer", label="数量(箱)"),
+            ConventionFieldSpec("qtyPiece", "integer", label="数量(个)"),
+        )
+        self.assertIsNone(resolve_spec_field(ambig_fields, "数量"))
+
+        rules = (
+            ValidationRuleSpec("date_order", ("startDate", "endDate"), "结束日期不能早于开始日期"),
+            ValidationRuleSpec("paired_required", ("startDate", "endDate"), "起止日期须同时填写"),
+            ValidationRuleSpec("not_equal", ("primaryOwnerId", "backupOwnerId"), "主副负责人不能为同一人"),
+            ValidationRuleSpec(
+                "conditional_required",
+                ("reason",),
+                "特批模式下必须填写原因",
+                condition_field="mode",
+                condition_values=("special",),
+            ),
+            ValidationRuleSpec("at_least_one", ("tagA", "tagB"), "标签A与标签B至少填一项"),
+        )
+        errs = evaluate_validation_rules(
+            rules,
+            {"startDate": "2026-05-10", "endDate": "2026-05-01", "primaryOwnerId": 7, "backupOwnerId": 7, "mode": "special"},
+            lambda tok: resolve_spec_field(fields, tok),
+        )
+        self.assertEqual(len(errs), 4)
+        self.assertTrue(any("结束日期不能早于开始日期" in e for e in errs))
+        self.assertTrue(any("主副负责人不能为同一人" in e for e in errs))
+        self.assertTrue(any("特批模式下必须填写原因" in e for e in errs))
+        self.assertTrue(any("至少填写一项" in e for e in errs))
+
+        # Paired required triggers when only one is supplied
+        errs_paired = evaluate_validation_rules(
+            rules,
+            {"startDate": "2026-05-10", "tagA": "ok"},
+            lambda tok: resolve_spec_field(fields, tok),
+        )
+        self.assertTrue(any("起止日期须同时填写" in e for e in errs_paired))
+
+        # Pre-card enforcement on CompiledCreateHandler using Chinese page labels
+        port = _FakeCompiledPort()
+        c_spec = CompiledCreateSpec(
+            entity="projects",
+            label="Project",
+            fields=fields,
+            validation_rules=rules,
+            name_fields=("tagA",),
+        )
+        port.create_specs = lambda: {"projects": c_spec}
+        handler = CompiledCreateHandler(port)
+        with self.assertRaises(BusinessToolRequestError) as cm:
+            handler.prepare({
+                "entity": "projects",
+                "fields": [
+                    {"field": "开始日期", "value": "2026-05-10"},
+                    {"field": "结束日期", "value": "2026-05-01"},
+                    {"field": "标签A", "value": "alpha"},
+                ],
+            })
+        self.assertIn("结束日期不能早于开始日期", str(cm.exception))
+
+    def test_string_array_provenance_ref_variants_and_empty_list_default(self):
+        port = _FakeCompiledPort()
+        c_spec = CompiledCreateSpec(
+            entity="boards",
+            label="Board",
+            fields=(
+                ConventionFieldSpec("title", "string", label="标题", required=True),
+                ConventionFieldSpec("regionId", "integer", label="地区", reference_entity="regions"),
+                ConventionFieldSpec("keywords", "string_array", label="关键词", required=False),
+            ),
+            defaults=(
+                CompiledFieldDefault("keywords", "literal", value=[], display="[]（空列表）"),
+            ),
+            name_fields=("title",),
+        )
+        port.create_specs = lambda: {"boards": c_spec}
+        port.encode_field = lambda sp, f_sp, raw, cur: (
+            (330000, "", "浙江省", {"entity": "regions", "id": 330000})
+            if f_sp.name == "regionId" and raw in {"浙江", "浙江省"}
+            else (raw, "", str(raw), None)
+        )
+        port.reference_provenance_variants = lambda f_sp, tok: (
+            ("浙江", "浙江省") if f_sp.reference_entity == "regions" and tok in {"浙江", "浙江省"} else ()
+        )
+        handler = CompiledCreateHandler(port)
+
+        # Empty-list default is surfaced on card when omitted
+        mut_default = handler.prepare({
+            "entity": "boards",
+            "fields": [{"field": "标题", "value": "B1"}],
+        })
+        self.assertEqual(mut_default.args["payload"]["keywords"], [])
+        self.assertIn(f"[]（空列表）{PAGE_DEFAULT_ANNOTATION}", "\n".join(d.text for d in mut_default.details))
+
+        # Explicit string_array + FK variant provenance check ("浙江省" matches prompt "浙江")
+        raw_in = normalize_create_arguments({
+            "entity": "boards",
+            "fields": {"标题": "B2", "regionId": "浙江省", "keywords": ["alpha", "beta"]},
+        })
+        mut = handler.prepare(raw_in)
+        self.assertEqual(mut.args["payload"]["regionId"], 330000)
+        proposal = BusinessMutationProposal(
+            tool="create_record",
+            args=mut.args,
+            effect=mut.effect,
+            targets=mut.targets,
+            nonce="1" * 32,
+            details=mut.details,
+            effect_projection=mut.effect_projection,
+        )
+        handler.validate_provenance(
+            raw_in,
+            ("新建看板 B2，地区选浙江，关键词填 alpha 和 beta",),
+            proposal,
+            existing_values={"regions": ("330000",)},
+        )
+        # Ungrounded string_array element must be refused
+        bad_in = normalize_create_arguments({
+            "entity": "boards",
+            "fields": {"标题": "B2", "keywords": ["alpha", "invented_kw"]},
+        })
+        with self.assertRaises(BusinessToolRequestError):
+            handler.validate_provenance(bad_in, ("新建看板 B2，关键词填 alpha",), proposal)
+
+    def test_readback_projection_update_and_preservation_ignore(self):
+        spec = ConventionUpdateSpec(
+            entity="items",
+            label="Item",
+            fields=(
+                ConventionFieldSpec("name", "string", label="名称", required=True),
+                ConventionFieldSpec("tag", "string", label="备注"),
+                ConventionFieldSpec(
+                    "watcherIds",
+                    "id_array",
+                    label="关注人",
+                    readback_projection=("watchers", "userId"),
+                ),
+            ),
+            side_effects=(
+                CompanionWriteSpec(
+                    target="item_watcher",
+                    action="同步关注人列表",
+                    source_method="ItemService.updateItem -> ItemWatcherMapper.insertBatch",
+                ),
+            ),
+        )
+        store = {
+            1: {
+                "id": 1,
+                "name": "Alpha",
+                "tag": "keep-me",
+                "watchers": [{"id": 91, "userId": 10}, {"id": 92, "userId": 20}],
+            }
+        }
+        mode = {"drop_watcher_write": False}
+
+        class _Port:
+            def update_specs(self):
+                return {"items": spec}
+
+            def status_specs(self):
+                return {}
+
+            def verify_actor(self, context):
+                return "actor-1"
+
+            def resolve_target(self, entity, target, *, spec):
+                return dict(store[1])
+
+            def read_record(self, entity, record_id):
+                return dict(store[1])
+
+            def encode_field(self, _spec, field, raw_value, cur):
+                return raw_value, cur.get(field.name), raw_value, None
+
+            def recheck_bindings(self, bindings, *, actor_id):
+                pass
+
+            def dispatch_update(self, _spec, record_id, payload):
+                if mode["drop_watcher_write"]:
+                    store[1]["name"] = payload["name"]
+                    return
+                store[1]["name"] = payload["name"]
+                store[1]["tag"] = payload["tag"]
+                store[1]["watchers"] = [{"id": 100 + i, "userId": uid} for i, uid in enumerate(payload["watcherIds"])]
+
+            def dispatch_status(self, _spec, record_id, status_code):
+                pass
+
+            def invalidate_reads(self, entities):
+                pass
+
+        port = _Port()
+        self.assertEqual(extract_projected_field_value(port, spec, spec.resolve_field("关注人"), store[1]), [10, 20])
+        handler = ConventionUpdateHandler(port)
+        mut = handler.prepare({
+            "entity": "items",
+            "target": "Alpha",
+            "changes": [{"field": "关注人", "value": [10, 30]}],
+        })
+        self.assertEqual(mut.args["payload"]["name"], "Alpha")
+        self.assertEqual(mut.args["payload"]["tag"], "keep-me")
+        self.assertEqual(mut.args["payload"]["watcherIds"], [10, 30])
+        self.assertTrue(any(d.kind == "side_effect" and "item_watcher" in d.text for d in mut.details))
+
+        res = handler.dispatch(mut.args)
+        self.assertTrue(res.content["verified"])
+        self.assertEqual([w["userId"] for w in store[1]["watchers"]], [10, 30])
+
+        # Updating again when projected readback fails must raise BusinessMutationIndeterminate
+        mut2 = handler.prepare({
+            "entity": "items",
+            "target": "Alpha",
+            "changes": [{"field": "关注人", "value": [20]}],
+        })
+        mode["drop_watcher_write"] = True
+        with self.assertRaises(BusinessMutationIndeterminate):
+            handler.dispatch(mut2.args)
 
 
 if __name__ == "__main__":

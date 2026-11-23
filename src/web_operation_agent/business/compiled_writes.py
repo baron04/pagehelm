@@ -25,15 +25,26 @@ from ..execution.submit_contract import scalar_text
 from ..execution.value_source import Entry
 from ..goal.skill_literals import literal_supplied
 from .convention_writes import (
+    _MISSING,
+    CompanionWriteSpec,
     ConventionFieldSpec,
     ConventionStatusHandler,
     ConventionUpdateHandler,
     ConventionUpdateSpec,
     TwoStateStatusSpec,
+    ValidationRuleSpec,
+    _values_equal,
     collect_provenance_context,
+    effect_value as _effect_value,
+    evaluate_validation_rules,
+    extract_projected_field_value,
+    format_companion_details,
     normalize_create_arguments,
     normalize_update_arguments,
+    resolve_spec_field,
     resolve_write_route_capability,
+    run_companion_readback,
+    serialize_companion_specs,
     validate_single_field_provenance,
 )
 from .effects import EffectProjection, RequestedEffect, canonical
@@ -125,18 +136,7 @@ def is_rejected_ui_sentinel(
 
 
 def _resolve_field_from(fields: tuple[ConventionFieldSpec, ...], token: str) -> ConventionFieldSpec | None:
-    cleaned = token.strip().rstrip(":：").strip()
-    for f in fields:
-        if f.name == cleaned:
-            return f
-    folded = cleaned.casefold()
-    by_case = [f for f in fields if f.name.casefold() == folded]
-    if len(by_case) == 1:
-        return by_case[0]
-    by_label = [f for f in fields if f.label and f.label.strip().rstrip(":：").strip() == cleaned]
-    if len(by_label) == 1:
-        return by_label[0]
-    return None
+    return resolve_spec_field(fields, token)
 
 
 def _record_display_name(record: dict, name_fields: tuple[str, ...], id_field: str) -> str:
@@ -145,16 +145,6 @@ def _record_display_name(record: dict, name_fields: tuple[str, ...], id_field: s
         if isinstance(val, str) and val.strip():
             return val.strip()
     return str(record.get(id_field, ""))
-
-
-def _values_equal(left, right, *, kind: str = "") -> bool:
-    if kind == "id_array":
-        if not isinstance(left, list) or not isinstance(right, list):
-            return False
-        return len(left) == len(right) and [str(x) for x in left] == [str(x) for x in right]
-    if isinstance(left, bool) or isinstance(right, bool):
-        return type(left) is type(right) and left == right
-    return same_value(left, right)
 
 
 def _violates_optional_bounds(f_spec: ConventionFieldSpec, val: object) -> bool:
@@ -185,23 +175,6 @@ def _check_explicit_bounds(f_spec: ConventionFieldSpec, api_val: object) -> None
             raise BusinessToolRequestError(f"字段「{label}」长度不能少于 {f_spec.min_length}。")
         if f_spec.max_length is not None and len(api_val) > f_spec.max_length:
             raise BusinessToolRequestError(f"字段「{label}」长度超过上限 {f_spec.max_length}。")
-
-
-def _effect_value(val: object) -> object:
-    """Coerce an arbitrary input value into RequestedEffect's strict scalar/ref-list domain."""
-    if val is None or type(val) in (str, int, float, bool):
-        return val
-    if isinstance(val, list):
-        items: list[str] = []
-        seen: set[str] = set()
-        for elem in val:
-            if not isinstance(elem, str) or not 0 < len(elem) <= 500 or elem in seen:
-                return canonical(val)
-            seen.add(elem)
-            items.append(elem)
-        if len(items) <= 80:
-            return items
-    return canonical(val)
 
 
 def _strip_secrets_deep(obj: object) -> object:
@@ -253,6 +226,8 @@ class CompiledCreateSpec:
     server_computed_fields: frozenset[str] = frozenset()
     write_only_fields: frozenset[str] = frozenset()
     conditional_required_fn: Callable[[dict], tuple[tuple[str, str], ...]] | None = None
+    side_effects: tuple[CompanionWriteSpec | str, ...] = ()
+    validation_rules: tuple[ValidationRuleSpec, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.entity or (not self.fields and not self.collections):
@@ -314,6 +289,8 @@ class CompiledAggregateUpdateSpec:
     omit_root_id_in_payload: bool = False
     composite_id_fields: tuple[str, ...] = ()
     readback_strategy: Literal["same_record", "change_record_id"] = "same_record"
+    side_effects: tuple[CompanionWriteSpec | str, ...] = ()
+    validation_rules: tuple[ValidationRuleSpec, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.entity or not self.collections:
@@ -742,6 +719,8 @@ class CompiledCreateHandler:
                 api_val, _old, disp, binding = self.port.encode_field(root_spec, f_spec, d_spec.value, {})
             if api_val is None or api_val == "":
                 continue
+            if api_val == [] and d_spec.display:
+                disp = d_spec.display
             payload[f_spec.name] = api_val
             expected[f_spec.name] = api_val
             if binding is not None:
@@ -922,7 +901,7 @@ class CompiledCreateHandler:
         errors: list[str] = []
         ref_errors: list[BusinessToolReferenceError] = []
 
-        supported = "、".join(f"{f.name}({f.label})" if f.label else f.name for f in spec.fields[:25])
+        supported = "、".join(f"{f.label}（{f.name}）" if f.label else f.name for f in spec.fields[:25])
         resolved_entries, seen_fields, _resolved_fields = self._encode_field_batch(
             self.port,
             spec,
@@ -1016,12 +995,16 @@ class CompiledCreateHandler:
             except BusinessToolRequestError as exc:
                 errors.append(str(exc))
 
+        if spec.validation_rules:
+            errors.extend(evaluate_validation_rules(spec.validation_rules, payload, spec.resolve_field))
+
         if not errors and len(ref_errors) == 1:
             raise ref_errors[0]
         combined_errors = list(dict.fromkeys([*errors, *(str(e) for e in ref_errors)]))
         if combined_errors:
             raise BusinessToolRequestError("；".join(combined_errors))
 
+        details.extend(format_companion_details(spec.side_effects))
         diff = ProposalDiff.from_details((f"新建{spec.label}",), details)
         change = RequestedEffect(
             entity,
@@ -1046,6 +1029,7 @@ class CompiledCreateHandler:
             "expected": expected_created,
             "expected_collections": expected_collections,
             "bindings": bindings,
+            "side_effects": serialize_companion_specs(spec.side_effects),
         }
         return BusinessMutationSpec(
             private,
@@ -1069,6 +1053,7 @@ class CompiledCreateHandler:
         receipt_vals: tuple[str, ...],
         existing_values: dict[str, tuple[str, ...]] | None,
         enum_tokens_fn,
+        reference_variants_fn=None,
         prov_errors: list[str],
         depth: int = 1,
     ) -> None:
@@ -1097,6 +1082,7 @@ class CompiledCreateHandler:
                         allow_existing_candidates=False,
                         allow_fk_candidates=bool(f_spec.reference_entity),
                         enum_tokens_fn=enum_tokens_fn,
+                        reference_variants_fn=reference_variants_fn,
                     )
                 except BusinessToolRequestError as exc:
                     prov_errors.append(str(exc))
@@ -1111,6 +1097,7 @@ class CompiledCreateHandler:
                     receipt_vals=receipt_vals,
                     existing_values=existing_values,
                     enum_tokens_fn=enum_tokens_fn,
+                    reference_variants_fn=reference_variants_fn,
                     prov_errors=prov_errors,
                     depth=2,
                 )
@@ -1156,6 +1143,7 @@ class CompiledCreateHandler:
                 receipt_vals = tuple(dict.fromkeys([*receipt_vals, *extra_dates]))
 
         enum_tokens_fn = getattr(self.port, "enum_provenance_tokens", None)
+        ref_variants_fn = getattr(self.port, "reference_provenance_variants", None)
         prov_errors: list[str] = []
         for item in inputs.get("fields") or ():
             f_spec = spec.resolve_field(str(item.get("field") or "").strip())
@@ -1176,6 +1164,7 @@ class CompiledCreateHandler:
                     allow_existing_candidates=False,
                     allow_fk_candidates=bool(f_spec.reference_entity),
                     enum_tokens_fn=enum_tokens_fn,
+                    reference_variants_fn=ref_variants_fn,
                 )
             except BusinessToolRequestError as exc:
                 prov_errors.append(str(exc))
@@ -1190,6 +1179,7 @@ class CompiledCreateHandler:
                 receipt_vals=receipt_vals,
                 existing_values=existing_values,
                 enum_tokens_fn=enum_tokens_fn,
+                reference_variants_fn=ref_variants_fn,
                 prov_errors=prov_errors,
                 depth=1,
             )
@@ -1268,6 +1258,17 @@ class CompiledCreateHandler:
             disp_name = _record_display_name(after, spec.name_fields, spec.id_field)
             reference = f"{disp_name}（ID={created_id}）" if disp_name and disp_name != str(created_id) else f"ID={created_id}"
             effects = [{"effect": "record", "verified": True, "id": created_id}]
+            effects.extend(
+                run_companion_readback(
+                    self.port,
+                    spec,
+                    created_id,
+                    args["payload"],
+                    before_record=None,
+                    after_record=after,
+                    side_effects=args.get("side_effects") or (),
+                )
+            )
             return BusinessToolResult(
                 {"verified": True, "record_id": str(created_id), "entity": entity, "reference": reference, "effects": effects},
                 {"verified": True, "operation": "create_record", "effects": effects},
@@ -1469,12 +1470,19 @@ class CompiledAggregateUpdateHandler:
             if f_spec.name in seen_parent:
                 raise BusinessToolRequestError(f"主表字段「{f_spec.name}」在同一次修改中重复出现。")
             seen_parent.add(f_spec.name)
-            api_val, old_disp, new_disp, binding = self.port.encode_field(spec, f_spec, item.get("value"), record)
+            cur_val = extract_projected_field_value(self.port, spec, f_spec, record)
+            encode_rec = (
+                {**record, f_spec.name: cur_val}
+                if cur_val is not _MISSING and f_spec.name not in record
+                else record
+            )
+            api_val, old_disp, new_disp, binding = self.port.encode_field(spec, f_spec, item.get("value"), encode_rec)
             _check_explicit_bounds(f_spec, api_val)
+            existing_val = None if cur_val is _MISSING else cur_val
             same_now = (
-                match_fn(spec, f_spec, record.get(f_spec.name), api_val)
+                match_fn(spec, f_spec, existing_val, api_val)
                 if callable(match_fn)
-                else _values_equal(record.get(f_spec.name), api_val, kind=f_spec.kind)
+                else _values_equal(existing_val, api_val, kind=f_spec.kind)
             )
             if same_now:
                 continue
@@ -1494,17 +1502,18 @@ class CompiledAggregateUpdateHandler:
         for f_spec in spec.fields:
             if f_spec.name in changed_parent:
                 payload[f_spec.name] = changed_parent[f_spec.name]
-            elif f_spec.name in record:
-                rec_val = record[f_spec.name]
-                if not f_spec.required and _violates_optional_bounds(f_spec, rec_val):
-                    continue
-                payload[f_spec.name] = (
-                    encode_preserved_fn(spec, f_spec, rec_val)
-                    if callable(encode_preserved_fn)
-                    else rec_val
-                )
-            elif f_spec.required:
-                raise BusinessToolRequestError(cap.missing_required_field_message(f_spec.name))
+            else:
+                rec_val = extract_projected_field_value(self.port, spec, f_spec, record)
+                if rec_val is not _MISSING:
+                    if not f_spec.required and _violates_optional_bounds(f_spec, rec_val):
+                        continue
+                    payload[f_spec.name] = (
+                        encode_preserved_fn(spec, f_spec, rec_val)
+                        if callable(encode_preserved_fn)
+                        else rec_val
+                    )
+                elif f_spec.required:
+                    raise BusinessToolRequestError(cap.missing_required_field_message(f_spec.name))
 
         projected_collections: dict[str, list[dict]] = {}
         raw_collections: dict[str, list[dict]] = {}
@@ -1645,10 +1654,15 @@ class CompiledAggregateUpdateHandler:
         for col in spec.collections:
             payload[col.name] = projected_collections[col.name]
 
+        rule_errors = evaluate_validation_rules(spec.validation_rules, payload, spec.resolve_field)
+        if rule_errors:
+            raise BusinessToolRequestError("；".join(rule_errors))
+
         preserved_lines = sum(len(projected_collections[c.name]) for c in spec.collections)
         details.append(
             preserved_detail("主子表其余字段保留", f"同账号拉取完整聚合根，原样保留未改主表字段及共 {preserved_lines} 条明细行")
         )
+        details.extend(format_companion_details(spec.side_effects))
 
         # Strip secrets before persisting proposal args/snapshots
         clean_record = _strip_secrets_deep(record)
@@ -1659,11 +1673,17 @@ class CompiledAggregateUpdateHandler:
         diff = ProposalDiff.from_details((target_label,), details)
 
         effect_values = _project_aggregate_values(spec, raw_changes, raw_line_changes)
-        before_projected = {
-            k: clean_record.get(k)
-            for k in changed_parent
-            if k in clean_record
-        }
+        before_projected = {}
+        for k in changed_parent:
+            if _SECRET_FIELD.search(k):
+                continue
+            f_sp = spec.resolve_field(k)
+            if f_sp is not None:
+                v = extract_projected_field_value(self.port, spec, f_sp, clean_record)
+                if v is not _MISSING:
+                    before_projected[k] = v
+            elif k in clean_record:
+                before_projected[k] = clean_record.get(k)
         change = RequestedEffect(entity, "update", entity, str(args["target"]).strip(), canonical(effect_values))
         projection = EffectProjection(
             change,
@@ -1688,6 +1708,7 @@ class CompiledAggregateUpdateHandler:
             "snapshot": snapshot,
             "restricted_field_digests": restricted_digests,
             "bindings": bindings,
+            "side_effects": serialize_companion_specs(spec.side_effects),
         }
         return BusinessMutationSpec(
             private,
@@ -1719,6 +1740,7 @@ class CompiledAggregateUpdateHandler:
         joined_words = "\n".join(texts)
         ledger, receipt_vals = collect_provenance_context(existing_values)
 
+        ref_variants_fn = getattr(self.port, "reference_provenance_variants", None)
         for item in inputs.get("changes") or ():
             f_spec = spec.resolve_field(str(item.get("field") or "").strip())
             if f_spec is None:
@@ -1736,6 +1758,7 @@ class CompiledAggregateUpdateHandler:
                 allow_append=True,
                 allow_existing_candidates=True,
                 enum_tokens_fn=getattr(self.port, "enum_provenance_tokens", None),
+                reference_variants_fn=ref_variants_fn,
             )
 
         for lc in inputs.get("line_changes") or ():
@@ -1763,6 +1786,7 @@ class CompiledAggregateUpdateHandler:
                     allow_append=False,
                     allow_existing_candidates=True,
                     enum_tokens_fn=getattr(self.port, "enum_provenance_tokens", None),
+                    reference_variants_fn=ref_variants_fn,
                 )
 
     def dispatch(self, args: dict, *, context=None) -> BusinessToolResult:
@@ -1819,7 +1843,7 @@ class CompiledAggregateUpdateHandler:
 
         def verify_readback(actor_state, reread_state, dispatch_result, _uncertain):
             _actor_id, spec = actor_state
-            current_snap, _current_record = reread_state
+            current_snap, current_record = reread_state
             read_after_fn = getattr(self.port, "read_aggregate_after_update", None)
             after = (
                 read_after_fn(spec, record_id, dispatch_result, args["payload"], composite_id=args.get("composite_id") or {})
@@ -1835,14 +1859,20 @@ class CompiledAggregateUpdateHandler:
             changed_parent: dict = args.get("changed_parent") or {}
             spec_fields = {f.name: f for f in spec.fields}
             match_fn = getattr(self.port, "matches_readback_value", None)
+            projected_cols_ignored: set[str] = set()
             for key, expected_val in changed_parent.items():
                 if key in spec.server_computed_fields:
                     continue
                 f_spec = spec_fields.get(key)
+                actual_val = extract_projected_field_value(self.port, spec, f_spec, after) if f_spec is not None else after.get(key)
+                if actual_val is _MISSING:
+                    actual_val = None
+                if f_spec is not None and f_spec.readback_projection:
+                    projected_cols_ignored.add(f_spec.readback_projection[0])
                 matched = (
-                    match_fn(spec, f_spec, after.get(key), expected_val)
+                    match_fn(spec, f_spec, actual_val, expected_val)
                     if callable(match_fn) and f_spec is not None
-                    else _values_equal(after.get(key), expected_val, kind=(f_spec.kind if f_spec else ""))
+                    else _values_equal(actual_val, expected_val, kind=(f_spec.kind if f_spec else ""))
                 )
                 if not matched:
                     raise BusinessMutationIndeterminate(
@@ -1867,6 +1897,7 @@ class CompiledAggregateUpdateHandler:
                 frozenset(spec.volatile_fields)
                 | frozenset(spec.server_computed_fields)
                 | frozenset(changed_parent.keys())
+                | frozenset(projected_cols_ignored)
                 | col_names
             )
             clean_after = _strip_secrets_deep(after)
@@ -1890,6 +1921,17 @@ class CompiledAggregateUpdateHandler:
                 {"effect": "record", "verified": True, "id": record_id},
                 {"effect": "unrelated_field_preservation", "verified": True, "id": record_id},
             ]
+            effects.extend(
+                run_companion_readback(
+                    self.port,
+                    spec,
+                    record_id,
+                    args["payload"],
+                    before_record=current_record,
+                    after_record=after,
+                    side_effects=args.get("side_effects") or (),
+                )
+            )
             content_payload = {"verified": True, "record_id": str(record_id), "entity": entity, "reference": reference, "effects": effects}
             if spec.readback_strategy == "change_record_id" and dispatch_result not in (None, ""):
                 content_payload["change_record_id"] = str(dispatch_result)

@@ -315,6 +315,18 @@ def format_write_entry_line(entry: dict) -> str:
         if tool == "erp_document_status":
             return f"[写入契约] propose_operation(\"{tool}\", {{\"document_type\": <单据类型>, \"no\": <单号>, \"action\": \"审批|反审批\"}}) — {label}"
         return f"[写入契约] propose_operation(\"{tool}\", {{{req}}}) — {label}（{entity}）"
+    def _extra_contracts(e: dict) -> str:
+        bits = ""
+        vrules = e.get("validation_rules") or ()
+        if vrules:
+            bits += f" | 校验: {'；'.join(str(r) for r in vrules[:2])}"
+        sfx = e.get("side_effects") or ()
+        if sfx:
+            briefs = [str(s).split("，来源：")[0].split(" | 来源：")[0].strip() for s in sfx[:2]]
+            more = f"等{len(sfx)}项" if len(sfx) > 2 else ""
+            bits += f" | 伴生写: {'；'.join(briefs)}{more}"
+        return bits
+
     if kind == "compiled_create":
         req = ", ".join(entry.get("required") or ()) or "无（均有默认值或均为选填）"
         extra = ""
@@ -327,14 +339,15 @@ def format_write_entry_line(entry: dict) -> str:
         fks = entry.get("relations") or ()
         if fks:
             extra += f" | 外键: {', '.join(fks[:6])}"
+        extra += _extra_contracts(entry)
         lines_sig = ', lines=[{"collection":"...","fields":[...]}]' if cols else ""
         return f"[写入契约] create_record(entity=\"{entity}\", fields=[...]{lines_sig}) — {label} | 必填: {req}{extra}（其余未列字段均为选填）"
     if kind == "compiled_aggregate_update":
         cols = "、".join(entry.get("collection_details") or entry.get("collections") or ())
         id_note = f" [id={entry['id_field']}]" if entry.get("id_field") and entry["id_field"] != "id" else ""
-        return f"[写入契约] update_record(entity=\"{entity}\", target=..., changes/line_changes=[...]){id_note} — {label} | 子表(line_changes): {cols}"
+        return f"[写入契约] update_record(entity=\"{entity}\", target=..., changes/line_changes=[...]){id_note} — {label} | 子表(line_changes): {cols}{_extra_contracts(entry)}"
     if kind == "compiled_update":
-        return f"[写入契约] update_record(entity=\"{entity}\", target=..., changes=[...]) — {label}"
+        return f"[写入契约] update_record(entity=\"{entity}\", target=..., changes=[...]) — {label}{_extra_contracts(entry)}"
     if kind == "compiled_status":
         return f"[写入契约] toggle_record_status(entity=\"{entity}\", target=..., status=\"开启|关闭|上架|下架\") — {label}"
     if kind == "compiled_relation":

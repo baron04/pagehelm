@@ -18,11 +18,12 @@ runs through the shared ``BusinessWriteService`` chain:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 import re
-from typing import Literal, Protocol
+from typing import Callable, Literal, Protocol
 
 from ..execution.submit_contract import same_value, scalar_text
 from ..execution.value_source import (
@@ -56,7 +57,9 @@ from .write_pipeline import (
 )
 
 _SECRET_FIELD = DEFAULT_SECRET_FIELD_PATTERN
-_FIELD_KINDS = frozenset({"string", "integer", "number", "boolean", "id_array"})
+_FIELD_KINDS = frozenset({"string", "integer", "number", "boolean", "id_array", "string_array"})
+_MISSING = object()
+_STRIP_LABEL_UNIT_RE = re.compile(r"\s*[（(][^()（）]{1,24}[）)]\s*$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,7 +93,7 @@ class WriteRouteCapability:
     def unsupported_field_message(self, entity: str, raw_field: str, supported: str) -> str:
         return (
             f"实体「{entity}」不支持通过约定更新修改字段「{raw_field}」"
-            f"（支持字段：{supported}）。若是状态字段请改用 toggle_record_status 或专用状态操作；"
+            f"（支持字段（可传中文标签或字段键）：{supported}）。若是状态字段请改用 toggle_record_status 或专用状态操作；"
             f"若是其它表单专属字段请{self.form_fallback_phrase()}。"
         )
 
@@ -297,6 +300,23 @@ def resolve_compiled_write_fallback(
     return matched_entity, tools
 
 
+def effect_value(val: object) -> object:
+    """Coerce an arbitrary input value into ``RequestedEffect``'s strict scalar/ref-list domain."""
+    if val is None or type(val) in (str, int, float, bool):
+        return val
+    if isinstance(val, list):
+        items: list[str] = []
+        seen: set[str] = set()
+        for elem in val:
+            if not isinstance(elem, str) or not 0 < len(elem) <= 500 or elem in seen:
+                return canonical(val)
+            seen.add(elem)
+            items.append(elem)
+        if len(items) <= 80:
+            return items
+    return canonical(val)
+
+
 def normalize_field_items(raw: object) -> object:
     """Coerce either ``{field: value}`` or ``[{field, value}]`` into a normalized item list."""
     if not isinstance(raw, dict):
@@ -362,6 +382,250 @@ def normalize_changes_argument(args: dict) -> dict:
 
 
 @dataclass(frozen=True, slots=True)
+class CompanionWriteSpec:
+    """Declared secondary write triggered alongside a primary write operation."""
+
+    target: str
+    action: str
+    source_method: str
+    condition: str = ""
+    readback_entity: str = ""
+    readback_query_field: str = ""
+    description: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.target or not self.action or not self.source_method:
+            raise ValueError("companion write spec requires target, action, and source_method")
+
+    def format_card_text(self) -> str:
+        parts = [f"目标：{self.target}", f"动作：{self.action}", f"来源：{self.source_method}"]
+        if self.condition:
+            parts.append(f"条件：{self.condition}")
+        if self.readback_entity:
+            parts.append(f"写后同账号回读：{self.readback_entity}")
+        else:
+            parts.append("写后未核验（无同账号回读接口）")
+        if self.description:
+            parts.append(self.description)
+        return "；".join(parts)
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "target": self.target,
+            "action": self.action,
+            "source_method": self.source_method,
+            "condition": self.condition,
+            "readback_entity": self.readback_entity,
+            "readback_query_field": self.readback_query_field,
+            "description": self.description,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationRuleSpec:
+    """Declarative pre-card validation rule extracted from form/service constraints."""
+
+    kind: Literal["paired_required", "date_order", "not_equal", "conditional_required", "at_least_one"]
+    fields: tuple[str, ...]
+    message: str
+    condition_field: str = ""
+    condition_values: tuple[object, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.kind not in {"paired_required", "date_order", "not_equal", "conditional_required", "at_least_one"}:
+            raise ValueError(f"unsupported validation rule kind: {self.kind!r}")
+        if not self.fields or not self.message:
+            raise ValueError("validation rule requires fields and message")
+        if self.kind == "date_order" and len(self.fields) != 2:
+            raise ValueError("date_order rule requires exactly 2 fields")
+        if self.kind == "not_equal" and len(self.fields) != 2:
+            raise ValueError("not_equal rule requires exactly 2 fields")
+        if self.kind == "conditional_required" and not self.condition_field:
+            raise ValueError("conditional_required rule requires condition_field")
+
+
+def _is_empty_rule_val(val: object) -> bool:
+    if val is None or val == "":
+        return True
+    if isinstance(val, (list, tuple, dict, set)) and not val:
+        return True
+    return False
+
+
+def _sortable_date_value(val: object) -> tuple[int, int | str] | None:
+    if isinstance(val, bool):
+        return None
+    if isinstance(val, (int, float)):
+        return (0, int(val))
+    if isinstance(val, str):
+        cleaned = val.strip()
+        if not cleaned:
+            return None
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+            try:
+                return (0, int(datetime.strptime(cleaned, fmt).timestamp() * 1000))
+            except ValueError:
+                continue
+        return (1, cleaned)
+    return None
+
+
+def _cond_value_matches(actual: object, expected: object) -> bool:
+    if isinstance(actual, bool) or isinstance(expected, bool):
+        return type(actual) is type(expected) and actual == expected
+    if actual is None or expected is None:
+        return actual is expected
+    return same_value(actual, expected) or str(actual).strip() == str(expected).strip()
+
+
+def evaluate_validation_rules(
+    rules: tuple[ValidationRuleSpec, ...],
+    payload: dict[str, object],
+    field_lookup: Callable[[str], "ConventionFieldSpec | None"] | None = None,
+) -> list[str]:
+    """Evaluate pre-card declarative rules against assembled payload and return human errors."""
+    if not rules:
+        return []
+
+    def _lbl(fname: str) -> str:
+        f_sp = field_lookup(fname) if callable(field_lookup) else None
+        if f_sp is not None and f_sp.label:
+            return f"{f_sp.label}（{f_sp.name}）"
+        return fname
+
+    errors: list[str] = []
+    for rule in rules:
+        if rule.kind == "paired_required":
+            present = [f for f in rule.fields if not _is_empty_rule_val(payload.get(f))]
+            if 0 < len(present) < len(rule.fields):
+                missing = "、".join(_lbl(f) for f in rule.fields if _is_empty_rule_val(payload.get(f)))
+                errors.append(f"{rule.message}（请补充：{missing}）")
+        elif rule.kind == "date_order":
+            s_val = _sortable_date_value(payload.get(rule.fields[0]))
+            e_val = _sortable_date_value(payload.get(rule.fields[1]))
+            if s_val is not None and e_val is not None and s_val[0] == e_val[0] and e_val[1] < s_val[1]:
+                errors.append(rule.message)
+        elif rule.kind == "not_equal":
+            v1, v2 = payload.get(rule.fields[0]), payload.get(rule.fields[1])
+            if not _is_empty_rule_val(v1) and not _is_empty_rule_val(v2) and _cond_value_matches(v1, v2):
+                errors.append(rule.message)
+        elif rule.kind == "conditional_required":
+            cval = payload.get(rule.condition_field)
+            if rule.condition_values:
+                triggered = any(_cond_value_matches(cval, cv) for cv in rule.condition_values)
+            else:
+                triggered = bool(cval) and not _is_empty_rule_val(cval)
+            if triggered:
+                missing_list = [_lbl(f) for f in rule.fields if _is_empty_rule_val(payload.get(f))]
+                if missing_list:
+                    errors.append(f"{rule.message}（缺少：{'、'.join(missing_list)}）")
+        elif rule.kind == "at_least_one":
+            if all(_is_empty_rule_val(payload.get(f)) for f in rule.fields):
+                labels = "、".join(_lbl(f) for f in rule.fields)
+                errors.append(f"{rule.message}（至少填写一项：{labels}）")
+    return list(dict.fromkeys(errors))
+
+
+def serialize_companion_specs(side_effects: tuple[CompanionWriteSpec | str, ...]) -> list[dict[str, str]]:
+    """Serialize companion write specs to JSON-safe dicts for dispatch verification."""
+    out: list[dict[str, str]] = []
+    for item in side_effects or ():
+        if isinstance(item, CompanionWriteSpec):
+            out.append(item.to_dict())
+        elif isinstance(item, str) and item.strip():
+            out.append({
+                "target": item.strip(),
+                "action": "伴生写入",
+                "source_method": "declared",
+                "condition": "",
+                "readback_entity": "",
+                "readback_query_field": "",
+                "description": "",
+            })
+    return out
+
+
+def format_companion_details(side_effects: tuple[CompanionWriteSpec | str, ...]) -> list[ApprovalDetail]:
+    """Render each declared companion write onto the visible approval card."""
+    out: list[ApprovalDetail] = []
+    for item in side_effects or ():
+        if isinstance(item, CompanionWriteSpec):
+            lbl = f"伴生写入（{item.target}）"[:200]
+            out.append(side_effect_detail(lbl, item.format_card_text()))
+        elif isinstance(item, str) and item.strip():
+            out.append(side_effect_detail("伴生写入", item.strip()))
+    return out
+
+
+def run_companion_readback(
+    port: object,
+    spec: object,
+    record_id: object,
+    payload: dict,
+    *,
+    before_record: dict | None,
+    after_record: dict,
+    side_effects: list[dict] | tuple,
+) -> list[dict]:
+    """Verify declared companion writes via optional port readback or mark as unverified."""
+    if not side_effects:
+        return []
+    verify_companion_fn = getattr(port, "verify_companion_readback", None)
+    if callable(verify_companion_fn):
+        return list(
+            verify_companion_fn(
+                spec,
+                record_id,
+                payload,
+                before_record=before_record,
+                after_record=after_record,
+                side_effects=side_effects,
+            )
+            or ()
+        )
+    return [
+        {
+            "effect": "companion_write",
+            "target": se.get("target", "") if isinstance(se, dict) else str(se),
+            "verified": False,
+            "note": "写后未核验（无同账号回读接口）",
+        }
+        for se in side_effects
+    ]
+
+
+def resolve_spec_field(fields: tuple["ConventionFieldSpec", ...], token: str) -> "ConventionFieldSpec | None":
+    """Resolve a field by exact key, case-insensitive key, exact label, or unit-stripped label."""
+    cleaned = token.strip().rstrip(":：").strip()
+    if not cleaned:
+        return None
+    for f in fields:
+        if f.name == cleaned:
+            return f
+    folded = cleaned.casefold()
+    by_case = [f for f in fields if f.name.casefold() == folded]
+    if len(by_case) == 1:
+        return by_case[0]
+    by_label = [f for f in fields if f.label and f.label.strip().rstrip(":：").strip() == cleaned]
+    if len(by_label) == 1:
+        return by_label[0]
+    stripped_tok = _STRIP_LABEL_UNIT_RE.sub("", cleaned).strip()
+    if stripped_tok:
+        by_stripped = [
+            f for f in fields
+            if f.label and _STRIP_LABEL_UNIT_RE.sub("", f.label.strip().rstrip(":：").strip()).strip() == stripped_tok
+        ]
+        if len(by_stripped) == 1:
+            return by_stripped[0]
+    by_label_case = [
+        f for f in fields if f.label and f.label.strip().rstrip(":：").strip().casefold() == folded
+    ]
+    if len(by_label_case) == 1:
+        return by_label_case[0]
+    return None
+
+
+@dataclass(frozen=True, slots=True)
 class ConventionFieldSpec:
     """One flat top-level field verified to round-trip 1:1 between update and readback."""
 
@@ -382,6 +646,8 @@ class ConventionFieldSpec:
     date_kind: str = ""
     #: True when this field links a tree node to its parent node (e.g., hierarchy parent ID).
     is_hierarchy_parent: bool = False
+    #: Optional ``(detail_collection_field, item_id_key)`` for 1:N projected ID arrays.
+    readback_projection: tuple[str, str] = ()
 
     def __post_init__(self) -> None:
         if not self.name or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", self.name):
@@ -392,6 +658,10 @@ class ConventionFieldSpec:
             raise ValueError(f"unsupported convention field kind: {self.kind!r}")
         if type(self.unit_scale) is not int or self.unit_scale < 1:
             raise ValueError("unit_scale must be a positive integer")
+        if self.readback_projection and (
+            len(self.readback_projection) != 2 or not all(isinstance(x, str) and x for x in self.readback_projection)
+        ):
+            raise ValueError(f"invalid readback_projection: {self.readback_projection!r}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -404,6 +674,8 @@ class ConventionUpdateSpec:
     id_field: str = "id"
     name_fields: tuple[str, ...] = ("name",)
     volatile_fields: frozenset[str] = frozenset()
+    side_effects: tuple[CompanionWriteSpec | str, ...] = ()
+    validation_rules: tuple[ValidationRuleSpec, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.entity or not self.fields:
@@ -413,18 +685,7 @@ class ConventionUpdateSpec:
             raise ValueError(f"duplicate or id field in convention update spec: {self.entity}")
 
     def resolve_field(self, token: str) -> ConventionFieldSpec | None:
-        cleaned = token.strip().rstrip(":：").strip()
-        for f in self.fields:
-            if f.name == cleaned:
-                return f
-        folded = cleaned.casefold()
-        by_case = [f for f in self.fields if f.name.casefold() == folded]
-        if len(by_case) == 1:
-            return by_case[0]
-        by_label = [f for f in self.fields if f.label and f.label.strip().rstrip(":：").strip() == cleaned]
-        if len(by_label) == 1:
-            return by_label[0]
-        return None
+        return resolve_spec_field(self.fields, token)
 
 
 @dataclass(frozen=True, slots=True)
@@ -517,13 +778,37 @@ def _restricted_snapshot_digests(record: dict, volatile: frozenset[str]) -> dict
 
 
 def _values_equal(left, right, *, kind: str = "") -> bool:
-    if kind == "id_array":
+    if kind in {"id_array", "string_array"}:
         if not isinstance(left, list) or not isinstance(right, list):
             return False
         return len(left) == len(right) and [str(x) for x in left] == [str(x) for x in right]
     if isinstance(left, bool) or isinstance(right, bool):
         return type(left) is type(right) and left == right
     return same_value(left, right)
+
+
+def extract_projected_field_value(port, spec, f_spec: ConventionFieldSpec, record: dict):
+    """Read a flat or 1:N-projected field value from a target record, returning ``_MISSING`` if absent."""
+    if not isinstance(record, dict):
+        return _MISSING
+    if f_spec.name in record:
+        val = record[f_spec.name]
+        if val is not None or not f_spec.readback_projection:
+            return val
+    extract_fn = getattr(port, "extract_preserved_field", None)
+    if callable(extract_fn):
+        custom = extract_fn(spec, f_spec, record)
+        if custom is not _MISSING and custom is not None:
+            return custom
+    if f_spec.readback_projection:
+        col_name, item_key = f_spec.readback_projection
+        if col_name in record and isinstance(record[col_name], list):
+            return [
+                row[item_key]
+                for row in record[col_name]
+                if isinstance(row, dict) and row.get(item_key) is not None
+            ]
+    return _MISSING
 
 
 def _snapshot_preserved(before: dict, after: dict, *, ignore: frozenset[str]) -> list[str]:
@@ -634,6 +919,7 @@ def validate_single_field_provenance(
     allow_existing_candidates: bool = True,
     allow_fk_candidates: bool = True,
     enum_tokens_fn=None,
+    reference_variants_fn=None,
 ) -> None:
     """Validate provenance for one field input against user texts, scoped candidates, and receipts."""
     label = f_spec.label or f_spec.name
@@ -731,6 +1017,8 @@ def validate_single_field_provenance(
                 continue
             cand_exact.add(s_cand)
             cand_variants.update(_reference_token_variants(s_cand))
+            if callable(reference_variants_fn):
+                cand_variants.update(str(v).strip() for v in (reference_variants_fn(f_spec, s_cand) or ()) if str(v).strip())
         for tok in tokens:
             s_tok = str(tok).strip()
             leaf = s_tok.rsplit("/", 1)[-1].strip()
@@ -741,6 +1029,8 @@ def validate_single_field_provenance(
                     or any(c_val in {s_tok, leaf} for _, c_val in scoped_cands)):
                 continue
             tok_variants = _reference_token_variants(s_tok)
+            if callable(reference_variants_fn):
+                tok_variants.update(str(v).strip() for v in (reference_variants_fn(f_spec, s_tok) or ()) if str(v).strip())
             if tok_variants & cand_variants:
                 continue
             if any(variant in cand_exact or literal_supplied(variant, texts) for variant in tok_variants):
@@ -752,8 +1042,8 @@ def validate_single_field_provenance(
             )
         return
 
-    # 4. Non-reference ID arrays
-    if f_spec.kind == "id_array" and raw_val is not None:
+    # 4. Non-reference ID / string arrays
+    if f_spec.kind in {"id_array", "string_array"} and raw_val is not None:
         if not isinstance(raw_val, list):
             raise BusinessToolRequestError(f"数组字段「{label}」须传数组。")
         for elem in raw_val:
@@ -866,7 +1156,7 @@ class ConventionWriteEffects:
             raw_field = str(item["field"]).strip()
             f_spec = spec.resolve_field(raw_field) if spec is not None else None
             key = f_spec.name if f_spec is not None else raw_field
-            mapped[key] = item["value"]
+            mapped[key] = effect_value(item["value"])
         return RequestedEffect(entity, "update", entity, target, canonical(mapped))
 
 
@@ -910,7 +1200,7 @@ class ConventionUpdateHandler:
             f_spec = spec.resolve_field(raw_field)
             if f_spec is None:
                 supported = "、".join(
-                    f"{f.name}({f.label})" if f.label else f.name for f in spec.fields[:25]
+                    f"{f.label}（{f.name}）" if f.label else f.name for f in spec.fields[:25]
                 )
                 raise BusinessToolRequestError(
                     cap.unsupported_field_message(entity, raw_field, supported)
@@ -918,8 +1208,14 @@ class ConventionUpdateHandler:
             if f_spec.name in seen_fields:
                 raise BusinessToolRequestError(f"字段「{f_spec.name}」在同一次修改中重复出现。")
             seen_fields.add(f_spec.name)
+            cur_val = extract_projected_field_value(self.port, spec, f_spec, record)
+            encode_rec = (
+                {**record, f_spec.name: cur_val}
+                if cur_val is not _MISSING and f_spec.name not in record
+                else record
+            )
             api_val, old_disp, new_disp, binding = self.port.encode_field(
-                spec, f_spec, item.get("value"), record
+                spec, f_spec, item.get("value"), encode_rec
             )
             if isinstance(api_val, (int, float)) and not isinstance(api_val, bool):
                 if f_spec.minimum is not None and api_val < f_spec.minimum:
@@ -930,10 +1226,11 @@ class ConventionUpdateHandler:
                 raise BusinessToolRequestError(f"字段「{f_spec.label or f_spec.name}」长度不能少于 {f_spec.min_length}。")
             if isinstance(api_val, str) and f_spec.max_length is not None and len(api_val) > f_spec.max_length:
                 raise BusinessToolRequestError(f"字段「{f_spec.label or f_spec.name}」长度超过上限 {f_spec.max_length}。")
+            existing_val = None if cur_val is _MISSING else cur_val
             same_now = (
-                match_fn(spec, f_spec, record.get(f_spec.name), api_val)
+                match_fn(spec, f_spec, existing_val, api_val)
                 if callable(match_fn)
-                else _values_equal(record.get(f_spec.name), api_val, kind=f_spec.kind)
+                else _values_equal(existing_val, api_val, kind=f_spec.kind)
             )
             if same_now:
                 continue
@@ -967,19 +1264,24 @@ class ConventionUpdateHandler:
         for f_spec in spec.fields:
             if f_spec.name in encoded_updates:
                 payload[f_spec.name] = encoded_updates[f_spec.name]
-            elif f_spec.name in record:
-                rec_val = record[f_spec.name]
-                if not f_spec.required and _violates_optional_bounds(f_spec, rec_val):
-                    continue
-                payload[f_spec.name] = (
-                    encode_preserved_fn(spec, f_spec, rec_val)
-                    if callable(encode_preserved_fn)
-                    else rec_val
-                )
-            elif f_spec.required:
-                raise BusinessToolRequestError(
-                    cap.missing_required_field_message(f_spec.name)
-                )
+            else:
+                rec_val = extract_projected_field_value(self.port, spec, f_spec, record)
+                if rec_val is not _MISSING:
+                    if not f_spec.required and _violates_optional_bounds(f_spec, rec_val):
+                        continue
+                    payload[f_spec.name] = (
+                        encode_preserved_fn(spec, f_spec, rec_val)
+                        if callable(encode_preserved_fn)
+                        else rec_val
+                    )
+                elif f_spec.required:
+                    raise BusinessToolRequestError(
+                        cap.missing_required_field_message(f_spec.name)
+                    )
+
+        rule_errors = evaluate_validation_rules(spec.validation_rules, payload, spec.resolve_field)
+        if rule_errors:
+            raise BusinessToolRequestError("；".join(rule_errors))
 
         snapshot = _non_volatile_snapshot(record, spec.volatile_fields)
         restricted_digests = _restricted_snapshot_digests(record, spec.volatile_fields)
@@ -989,17 +1291,24 @@ class ConventionUpdateHandler:
         details.append(
             preserved_detail("其余字段保留", f"保持同账号读取的其余 {preserved_count} 个字段原值不变")
         )
+        details.extend(format_companion_details(spec.side_effects))
         diff = ProposalDiff.from_details((target_label,), details)
         # Project ALL requested inputs from `args` so EffectProjection.require(expected) matches 1:1
         all_projected = {}
         for item in raw_changes:
             f_spec = spec.resolve_field(str(item["field"]).strip())
-            all_projected[f_spec.name if f_spec else str(item["field"]).strip()] = item["value"]
-        before_projected = {
-            k: record.get(k)
-            for k in all_projected
-            if k in record and not _SECRET_FIELD.search(k)
-        }
+            all_projected[f_spec.name if f_spec else str(item["field"]).strip()] = effect_value(item["value"])
+        before_projected = {}
+        for k in all_projected:
+            if _SECRET_FIELD.search(k):
+                continue
+            f_sp = spec.resolve_field(k)
+            if f_sp is not None:
+                v = extract_projected_field_value(self.port, spec, f_sp, record)
+                if v is not _MISSING:
+                    before_projected[k] = v
+            elif k in record:
+                before_projected[k] = record.get(k)
         change = RequestedEffect(entity, "update", entity, str(args["target"]).strip(), canonical(all_projected))
         projection = EffectProjection(
             change,
@@ -1020,6 +1329,7 @@ class ConventionUpdateHandler:
             "restricted_field_digests": restricted_digests,
             "bindings": bindings,
             "provenance": provenance_items,
+            "side_effects": serialize_companion_specs(spec.side_effects),
         }
         key = hashlib.sha256(canonical([entity, record_id, encoded_updates]).encode()).hexdigest()
         return BusinessMutationSpec(
@@ -1070,6 +1380,7 @@ class ConventionUpdateHandler:
                 allow_append=True,
                 allow_existing_candidates=True,
                 enum_tokens_fn=getattr(self.port, "enum_provenance_tokens", None),
+                reference_variants_fn=getattr(self.port, "reference_provenance_variants", None),
             )
 
     def dispatch(self, args: dict, *, context=None) -> BusinessToolResult:
@@ -1107,14 +1418,15 @@ class ConventionUpdateHandler:
                     "current record changed after approval; prepare again",
                     reason="precondition_changed",
                 )
-            return current_snap
+            return current_snap, current
 
-        def dispatch_once(actor_state, _current_snap):
+        def dispatch_once(actor_state, _reread_state):
             _actor_id, spec = actor_state
             self.port.dispatch_update(spec, record_id, args["payload"])
 
-        def verify_readback(actor_state, current_snap, _dispatch_result, _uncertain):
+        def verify_readback(actor_state, reread_state, _dispatch_result, _uncertain):
             _actor_id, spec = actor_state
+            current_snap, current_record = reread_state
             after = self.port.read_record(entity, record_id)
             if not isinstance(after, dict) or str(after.get(spec.id_field)) != str(record_id):
                 raise BusinessMutationIndeterminate(
@@ -1126,11 +1438,18 @@ class ConventionUpdateHandler:
             field_kinds = {f.name: f.kind for f in spec.fields}
             spec_fields = {f.name: f for f in spec.fields}
             match_fn = getattr(self.port, "matches_readback_value", None)
+            projected_cols_ignored: set[str] = set()
             for key, expected_val in changed.items():
+                f_sp = spec_fields.get(key)
+                actual_val = extract_projected_field_value(self.port, spec, f_sp, after) if f_sp is not None else after.get(key)
+                if actual_val is _MISSING:
+                    actual_val = None
+                if f_sp is not None and f_sp.readback_projection:
+                    projected_cols_ignored.add(f_sp.readback_projection[0])
                 matched = (
-                    match_fn(spec, spec_fields[key], after.get(key), expected_val)
+                    match_fn(spec, spec_fields[key], actual_val, expected_val)
                     if callable(match_fn) and key in spec_fields
-                    else _values_equal(after.get(key), expected_val, kind=field_kinds.get(key, ""))
+                    else _values_equal(actual_val, expected_val, kind=field_kinds.get(key, ""))
                 )
                 if not matched:
                     raise BusinessMutationIndeterminate(
@@ -1138,7 +1457,7 @@ class ConventionUpdateHandler:
                         phase="postcondition",
                         reconciliation={"entity": entity, "id": record_id, "field": key},
                     )
-            ignore = frozenset(spec.volatile_fields) | frozenset(changed.keys())
+            ignore = frozenset(spec.volatile_fields) | frozenset(changed.keys()) | frozenset(projected_cols_ignored)
             drifted = verify_preservation_snapshot(
                 current_snap,
                 _non_volatile_snapshot(after, spec.volatile_fields),
@@ -1159,6 +1478,17 @@ class ConventionUpdateHandler:
                 {"effect": "record", "verified": True, "id": record_id},
                 {"effect": "unrelated_field_preservation", "verified": True, "id": record_id},
             ]
+            effects.extend(
+                run_companion_readback(
+                    self.port,
+                    spec,
+                    record_id,
+                    args["payload"],
+                    before_record=current_record,
+                    after_record=after,
+                    side_effects=args.get("side_effects") or (),
+                )
+            )
             return BusinessToolResult(
                 {"verified": True, "record_id": str(record_id), "entity": entity, "reference": reference, "effects": effects},
                 {"verified": True, "operation": "update_record", "effects": effects},
@@ -1550,6 +1880,7 @@ def convention_tool_definitions(
 
 
 __all__ = [
+    "CompanionWriteSpec",
     "ConventionFieldSpec",
     "ConventionStatusHandler",
     "ConventionUpdateHandler",
@@ -1557,14 +1888,22 @@ __all__ = [
     "ConventionWriteEffects",
     "ConventionWritePort",
     "TwoStateStatusSpec",
+    "ValidationRuleSpec",
     "WriteRouteCapability",
     "collect_provenance_context",
     "convention_tool_definitions",
+    "effect_value",
+    "evaluate_validation_rules",
+    "extract_projected_field_value",
+    "format_companion_details",
     "normalize_changes_argument",
     "normalize_create_arguments",
     "normalize_field_items",
     "normalize_update_arguments",
     "resolve_compiled_write_fallback",
+    "resolve_spec_field",
     "resolve_write_route_capability",
+    "run_companion_readback",
+    "serialize_companion_specs",
     "validate_single_field_provenance",
 ]

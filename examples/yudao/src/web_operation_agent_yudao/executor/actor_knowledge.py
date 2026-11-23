@@ -106,6 +106,7 @@ _ENTITY_READ_SUFFIXES = (
     "/get-detail",
     "/page",
     "/list",
+    "/tree",
     "/get",
 )
 _REF_CELL_KEYS = frozenset({"id", "name", "title", "no", "code", "period", "stage", "installment", "nickname", "username"})
@@ -123,27 +124,55 @@ def _entity_slug_for_path(path: str) -> str:
 def _cell_values(rows, column_names=None, cap=400, *, entity_slug: str = ""):
     """(binding, value) candidates of rows the actor read this turn: every scalar cell
     bound to its column's label (and raw field key when different), plus the record's
-    own name/id cells unbound for selection fields (and ``entity_slug`` when known)."""
+    own name/id cells unbound for selection fields (and ``entity_slug`` when known),
+    recursively flattening bounded ``children`` trees."""
     bound, raw_keys, records, ref_cands = [], [], [], []
     names = column_names or {}
-    for row in rows or ():
-        if not isinstance(row, dict):
-            continue
-        for key, cell in row.items():
-            if isinstance(cell, (dict, list, tuple)) or cell is None or isinstance(cell, bool):
+    max_depth = 8
+
+    def _visit(items, prefix: tuple[str, ...] = (), depth: int = 0) -> bool:
+        if depth > max_depth:
+            return False
+        for row in items or ():
+            if not isinstance(row, dict):
                 continue
-            raw_key = str(key)[:80]
-            label = str(names.get(key, key))[:80]
-            if len(bound) < cap:
-                bound.append((label, cell))
-                if raw_key != label:
-                    raw_keys.append((raw_key, cell))
-            if (_RECORD_KEY.search(str(key)) or _RECORD_KEY.search(label)) and len(records) < 4000:
-                records.append(("", cell))
-            if entity_slug and (raw_key in _REF_CELL_KEYS or _RECORD_KEY.search(raw_key)) and len(ref_cands) < 4000:
-                ref_cands.append((entity_slug, cell))
-            if len(bound) >= cap and len(records) >= 4000 and (not entity_slug or len(ref_cands) >= 4000):
-                return bound + raw_keys + records + ref_cands, bound
+            for key, cell in row.items():
+                if isinstance(cell, (dict, list, tuple)) or cell is None or isinstance(cell, bool):
+                    continue
+                raw_key = str(key)[:80]
+                label = str(names.get(key, key))[:80]
+                if len(bound) < cap:
+                    bound.append((label, cell))
+                    if raw_key != label:
+                        raw_keys.append((raw_key, cell))
+                if (_RECORD_KEY.search(str(key)) or _RECORD_KEY.search(label)) and len(records) < 4000:
+                    records.append(("", cell))
+                if entity_slug and (raw_key in _REF_CELL_KEYS or _RECORD_KEY.search(raw_key)) and len(ref_cands) < 4000:
+                    ref_cands.append((entity_slug, cell))
+                if len(bound) >= cap and len(records) >= 4000 and (not entity_slug or len(ref_cands) >= 4000):
+                    return True
+            node_name = next(
+                (
+                    str(row.get(k)).strip()
+                    for k in ("name", "title", "label")
+                    if isinstance(row.get(k), str) and str(row.get(k)).strip()
+                ),
+                "",
+            )
+            if prefix and node_name:
+                full_path = "/".join((*prefix, node_name))[:160]
+                if len(records) < 4000:
+                    records.append(("", full_path))
+                if entity_slug and len(ref_cands) < 4000:
+                    ref_cands.append((entity_slug, full_path))
+            children = row.get("children")
+            if isinstance(children, list) and children:
+                next_prefix = (*prefix, node_name) if node_name else prefix
+                if _visit(children, next_prefix, depth + 1):
+                    return True
+        return False
+
+    _visit(rows)
     return bound + raw_keys + records + ref_cands, bound
 
 

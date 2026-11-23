@@ -689,6 +689,115 @@ class ContactsConventionWriteTests(unittest.TestCase):
         fallback_msg = cap.unavailable_operation_message("missing_op")
         self.assertIn("完成预填并用 then_highlight", fallback_msg)
 
+    def test_companion_disclosure_validation_rules_and_label_resolution(self):
+        from web_operation_agent.business.convention_writes import (
+            CompanionWriteSpec,
+            ConventionFieldSpec,
+            ConventionUpdateHandler,
+            ConventionUpdateSpec,
+            ValidationRuleSpec,
+        )
+        from web_operation_agent.business.errors import BusinessMutationIndeterminate, BusinessToolRequestError
+
+        spec = ConventionUpdateSpec(
+            entity="contacts",
+            label="联系人",
+            fields=(
+                ConventionFieldSpec("name", "string", label="姓名", required=True),
+                ConventionFieldSpec("email", "string", label="邮箱", required=True),
+                ConventionFieldSpec("backupEmail", "string", label="备用邮箱"),
+                ConventionFieldSpec("tagLabels", "string_array", label="分组标签"),
+            ),
+            side_effects=(
+                CompanionWriteSpec(
+                    target="contact_audit",
+                    action="写入联系人变更审计",
+                    source_method="ContactsService.updateContact -> ContactAuditRepo.insert",
+                    readback_entity="contact-audits",
+                    readback_query_field="contactId",
+                ),
+            ),
+            validation_rules=(
+                ValidationRuleSpec("not_equal", ("email", "backupEmail"), "备用邮箱不能与主邮箱相同"),
+            ),
+        )
+        row = {"id": "ada-lovelace", "name": "Ada Lovelace", "email": "ada@example.test", "backupEmail": "", "tagLabels": ["core"]}
+        audit_rows = []
+        fail_companion = {"flag": False}
+
+        class _SecondAppPort:
+            def update_specs(self):
+                return {"contacts": spec}
+
+            def status_specs(self):
+                return {}
+
+            def verify_actor(self, context):
+                return "actor-ada"
+
+            def resolve_target(self, entity, target, *, spec):
+                return dict(row)
+
+            def read_record(self, entity, record_id):
+                return dict(row)
+
+            def encode_field(self, _spec, field, raw_value, cur):
+                return raw_value, cur.get(field.name), raw_value, None
+
+            def recheck_bindings(self, bindings, *, actor_id):
+                pass
+
+            def dispatch_update(self, _spec, record_id, payload):
+                row.update(payload)
+                audit_rows.append({"contactId": record_id, "email": payload["email"]})
+
+            def verify_companion_readback(self, _spec, record_id, payload, *, before_record, after_record, side_effects):
+                if fail_companion["flag"]:
+                    raise BusinessMutationIndeterminate("contact_audit readback missing", phase="postcondition")
+                matched = any(a["contactId"] == record_id for a in audit_rows)
+                return [
+                    {"effect": "companion_write", "target": se["target"], "verified": matched, "note": "审计行已回读一致"}
+                    for se in side_effects
+                ]
+
+            def dispatch_status(self, _spec, record_id, status_code):
+                pass
+
+            def invalidate_reads(self, entities):
+                pass
+
+        handler = ConventionUpdateHandler(_SecondAppPort())
+        # Pre-card validation rejects backupEmail == email via Chinese page label
+        with self.assertRaises(BusinessToolRequestError) as cm:
+            handler.prepare({
+                "entity": "contacts",
+                "target": "Ada Lovelace",
+                "changes": [{"field": "备用邮箱", "value": "ada@example.test"}],
+            })
+        self.assertIn("备用邮箱不能与主邮箱相同", str(cm.exception))
+
+        # Label resolution + companion card disclosure + companion readback pass
+        mut = handler.prepare({
+            "entity": "contacts",
+            "target": "Ada Lovelace",
+            "changes": [{"field": "分组标签", "value": ["core", "vip"]}],
+        })
+        self.assertTrue(any(d.kind == "side_effect" and "contact_audit" in d.text for d in mut.details))
+        res = handler.dispatch(mut.args)
+        self.assertTrue(res.content["verified"])
+        comp = [e for e in res.content["effects"] if e.get("effect") == "companion_write"]
+        self.assertEqual(len(comp), 1)
+        self.assertTrue(comp[0]["verified"])
+
+        fail_companion["flag"] = True
+        mut2 = handler.prepare({
+            "entity": "contacts",
+            "target": "Ada Lovelace",
+            "changes": [{"field": "备用邮箱", "value": "backup@example.test"}],
+        })
+        with self.assertRaises(BusinessMutationIndeterminate):
+            handler.dispatch(mut2.args)
+
 
 if __name__ == "__main__":
     unittest.main()

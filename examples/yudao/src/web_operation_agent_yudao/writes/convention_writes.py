@@ -31,9 +31,11 @@ from web_operation_agent.business.compiled_writes import (
     is_rejected_ui_sentinel,
 )
 from web_operation_agent.business.convention_writes import (
+    CompanionWriteSpec,
     ConventionFieldSpec,
     ConventionUpdateSpec,
     TwoStateStatusSpec,
+    ValidationRuleSpec,
     WriteRouteCapability,
     _values_equal,
 )
@@ -44,6 +46,7 @@ YUDAO_WRITE_ROUTE_CAPABILITY = WriteRouteCapability(
     page_form_mode="prefill_handoff",
 )
 from web_operation_agent.business.errors import (
+    BusinessMutationIndeterminate,
     BusinessToolIdentityError,
     BusinessToolPermissionError,
     BusinessToolReferenceError,
@@ -58,6 +61,7 @@ from ..reads.bound_data_reads import current_turn_read_scope
 from ..reads.client import YudaoReadRefused
 from ..rules.compiled_write_source import compile_yudao_write_catalog
 from .write_definitions import RECORD_CONTRACTS
+from .write_inputs import _PROVINCE_ALIASES, _normalize_area_label
 from .write_status_ops import ERP_DOCUMENT_ENTITIES
 
 ENABLE_CAT5_MASTER_DETAIL_CREATES: bool = True
@@ -693,7 +697,21 @@ class YudaoConventionWritePort:
                         if qk in q_names:
                             narrow[qk] = clean_name
                             break
-                res = self.client.get(f"{entity}/page", pageNo=1, pageSize=100, **narrow)
+                try:
+                    res = self.client.get(f"{entity}/page", pageNo=1, pageSize=100, **narrow)
+                except YudaoReadRefused:
+                    if not req_missing and "projectId" in q_names and "/admin-api/pms/pm/project/page" in paths:
+                        proj_res = self.client.get("pms/pm/project/page", pageNo=1, pageSize=20)
+                        for proj in (proj_res.get("list") or ()) if isinstance(proj_res, dict) else ():
+                            pid = proj.get("id")
+                            if pid is None:
+                                continue
+                            p_res = self.client.get(f"{entity}/page", projectId=pid, pageNo=1, pageSize=100)
+                            if isinstance(p_res, dict) and isinstance(p_res.get("list"), list):
+                                rows.extend(r for r in p_res["list"] if isinstance(r, dict))
+                        res = None
+                    else:
+                        raise
                 if isinstance(res, dict) and isinstance(res.get("list"), list):
                     rows = [r for r in res["list"] if isinstance(r, dict)]
                 if not rows and narrow:
@@ -751,8 +769,29 @@ class YudaoConventionWritePort:
                     res = self.client.get(f"{entity}/page", projectId=pid, pageNo=1, pageSize=100)
                     if isinstance(res, dict) and isinstance(res.get("list"), list):
                         rows.extend(r for r in res["list"] if isinstance(r, dict))
+            elif req_missing == ["status"]:
+                seen_status_ids: set[str] = set()
+                for st_val in (0, 1):
+                    res = self.client.get(f"{entity}/page", status=st_val, pageNo=1, pageSize=100)
+                    if isinstance(res, dict) and isinstance(res.get("list"), list):
+                        for r in res["list"]:
+                            if not isinstance(r, dict):
+                                continue
+                            rid_key = str(r.get(id_field))
+                            if rid_key not in seen_status_ids:
+                                seen_status_ids.add(rid_key)
+                                rows.append(r)
         if matched_id is None and not rows:
-            for ep in (list_path, simple_path, f"/admin-api/{entity}/list-all-simple", f"/admin-api/{entity}/my-page"):
+            pub_rec_eps = (f"/admin-api/{entity}/published-page", f"/admin-api/{entity}/received-page")
+            merged_pub_rec: list[dict] = []
+            seen_pr_ids: set[str] = set()
+            for ep in (
+                list_path,
+                simple_path,
+                f"/admin-api/{entity}/list-all-simple",
+                f"/admin-api/{entity}/my-page",
+                *pub_rec_eps,
+            ):
                 if ep not in paths:
                     continue
                 get_op = (paths[ep] or {}).get("get") or {}
@@ -761,14 +800,38 @@ class YudaoConventionWritePort:
                     if isinstance(p, dict) and p.get("in") == "query" and p.get("required") is True
                     and p.get("name") not in {"pageNo", "pageSize"}
                 ]
+                if ep_req == ["accountSetId"] and ep in (list_path, simple_path):
+                    acct_rows: list[dict] = []
+                    for aset_id in self._account_set_ids():
+                        res = self.client.get(ep.removeprefix("/admin-api/"), accountSetId=aset_id)
+                        items = res if isinstance(res, list) else (res.get("list") if isinstance(res, dict) else None)
+                        for r in items or ():
+                            if isinstance(r, dict):
+                                row_copy = dict(r)
+                                row_copy.setdefault("accountSetId", aset_id)
+                                acct_rows.append(row_copy)
+                    if acct_rows:
+                        rows = acct_rows
+                        break
+                    continue
                 if ep_req:
                     continue
-                qargs = {"pageNo": 1, "pageSize": 100} if ep.endswith("-page") else {}
+                qargs = {"pageNo": 1, "pageSize": 100} if ep.endswith(("-page", "/page")) else {}
                 res = self.client.get(ep.removeprefix("/admin-api/"), **qargs)
                 items = res if isinstance(res, list) else (res.get("list") if isinstance(res, dict) else None)
+                if ep in pub_rec_eps:
+                    for r in items or ():
+                        if isinstance(r, dict):
+                            rid_key = str(r.get(id_field))
+                            if rid_key not in seen_pr_ids:
+                                seen_pr_ids.add(rid_key)
+                                merged_pub_rec.append(r)
+                    continue
                 if isinstance(items, list) and items:
                     rows = [r for r in items if isinstance(r, dict)]
                     break
+            if not rows and merged_pub_rec:
+                rows = merged_pub_rec
         if not rows and entity == "ai/knowledge/segment" and "/admin-api/ai/knowledge/document/page" in paths:
             doc_res = self.client.get("ai/knowledge/document/page", pageNo=1, pageSize=20)
             for doc in (doc_res.get("list") or ()) if isinstance(doc_res, dict) else ():
@@ -846,9 +909,14 @@ class YudaoConventionWritePort:
                 )
             else:
                 try:
-                    found = self.goal_data.find(entity, clean_name, limit=8)
+                    found = self.goal_data.find(entity, raw, limit=8) if m_cand is not None else self.goal_data.find(entity, clean_name, limit=8)
                 except Exception:
                     found = ()
+                if m_cand is not None and not found:
+                    try:
+                        found = self.goal_data.find(entity, clean_name, limit=8)
+                    except Exception:
+                        found = ()
                 exact_refs = [
                     r for r in found
                     if (hint_id is None or str(r.id) == hint_id)
@@ -856,7 +924,42 @@ class YudaoConventionWritePort:
                 ]
                 if len(exact_refs) == 1:
                     matched_id = exact_refs[0].id
-                else:
+                elif m_cand is not None and hint_id is not None:
+                    cand_id = int(hint_id) if hint_id.isdigit() else hint_id
+                    rec = None
+                    try:
+                        rec = self.read_record(entity, cand_id, spec=spec)
+                    except BusinessToolRequestError:
+                        rec = None
+                    if isinstance(rec, dict) and str(rec.get(id_field)) == str(hint_id):
+                        rec_names = [
+                            str(rec.get(k)).strip()
+                            for k in (*spec.name_fields, *_NAME_CANDIDATES, "description", "remark", "itemCode", "batchCode")
+                            if not (id_field == "employeeId" and k == "postName")
+                            and isinstance(rec.get(k), (str, int)) and not isinstance(rec.get(k), bool) and str(rec.get(k)).strip()
+                        ]
+                        if rec.get("voucherWordName") and rec.get("voucherNumber") is not None:
+                            vw = str(rec["voucherWordName"]).strip()
+                            vn = str(rec["voucherNumber"]).strip()
+                            rec_names.extend((f"{vw}-{vn}", f"{vw}{vn}", f"{vw}字第{vn}号"))
+                        if rec_names:
+                            name_ok = any(n.casefold() == folded for n in rec_names)
+                        elif hint_id.isdigit() and _verified_turn_id(entity, int(hint_id)):
+                            name_ok = clean_name in (entity, hint_id, f"ID={hint_id}")
+                        else:
+                            name_ok = False
+                        if name_ok:
+                            matched_id = cand_id
+                            matched_comp = {
+                                cf: rec[cf]
+                                for cf in comp_fields
+                                if cf != id_field and rec.get(cf) is not None
+                            }
+                            if entity.startswith("fms/") and rec.get("accountSetId") is not None:
+                                matched_comp.setdefault("accountSetId", rec["accountSetId"])
+                            if matched_comp:
+                                self._composite_hints[(entity, str(matched_id))] = dict(matched_comp)
+                if matched_id is None:
                     near = tuple(dict.fromkeys((
                         *(r.display for r in found),
                         *(
@@ -1023,7 +1126,7 @@ class YudaoConventionWritePort:
             return known[ref_entity]
         docs = self._docs()
         paths = docs.get("paths") or {}
-        for tail in ("simple-list", "simple-all-list", "list-all-simple", "list", "page"):
+        for tail in ("simple-list", "simple-all-list", "list-all-simple", "list", "tree", "page"):
             cand = f"/admin-api/{ref_entity}/{tail}"
             get_op = (paths.get(cand) or {}).get("get") if cand in paths else None
             if not isinstance(get_op, dict):
@@ -1043,6 +1146,36 @@ class YudaoConventionWritePort:
             )
         raise BusinessToolRequestError(f"不支持解析关联类型：{ref_entity}")
 
+    @staticmethod
+    def _flatten_tree_ref_rows(items: list) -> list[dict]:
+        """Flatten nested ``children`` nodes on tree responses while preserving ancestor paths."""
+        out: list[dict] = []
+
+        def _walk(nodes: list, prefix: tuple[str, ...] = (), parent_id=None, depth: int = 0) -> None:
+            if depth > 8:
+                return
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                row = dict(node)
+                if parent_id is not None and row.get("parentId") is None:
+                    row["parentId"] = parent_id
+                n_label = next(
+                    (str(row.get(k)).strip() for k in ("name", "title", "label") if isinstance(row.get(k), str) and str(row.get(k)).strip()),
+                    "",
+                )
+                path_parts = (*prefix, n_label) if n_label else prefix
+                if prefix and path_parts:
+                    row.setdefault("_tree_path", "/".join(path_parts))
+                if type(row.get("id")) is int:
+                    out.append(row)
+                children = row.get("children")
+                if isinstance(children, list) and children:
+                    _walk(children, path_parts, row.get("id", parent_id), depth + 1)
+
+        _walk(items)
+        return out
+
     def _list_ref_rows(self, ref_entity: str, *, query_ctx: dict | None = None) -> tuple[str, tuple[str, ...], list[dict], dict]:
         list_path, name_keys = self._ref_endpoint_for(ref_entity)
         docs = self._docs()
@@ -1060,6 +1193,7 @@ class YudaoConventionWritePort:
             call_params["pageSize"] = 100
         q_ctx = dict(query_ctx or {})
         missing_acct = False
+        missing_project = False
         for rp in req_params:
             if rp in call_params:
                 continue
@@ -1067,6 +1201,8 @@ class YudaoConventionWritePort:
                 call_params[rp] = q_ctx[rp]
             elif rp == "accountSetId":
                 missing_acct = True
+            elif rp == "projectId" and "/admin-api/pms/pm/project/page" in paths:
+                missing_project = True
             else:
                 raise BusinessToolRequestError(f"关联列表 {list_path} 缺少必需查询参数 {rp}。")
         for opt_key, opt_val in q_ctx.items():
@@ -1089,20 +1225,89 @@ class YudaoConventionWritePort:
                     narrowed.append(row)
             return narrowed
 
+        def _fetch_by_projects() -> list[dict]:
+            seen_ids: set[str] = set()
+            acc: list[dict] = []
+            for p_no in (1, 2, 3):
+                proj_res = self.client.get("pms/pm/project/page", pageNo=p_no, pageSize=50)
+                proj_list = (proj_res.get("list") or ()) if isinstance(proj_res, dict) else ()
+                if not proj_list:
+                    break
+                for proj in proj_list:
+                    pid = proj.get("id") if isinstance(proj, dict) else None
+                    if pid is None:
+                        continue
+                    p_try = {**call_params, "projectId": pid}
+                    raw_rows = self.client.get(list_path, **p_try)
+                    sub = raw_rows if isinstance(raw_rows, list) else (raw_rows or {}).get("list") if isinstance(raw_rows, dict) else []
+                    for row in self._flatten_tree_ref_rows(sub or []):
+                        if "projectId" not in row:
+                            row["projectId"] = pid
+                        rk = str(row.get("id")) if row.get("id") is not None else None
+                        if rk is not None:
+                            if rk in seen_ids:
+                                continue
+                            seen_ids.add(rk)
+                        acc.append(row)
+                if acc:
+                    break
+            return acc
+
         items_acc: list[dict] = []
         if missing_acct:
             for aset_id in self._account_set_ids():
                 p_try = {**call_params, "accountSetId": aset_id}
                 raw_rows = self.client.get(list_path, **p_try)
                 sub = raw_rows if isinstance(raw_rows, list) else (raw_rows or {}).get("list") if isinstance(raw_rows, dict) else []
-                items_acc.extend(r for r in (sub or ()) if isinstance(r, dict) and type(r.get("id")) is int)
+                items_acc.extend(self._flatten_tree_ref_rows(sub or []))
+            return list_path, name_keys, _narrow(items_acc), call_params
+        if missing_project:
+            items_acc = _fetch_by_projects()
             return list_path, name_keys, _narrow(items_acc), call_params
 
-        raw_rows = self.client.get(list_path, **call_params) if call_params else self.client.get(list_path)
+        try:
+            raw_rows = self.client.get(list_path, **call_params) if call_params else self.client.get(list_path)
+        except YudaoReadRefused:
+            if "projectId" in opt_query_names and "projectId" not in call_params and "/admin-api/pms/pm/project/page" in paths:
+                items_acc = _fetch_by_projects()
+                return list_path, name_keys, _narrow(items_acc), call_params
+            raise
         items = raw_rows if isinstance(raw_rows, list) else (raw_rows or {}).get("list") if isinstance(raw_rows, dict) else None
         if not isinstance(items, list):
             raise BusinessToolRequestError(f"关联列表 {list_path} 当前不可读。")
-        rows = [r for r in items if isinstance(r, dict) and type(r.get("id")) is int]
+        if (
+            not items
+            and list_path.endswith(("/simple-list", "/simple-all-list", "/list-all-simple"))
+            and f"/admin-api/{ref_entity}/page" in paths
+        ):
+            page_get = (paths[f"/admin-api/{ref_entity}/page"] or {}).get("get") or {}
+            page_qp = [
+                p for p in (page_get.get("parameters") or ())
+                if isinstance(p, dict) and p.get("in") == "query" and p.get("name")
+            ]
+            page_req = [
+                p["name"] for p in page_qp
+                if p.get("required") is True and p["name"] not in {"pageNo", "pageSize"}
+            ]
+            page_opt = {p["name"] for p in page_qp}
+            if all(q_ctx.get(rp) is not None for rp in page_req):
+                page_params: dict[str, object] = {"pageNo": 1, "pageSize": 100}
+                for opt_k, opt_v in q_ctx.items():
+                    if opt_v is not None and opt_k in page_opt and opt_k not in page_params:
+                        page_params[opt_k] = opt_v
+                try:
+                    page_raw = self.client.get(f"{ref_entity}/page", **page_params)
+                except YudaoReadRefused:
+                    page_raw = None
+                page_items = (
+                    page_raw.get("list")
+                    if isinstance(page_raw, dict)
+                    else (page_raw if isinstance(page_raw, list) else None)
+                )
+                if isinstance(page_items, list) and page_items:
+                    rows = self._flatten_tree_ref_rows(page_items)
+                    return f"{ref_entity}/page", name_keys, _narrow(rows), page_params
+        rows = self._flatten_tree_ref_rows(items)
         return list_path, name_keys, _narrow(rows), call_params
 
     def _resolve_single_ref(
@@ -1186,6 +1391,24 @@ class YudaoConventionWritePort:
         list_path, name_keys, rows, call_params = self._list_ref_rows(ref_entity, query_ctx=query_ctx)
         primary_key = next((k for k in name_keys if any(r.get(k) for r in rows)), name_keys[0])
 
+        has_tree = any(r.get("_tree_path") or r.get("parentId") is not None for r in rows)
+        by_id = {r["id"]: r for r in rows}
+
+        def full_path(row: dict) -> str:
+            if isinstance(row.get("_tree_path"), str) and row["_tree_path"]:
+                return row["_tree_path"]
+            base = next((str(row.get(k)).strip() for k in ("name", "title", "label") if isinstance(row.get(k), str) and str(row.get(k)).strip()), "")
+            parts = [base] if base else []
+            pid = row.get("parentId")
+            guard = 0
+            while pid and pid in by_id and guard < 16:
+                p_lbl = next((str(by_id[pid].get(k)).strip() for k in ("name", "title", "label") if isinstance(by_id[pid].get(k), str) and str(by_id[pid].get(k)).strip()), "")
+                if p_lbl:
+                    parts.append(p_lbl)
+                pid = by_id[pid].get("parentId")
+                guard += 1
+            return "/".join(reversed(parts))
+
         matches: list[dict] = []
         if hint_id is not None and name.isdigit():
             matches = [r for r in rows if str(r.get("id")) == hint_id]
@@ -1198,21 +1421,16 @@ class YudaoConventionWritePort:
                     q_ctx = dict(query_ctx or {})
                     if all(str(rec[k]) == str(v) for k, v in q_ctx.items() if k in rec and v is not None and rec[k] is not None):
                         matches = [rec]
-        elif ref_entity in {"system/dept", "oa/file-node"} and "/" in name:
-            by_id = {r["id"]: r for r in rows}
-            def full_path(row: dict) -> str:
-                parts = [str(row.get("name") or "").strip()]
-                pid = row.get("parentId")
-                guard = 0
-                while pid and pid in by_id and guard < 16:
-                    parts.append(str(by_id[pid].get("name") or "").strip())
-                    pid = by_id[pid].get("parentId")
-                    guard += 1
-                return "/".join(reversed(parts))
+        elif has_tree and "/" in name:
             matches = [
                 r for r in rows
                 if full_path(r) == name and (hint_id is None or str(r["id"]) == hint_id)
             ]
+            if not matches:
+                matches = [
+                    r for r in rows
+                    if full_path(r).endswith("/" + name) and (hint_id is None or str(r["id"]) == hint_id)
+                ]
         else:
             matches = [
                 r for r in rows
@@ -1239,6 +1457,16 @@ class YudaoConventionWritePort:
 
             def _fmt_cand(r: dict) -> str:
                 lbl = next((str(r.get(k)).strip() for k in name_keys if r.get(k)), "")
+                if has_tree:
+                    fp = full_path(r)
+                    if fp:
+                        lbl = fp
+                if ref_entity == "system/user" and lbl:
+                    uname = str(r.get("username") or "").strip()
+                    dept = str(r.get("deptName") or "").strip()
+                    extra = ", ".join(x for x in (uname if uname and uname != lbl else "", dept) if x)
+                    if extra:
+                        return f"{lbl}（{extra}，ID={r['id']}）"
                 if lbl:
                     return f"{lbl}（ID={r['id']}）"
                 if r.get("period") is not None:
@@ -1273,10 +1501,21 @@ class YudaoConventionWritePort:
             for k in ("contractId", "customerId", "period")
             if chosen.get(k) is not None
         }
+        paths = (self._docs() or {}).get("paths") or {}
+        list_get_op = ((paths.get(f"/admin-api/{list_path}") or {}).get("get") or {})
+        list_q_names = {
+            p.get("name")
+            for p in (list_get_op.get("parameters") or ())
+            if isinstance(p, dict) and p.get("in") == "query" and p.get("name")
+        }
+        binding_qp = dict(call_params)
+        for sk in ("projectId", "accountSetId"):
+            if sk in list_q_names and sk not in binding_qp and chosen.get(sk) is not None:
+                binding_qp[sk] = chosen[sk]
         binding = {
             "kind": "relation",
             "list_path": list_path,
-            "query_params": call_params,
+            "query_params": binding_qp,
             "name_keys": list(name_keys),
             "name_key": primary_key,
             "id": chosen["id"],
@@ -1284,7 +1523,6 @@ class YudaoConventionWritePort:
         }
         if expected_fields:
             binding["expected_fields"] = expected_fields
-        paths = (self._docs() or {}).get("paths") or {}
         if ref_entity in _CRM_BIZ_TYPES and f"/admin-api/{ref_entity}/get" in paths:
             policy_turn, _knowledge = _active_turn_and_knowledge()
             try:
@@ -1351,6 +1589,16 @@ class YudaoConventionWritePort:
             if field.required:
                 raise BusinessToolRequestError(f"字段「{shown_label}」为必填项，不能清空为 null。")
             return None, "（空）" if old_raw in (None, "") else str(old_raw), "（清空）", None
+
+        if field.kind == "string_array":
+            if not isinstance(raw_value, list):
+                raise BusinessToolRequestError(f"字段「{shown_label}」需要字符串数组。")
+            arr = []
+            for elem in raw_value:
+                if not isinstance(elem, str):
+                    raise BusinessToolRequestError(f"字段「{shown_label}」元素须为字符串：{elem!r}")
+                arr.append(elem)
+            return arr, str(old_raw or []), str(arr), None
 
         # 1. Reference fields (single FK or ID array)
         if field.reference_entity:
@@ -1484,6 +1732,16 @@ class YudaoConventionWritePort:
                 raise BusinessToolRequestError(f"字段「{shown_label}」数值格式无效：{raw_value!r}") from exc
             fv = int(dec) if dec == dec.to_integral_value() else float(dec)
             return fv, "（空）" if old_raw is None else scalar_text(old_raw), scalar_text(dec), None
+
+        if field.kind == "string_array":
+            if not isinstance(raw_value, list):
+                raise BusinessToolRequestError(f"字段「{shown_label}」需要字符串数组。")
+            arr = []
+            for elem in raw_value:
+                if not isinstance(elem, str):
+                    raise BusinessToolRequestError(f"字段「{shown_label}」元素须为字符串：{elem!r}")
+                arr.append(elem)
+            return arr, str(old_raw or []), str(arr), None
 
         if field.kind == "id_array":
             if not isinstance(raw_value, list):
@@ -1620,7 +1878,13 @@ class YudaoConventionWritePort:
                     raise BusinessMutationRefusedError("region changed after approval", reason="precondition_changed")
             elif kind == "relation":
                 qp = b.get("query_params") or {}
-                raw_rows = self.client.get(b["list_path"], **qp) if qp else self.client.get(b["list_path"])
+                try:
+                    raw_rows = self.client.get(b["list_path"], **qp) if qp else self.client.get(b["list_path"])
+                except YudaoReadRefused as exc:
+                    raise BusinessMutationRefusedError(
+                        "related record list unavailable on dispatch",
+                        reason="precondition_changed",
+                    ) from exc
                 items = raw_rows if isinstance(raw_rows, list) else (raw_rows or {}).get("list") if isinstance(raw_rows, dict) else None
                 name_keys = b.get("name_keys") or [b["name_key"]]
                 expected_fields = b.get("expected_fields") or {}
@@ -2143,6 +2407,119 @@ class YudaoConventionWritePort:
                     tokens.append(lbl_tok)
         return tuple(dict.fromkeys(tokens))
 
+    def reference_provenance_variants(self, f_spec: ConventionFieldSpec, raw_token: str) -> tuple[str, ...]:
+        if f_spec.reference_entity != "system/area" or not isinstance(raw_token, str):
+            return ()
+        cleaned = raw_token.strip()
+        if not cleaned:
+            return ()
+        variants: list[str] = [cleaned]
+        norm = _normalize_area_label(cleaned)
+        if norm and norm not in variants:
+            variants.append(norm)
+        rev_aliases = {full: short for short, full in _PROVINCE_ALIASES.items()}
+        for part in [p.strip() for p in re.split(r"[/\s]+", cleaned) if p.strip()]:
+            if part not in variants:
+                variants.append(part)
+            if part in _PROVINCE_ALIASES:
+                variants.append(_PROVINCE_ALIASES[part])
+            if part in rev_aliases:
+                variants.append(rev_aliases[part])
+        if "/" in cleaned:
+            leaf = cleaned.rsplit("/", 1)[-1].strip()
+            if leaf:
+                variants.append(leaf)
+        return tuple(dict.fromkeys(v for v in variants if v))
+
+    def verify_companion_readback(
+        self,
+        spec,
+        record_id,
+        payload: dict,
+        *,
+        before_record: dict | None,
+        after_record: dict,
+        side_effects: list[dict] | tuple,
+    ) -> list[dict]:
+        del before_record, after_record
+        paths = (self._docs() or {}).get("paths") or {}
+        results: list[dict] = []
+        for se in side_effects or ():
+            if not isinstance(se, dict):
+                results.append({"effect": "companion_write", "target": str(se), "verified": False, "note": "写后未核验（无同账号回读接口）"})
+                continue
+            target = str(se.get("target") or "")
+            rb_ent = str(se.get("readback_entity") or "").strip()
+            rb_qfield = str(se.get("readback_query_field") or "").strip()
+            cond = str(se.get("condition") or "").strip()
+            if not rb_ent or not rb_qfield:
+                results.append({"effect": "companion_write", "target": target, "verified": False, "note": "写后未核验（无同账号回读接口）"})
+                continue
+            if rb_qfield.startswith("payload:"):
+                p_key = rb_qfield.split(":", 1)[1]
+                fk_val = payload.get(p_key)
+                if fk_val in (None, ""):
+                    results.append({"effect": "companion_write", "target": target, "verified": True, "note": f"未传 {p_key}，无需回读伴生表"})
+                    continue
+                try:
+                    comp_rec = self.read_record(rb_ent, fk_val)
+                except (BusinessToolRequestError, BusinessToolPermissionError, BusinessToolUnavailableError):
+                    results.append({"effect": "companion_write", "target": target, "verified": False, "note": "写后未核验（无同账号回读权限）"})
+                    continue
+                if not isinstance(comp_rec, dict) or str(comp_rec.get("id")) != str(fk_val):
+                    raise BusinessMutationIndeterminate(
+                        f"伴生写入目标 {target}（{rb_ent} ID={fk_val}）写后同账号回读失败",
+                        phase="postcondition",
+                        reconciliation={"entity": getattr(spec, "entity", ""), "companion_entity": rb_ent, "id": fk_val},
+                    )
+                if "receivableId" in comp_rec and getattr(spec, "entity", "") == "crm/receivable":
+                    if str(comp_rec.get("receivableId")) != str(record_id):
+                        raise BusinessMutationIndeterminate(
+                            f"伴生写入目标 {target}（receivableId）写后回读不一致",
+                            phase="postcondition",
+                            reconciliation={"entity": "crm/receivable-plan", "id": fk_val, "expected_receivableId": record_id},
+                        )
+                results.append({"effect": "companion_write", "target": target, "verified": True, "note": f"已同账号回读核验 {rb_ent}#{fk_val}"})
+                continue
+
+            ep_path = ""
+            qargs: dict[str, object] = {rb_qfield: record_id}
+            if f"/admin-api/{rb_ent}/list" in paths:
+                ep_path = f"{rb_ent}/list"
+            elif f"/admin-api/{rb_ent}/page" in paths:
+                ep_path = f"{rb_ent}/page"
+                qargs.update({"pageNo": 1, "pageSize": 50})
+            if not ep_path:
+                results.append({"effect": "companion_write", "target": target, "verified": False, "note": "写后未核验（无同账号回读接口）"})
+                continue
+            try:
+                raw = self.client.get(ep_path, **qargs)
+            except YudaoReadRefused as exc:
+                if exc.permission_denied or exc.code in (401, 403, _CRM_PERMISSION_DENIED_CODE):
+                    results.append({"effect": "companion_write", "target": target, "verified": False, "note": "写后未核验（同账号无读取权限）"})
+                    continue
+                raise BusinessMutationIndeterminate(
+                    f"伴生写入目标 {target}（{ep_path}）写后同账号回读失败（code={exc.code}）",
+                    phase="postcondition",
+                    reconciliation={"entity": rb_ent, rb_qfield: record_id},
+                ) from exc
+            rows = raw if isinstance(raw, list) else (raw.get("list") if isinstance(raw, dict) else None)
+            if not isinstance(rows, list):
+                raise BusinessMutationIndeterminate(
+                    f"伴生写入目标 {target}（{ep_path}）返回格式异常",
+                    phase="postcondition",
+                    reconciliation={"entity": rb_ent, rb_qfield: record_id},
+                )
+            action = str(se.get("action") or "")
+            if not rows and not cond and "新增" in action:
+                raise BusinessMutationIndeterminate(
+                    f"伴生写入目标 {target}（{ep_path}?{rb_qfield}={record_id}）写后同账号回读为空",
+                    phase="postcondition",
+                    reconciliation={"entity": rb_ent, rb_qfield: record_id},
+                )
+            results.append({"effect": "companion_write", "target": target, "verified": True, "note": f"已同账号回读 {rb_ent}（{len(rows)} 条）"})
+        return results
+
     def write_route_capability(self) -> WriteRouteCapability:
         return YUDAO_WRITE_ROUTE_CAPABILITY
 
@@ -2421,7 +2798,15 @@ def build_yudao_write_directory(*, docs: dict | None = None, source=None, ui=Non
             "required": req,
             "defaults": auto_defaults,
             "relations": list(dict.fromkeys([*fks, *child_fks])),
+            "field_labels": [f"{f.label}({f.name})" if f.label else f.name for f in spec.fields[:20]],
         }
+        if spec.validation_rules:
+            entry_dict["validation_rules"] = [r.message for r in spec.validation_rules]
+        if spec.side_effects:
+            entry_dict["side_effects"] = [
+                se.format_card_text() if isinstance(se, CompanionWriteSpec) else str(se)
+                for se in spec.side_effects
+            ]
         if cols:
             entry_dict["collections"] = cols
             entry_dict["collection_details"] = col_details
@@ -2447,9 +2832,17 @@ def build_yudao_write_directory(*, docs: dict | None = None, source=None, ui=Non
                 f"{col.name}({','.join(f.name for f in col.fields[:6])})"
                 for col in spec.collections
             ],
+            "field_labels": [f"{f.label}({f.name})" if f.label else f.name for f in spec.fields[:20]],
             "required": ["target", "changes/line_changes"],
             "relations": [],
         }
+        if spec.validation_rules:
+            agg_entry["validation_rules"] = [r.message for r in spec.validation_rules]
+        if spec.side_effects:
+            agg_entry["side_effects"] = [
+                se.format_card_text() if isinstance(se, CompanionWriteSpec) else str(se)
+                for se in spec.side_effects
+            ]
         if related_ents:
             agg_entry["related_entities"] = related_ents
         entries.append(agg_entry)
@@ -2457,7 +2850,7 @@ def build_yudao_write_directory(*, docs: dict | None = None, source=None, ui=Non
         if ent in cat["aggregates"]:
             continue
         op_tag, op_sum = _openapi_op_label(docs, f"/admin-api/{ent}/update", "put")
-        entries.append({
+        upd_entry: dict[str, object] = {
             "tool": "update_record",
             "mode": "direct",
             "kind": "compiled_update",
@@ -2465,9 +2858,18 @@ def build_yudao_write_directory(*, docs: dict | None = None, source=None, ui=Non
             "label": _merge_label(spec.label, op_tag, op_sum),
             "tag": op_tag,
             "id_field": spec.id_field,
+            "field_labels": [f"{f.label}({f.name})" if f.label else f.name for f in spec.fields[:20]],
             "required": ["target", "changes"],
             "relations": [],
-        })
+        }
+        if spec.validation_rules:
+            upd_entry["validation_rules"] = [r.message for r in spec.validation_rules]
+        if spec.side_effects:
+            upd_entry["side_effects"] = [
+                se.format_card_text() if isinstance(se, CompanionWriteSpec) else str(se)
+                for se in spec.side_effects
+            ]
+        entries.append(upd_entry)
     for ent, spec in sorted(cat["statuses"].items()):
         op_tag, op_sum = _openapi_op_label(docs, f"/admin-api/{spec.action_path}", "put")
         entries.append({

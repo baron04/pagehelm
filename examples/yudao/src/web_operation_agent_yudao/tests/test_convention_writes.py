@@ -2517,6 +2517,1063 @@ class YudaoConventionWritesTests(unittest.TestCase):
             self.assertNotIn("work/task-line", updates)
             self.assertIn("work/task-line", creates)
 
+    def test_w0_2hop_positive_proof_security_boundaries_and_ai_chat_role(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            troot = Path(tmp)
+            _write_synthetic_release(troot)
+            mod = troot / "server/yudao-module-work/src/main/java/cn/iocoder/yudao/module/work"
+            for sub in ("controller/admin/item/vo", "service/item", "service/helper", "dal/dataobject/item", "dal/mysql/item"):
+                (mod / sub).mkdir(parents=True, exist_ok=True)
+            (mod / "dal/dataobject/item/WorkItemDO.java").write_text(
+                "@TableName(\"work_item\")\npublic class WorkItemDO { private Long id; private String name; }\n",
+                encoding="utf-8",
+            )
+            (mod / "dal/dataobject/item/WorkLogDO.java").write_text(
+                "@TableName(\"work_log\")\npublic class WorkLogDO { private Long id; private Long itemId; }\n",
+                encoding="utf-8",
+            )
+            (mod / "controller/admin/item/vo/WorkItemSaveReqVO.java").write_text(
+                "public class WorkItemSaveReqVO { private Long id; private String name; }\n",
+                encoding="utf-8",
+            )
+            (mod / "controller/admin/item/vo/WorkItemRespVO.java").write_text(
+                "public class WorkItemRespVO { private Long id; private String name; }\n",
+                encoding="utf-8",
+            )
+            # Safe 2-hop helper service
+            (mod / "service/helper/WorkHelperServiceImpl.java").write_text(
+                "public class WorkHelperServiceImpl implements WorkHelperService {\n"
+                "  private WorkLogMapper logMapper;\n"
+                "  public void writeLog(Long itemId) { logMapper.insert(new WorkLogDO()); }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            # Async callee -> must be rejected
+            (mod / "service/helper/AsyncHelperServiceImpl.java").write_text(
+                "public class AsyncHelperServiceImpl implements AsyncHelperService {\n"
+                "  private WorkLogMapper logMapper;\n"
+                "  @Async\n"
+                "  public void writeAsync(Long itemId) { logMapper.insert(new WorkLogDO()); }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            # Allowed owner CRM permission service + blocked RBAC/Menu/Async/MQ/Pay/Client
+            (mod / "service/helper/CrmPermissionServiceImpl.java").write_text(
+                "public class CrmPermissionServiceImpl implements CrmPermissionService {\n"
+                "  private CrmPermissionMapper crmPermissionMapper;\n"
+                "  public void createPermission(Long bizId) { crmPermissionMapper.insert(new CrmPermissionDO()); }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (mod / "service/helper/AiChatRoleServiceImpl.java").write_text(
+                "public class AiChatRoleServiceImpl implements AiChatRoleService {\n"
+                "  private AiChatRoleMapper chatRoleMapper;\n"
+                "  public Long createChatRole(WorkItemSaveReqVO reqVO) { chatRoleMapper.insert(null); return 1L; }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (mod / "service/helper/RbacTouchServiceImpl.java").write_text(
+                "public class RbacTouchServiceImpl implements RbacTouchService {\n"
+                "  private RoleMapper roleMapper;\n"
+                "  public void touch() { roleMapper.insert(null); }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (mod / "service/item/WorkItemServiceImpl.java").write_text(
+                "public class WorkItemServiceImpl implements WorkItemService {\n"
+                "  private WorkItemMapper itemMapper;\n"
+                "  private WorkHelperService helperService;\n"
+                "  private CrmPermissionService permissionService;\n"
+                "  private AsyncHelperService asyncHelperService;\n"
+                "  private RbacTouchService rbacTouchService;\n"
+                "  private PayClient payClient;\n"
+                "  public Long createSafe(WorkItemSaveReqVO reqVO) { itemMapper.insert(null); helperService.writeLog(1L); permissionService.createPermission(1L); return 1L; }\n"
+                "  public Long createAsync(WorkItemSaveReqVO reqVO) { itemMapper.insert(null); asyncHelperService.writeAsync(1L); return 1L; }\n"
+                "  public Long createRbac(WorkItemSaveReqVO reqVO) { itemMapper.insert(null); rbacTouchService.touch(); return 1L; }\n"
+                "  public Long createClient(WorkItemSaveReqVO reqVO) { itemMapper.insert(null); payClient.send(1L); return 1L; }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            for idx, (slug, cname, meth) in enumerate((
+                ("work/safe", "WorkSafeController", "createSafe"),
+                ("work/async", "WorkAsyncController", "createAsync"),
+                ("work/rbac", "WorkRbacController", "createRbac"),
+                ("work/client", "WorkClientController", "createClient"),
+            )):
+                (mod / f"controller/admin/item/{cname}.java").write_text(
+                    f"package p;\n@RequestMapping(\"/{slug}\") @RestController public class {cname} {{\n"
+                    f"  private WorkItemService workItemService;\n"
+                    f"  @PostMapping(\"/create\") public CommonResult<Long> create(@RequestBody WorkItemSaveReqVO reqVO) {{ return success(workItemService.{meth}(reqVO)); }}\n"
+                    f"}}\n",
+                    encoding="utf-8",
+                )
+            (mod / "controller/admin/item/WorkChatRoleController.java").write_text(
+                "package p;\n@RequestMapping(\"/work/chatrole\") @RestController public class WorkChatRoleController {\n"
+                "  private AiChatRoleService aiChatRoleService;\n"
+                "  @PostMapping(\"/create\") public CommonResult<Long> create(@RequestBody WorkItemSaveReqVO reqVO) { return success(aiChatRoleService.createChatRole(reqVO)); }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            paths = {}
+            for slug in ("work/safe", "work/async", "work/rbac", "work/client", "work/chatrole"):
+                paths[f"/admin-api/{slug}/get"] = {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/ItemResp"}}}}}}}
+                paths[f"/admin-api/{slug}/create"] = {
+                    "post": {
+                        "tags": [f"管理后台 - {slug}"],
+                        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/WorkItemSaveReqVO"}}}},
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                    }
+                }
+            docs = {
+                "paths": paths,
+                "components": {
+                    "schemas": {
+                        "CommonResultLong": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "integer"}}},
+                        "ItemResp": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}}}}},
+                        "WorkItemSaveReqVO": {"type": "object", "required": ["name"], "properties": {"id": {"type": "integer"}, "name": {"type": "string"}}},
+                    }
+                },
+            }
+            port = YudaoConventionWritePort(FakeYudaoClient(), FakeGoalData(docs, source=YudaoSource(troot, release="v-w0-2hop")))
+            creates = port.create_specs()
+            self.assertIn("work/safe", creates)
+            self.assertIn("work/chatrole", creates)
+            self.assertNotIn("work/async", creates)
+            self.assertNotIn("work/rbac", creates)
+            self.assertNotIn("work/client", creates)
+            se_targets = {s.target for s in creates["work/safe"].side_effects}
+            self.assertIn("work_log", se_targets)
+            self.assertTrue(any("permission" in t for t in se_targets))
+
+    def test_w0_baseline_companion_methods_and_approval_card_disclosure(self):
+        from web_operation_agent.business.compiled_writes import CompiledCreateHandler
+
+        base_safe_methods = (
+            "createPermission",
+            "lockAccountSet",
+            "updateReceivablePlanReceivableId",
+            "setAuxiliaryCombinationIds",
+            "createSalaryChangeRecord",
+            "updateSalaryChangeRecord",
+            "updatePurchaseOrderInCount",
+            "updatePurchaseOrderReturnCount",
+            "updateSaleOrderOutCount",
+            "updateSaleOrderReturnCount",
+            "updatePurchaseInPaymentPrice",
+            "updatePurchaseReturnRefundPrice",
+            "updateSaleInReceiptPrice",
+            "updateSaleReturnRefundPrice",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            troot = Path(tmp)
+            _write_synthetic_release(troot)
+            mod = troot / "server/yudao-module-work/src/main/java/cn/iocoder/yudao/module/work"
+            (mod / "controller/admin/basecomp").mkdir(parents=True, exist_ok=True)
+            (mod / "service/basecomp").mkdir(parents=True, exist_ok=True)
+            (mod / "dal/dataobject/basecomp").mkdir(parents=True, exist_ok=True)
+            (mod / "dal/dataobject/basecomp/BaseCompDO.java").write_text(
+                "@TableName(\"base_comp\")\npublic class BaseCompDO { private Long id; private String name; }\n",
+                encoding="utf-8",
+            )
+            svc_fields_lines = "\n".join(f"  private Comp{i}Service comp{i}Service;" for i in range(len(base_safe_methods)))
+            svc_methods = []
+            paths = {}
+            for idx, mname in enumerate(base_safe_methods):
+                slug = f"work/basecomp{idx}"
+                (mod / f"controller/admin/basecomp/BaseComp{idx}Controller.java").write_text(
+                    f"package p;\n@RequestMapping(\"/{slug}\") @RestController public class BaseComp{idx}Controller {{\n"
+                    f"  private BaseCompService baseCompService;\n"
+                    f"  @PostMapping(\"/create\") public CommonResult<Long> create(@RequestBody BaseCompSaveReqVO reqVO) {{ return success(baseCompService.create{idx}(reqVO)); }}\n"
+                    f"}}\n",
+                    encoding="utf-8",
+                )
+                svc_methods.append(
+                    f"  public Long create{idx}(BaseCompSaveReqVO reqVO) {{ mapper.insert(null); comp{idx}Service.{mname}(1L); return 1L; }}\n"
+                )
+                paths[f"/admin-api/{slug}/get"] = {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/BaseResp"}}}}}}}
+                paths[f"/admin-api/{slug}/create"] = {
+                    "post": {
+                        "tags": [f"管理后台 - {slug}"],
+                        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/BaseCompSaveReqVO"}}}},
+                        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                    }
+                }
+            (mod / "service/basecomp/BaseCompServiceImpl.java").write_text(
+                "public class BaseCompServiceImpl implements BaseCompService {\n"
+                "  private BaseCompMapper mapper;\n"
+                + svc_fields_lines + "\n" + "".join(svc_methods) + "}\n",
+                encoding="utf-8",
+            )
+            docs = {
+                "paths": paths,
+                "components": {
+                    "schemas": {
+                        "CommonResultLong": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "integer"}}},
+                        "BaseResp": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}}}}},
+                        "BaseCompSaveReqVO": {"type": "object", "required": ["name"], "properties": {"id": {"type": "integer"}, "name": {"type": "string"}}},
+                    }
+                },
+            }
+            port = YudaoConventionWritePort(FakeYudaoClient(), FakeGoalData(docs, source=YudaoSource(troot, release="v-w0-base18")))
+            creates = port.create_specs()
+            for idx, mname in enumerate(base_safe_methods):
+                slug = f"work/basecomp{idx}"
+                self.assertIn(slug, creates, f"{mname} should remain admitted")
+                self.assertTrue(creates[slug].side_effects, f"{mname} should disclose companion write")
+            handler = CompiledCreateHandler(port)
+            prop = handler.prepare({"entity": "work/basecomp0", "fields": [{"field": "name", "value": "测试单"}]}, context=_ctx())
+            self.assertTrue(any(d.kind == "side_effect" and d.label.startswith("伴生写入") for d in prop.details))
+
+    def test_w0_put_1n_projection_direct_id_list_and_unreadable_agg_guard(self):
+        from web_operation_agent.business.convention_writes import ConventionUpdateHandler
+
+        with tempfile.TemporaryDirectory() as tmp:
+            troot = Path(tmp)
+            _write_synthetic_release(troot)
+            mod = troot / "server/yudao-module-oa/src/main/java/cn/iocoder/yudao/module/oa"
+            for sub in ("controller/admin/task/vo", "service/task", "dal/dataobject/task"):
+                (mod / sub).mkdir(parents=True, exist_ok=True)
+            (mod / "dal/dataobject/task/OaTaskDO.java").write_text(
+                "@TableName(\"oa_task\")\npublic class OaTaskDO { private Long id; private String title; }\n",
+                encoding="utf-8",
+            )
+            (mod / "dal/dataobject/task/OaTaskReceiverDO.java").write_text(
+                "@TableName(\"oa_task_receiver\")\npublic class OaTaskReceiverDO { private Long id; private Long taskId; private Long userId; }\n",
+                encoding="utf-8",
+            )
+            (mod / "service/task/OaTaskServiceImpl.java").write_text(
+                "public class OaTaskServiceImpl implements OaTaskService {\n"
+                "  private OaTaskMapper taskMapper;\n"
+                "  private OaTaskReceiverMapper taskReceiverMapper;\n"
+                "  public void updateTask(OaTaskSaveReqVO reqVO) {\n"
+                "    taskMapper.updateById(BeanUtils.toBean(reqVO, OaTaskDO.class));\n"
+                "    taskReceiverMapper.insertBatch(reqVO.getReceiverUserIds());\n"
+                "  }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (mod / "controller/admin/task/OaTaskController.java").write_text(
+                "package p;\n@RequestMapping(\"/oa/task\") @RestController public class OaTaskController {\n"
+                "  private OaTaskService taskService;\n"
+                "  @PutMapping(\"/update\") public CommonResult<Boolean> update(@RequestBody OaTaskSaveReqVO reqVO) { taskService.updateTask(reqVO); return success(true); }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (mod / "controller/admin/task/BadAggController.java").write_text(
+                "package p;\n@RequestMapping(\"/oa/badagg\") @RestController public class BadAggController {\n"
+                "  @PutMapping(\"/update\") public CommonResult<Boolean> update(@RequestBody BadAggReqVO reqVO) { return success(true); }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            class ProjClient(FakeYudaoClient):
+                def __init__(self):
+                    super().__init__()
+                    self.records[("oa/task", 77)] = {
+                        "id": 77,
+                        "title": "原任务",
+                        "receivers": [{"id": 1, "userId": 9}],
+                    }
+
+                def get(self, path: str, **params):
+                    if path == "system/user/simple-list":
+                        return [{"id": 9, "nickname": "管理员"}, {"id": 10, "nickname": "李四"}]
+                    return super().get(path, **params)
+
+                def write_once(self, method: str, path: str, *, body: dict, params=None, operation: str = ""):
+                    if path == "oa/task/update":
+                        rec = self.records[("oa/task", body["id"])]
+                        rec["title"] = body.get("title", rec["title"])
+                        rec["receivers"] = [{"id": i + 1, "userId": uid} for i, uid in enumerate(body.get("receiverUserIds") or ())]
+                        return True
+                    return super().write_once(method, path, body=body, params=params, operation=operation)
+
+            docs = {
+                "paths": {
+                    "/admin-api/system/user/simple-list": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"type": "array"}}}}}}},
+                    "/admin-api/oa/task/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/OaTaskResp"}}}}}}},
+                    "/admin-api/oa/task/page": {
+                        "get": {
+                            "parameters": [{"name": "name", "in": "query"}, {"name": "pageNo", "in": "query"}, {"name": "pageSize", "in": "query"}],
+                            "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/OaTaskPageResp"}}}}},
+                        }
+                    },
+                    "/admin-api/oa/task/update": {
+                        "put": {
+                            "tags": ["管理后台 - OA 任务"],
+                            "requestBody": {"content": {"application/json": {"schema": {
+                                "type": "object", "required": ["id"],
+                                "properties": {
+                                    "id": {"type": "integer"},
+                                    "title": {"type": "string"},
+                                    "receiverUserIds": {"type": "array", "items": {"type": "integer"}},
+                                },
+                            }}}},
+                            "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}},
+                        }
+                    },
+                    "/admin-api/oa/badagg/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/BadAggResp"}}}}}}},
+                    "/admin-api/oa/badagg/update": {
+                        "put": {
+                            "tags": ["管理后台 - 缺失回读子表"],
+                            "requestBody": {"content": {"application/json": {"schema": {
+                                "type": "object", "required": ["id"],
+                                "properties": {
+                                    "id": {"type": "integer"},
+                                    "projects": {"type": "array", "items": {"$ref": "#/components/schemas/BadProjItem"}},
+                                },
+                            }}}},
+                            "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}},
+                        }
+                    },
+                },
+                "components": {
+                    "schemas": {
+                        "CommonResultBoolean": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "boolean"}}},
+                        "OaTaskReceiverItem": {"type": "object", "properties": {"id": {"type": "integer"}, "userId": {"type": "integer"}}},
+                        "OaTaskResp": {"type": "object", "properties": {"data": {"type": "object", "properties": {
+                            "id": {"type": "integer"}, "title": {"type": "string"},
+                            "receivers": {"type": "array", "items": {"$ref": "#/components/schemas/OaTaskReceiverItem"}},
+                        }}}},
+                        "OaTaskPageResp": {"type": "object", "properties": {"data": {"type": "object", "properties": {
+                            "list": {"type": "array", "items": {"$ref": "#/components/schemas/OaTaskResp"}}, "total": {"type": "integer"},
+                        }}}},
+                        "BadProjItem": {"type": "object", "properties": {"name": {"type": "string"}}},
+                        "BadAggResp": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "otherList": {"type": "array", "items": {"$ref": "#/components/schemas/BadProjItem"}}}}}},
+                    }
+                },
+            }
+            client = ProjClient()
+            port = YudaoConventionWritePort(client, FakeGoalData(docs, source=YudaoSource(troot, release="v-w0-1n")))
+            self.assertNotIn("oa/badagg", port.aggregate_update_specs())
+            spec = port.update_specs()["oa/task"]
+            self.assertEqual(spec.resolve_field("receiverUserIds").readback_projection, ("receivers", "userId"))
+            self.assertEqual(spec.resolve_field("receiverUserIds").reference_entity, "system/user")
+            self.assertTrue(any(s.target == "oa_task_receiver" for s in spec.side_effects))
+            handler = ConventionUpdateHandler(port)
+            prop = handler.prepare(
+                {"entity": "oa/task", "target": "原任务（ID=77）", "changes": [{"field": "receiverUserIds", "value": ["李四"]}]},
+                context=_ctx(),
+            )
+            self.assertEqual(prop.args["payload"]["receiverUserIds"], [10])
+            self.assertTrue(any(d.kind == "side_effect" for d in prop.details))
+            client.write_once("PUT", "oa/task/update", body=prop.args["payload"])
+            after = client.get("oa/task/get", id=77)
+            from web_operation_agent.business.convention_writes import extract_projected_field_value
+            self.assertEqual(extract_projected_field_value(port, spec, spec.resolve_field("receiverUserIds"), after), [10])
+
+    def test_w0_f2_dual_source_fk_agreement_contradiction_and_polymorphic(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            troot = Path(tmp)
+            _write_synthetic_release(troot)
+            mod = troot / "server/yudao-module-demo/src/main/java/cn/iocoder/yudao/module/demo"
+            (mod / "controller/admin/order").mkdir(parents=True, exist_ok=True)
+            (mod / "service/order").mkdir(parents=True, exist_ok=True)
+            (mod / "service/partner").mkdir(parents=True, exist_ok=True)
+            (mod / "service/vendor").mkdir(parents=True, exist_ok=True)
+            (mod / "service/partner/DemoPartnerServiceImpl.java").write_text(
+                "public class DemoPartnerServiceImpl implements DemoPartnerService { public void validatePartnerExists(Long id) {} }\n",
+                encoding="utf-8",
+            )
+            (mod / "service/vendor/DemoVendorServiceImpl.java").write_text(
+                "public class DemoVendorServiceImpl implements DemoVendorService { public void validateVendorExists(Long id) {} }\n",
+                encoding="utf-8",
+            )
+            (mod / "service/order/DemoOrderServiceImpl.java").write_text(
+                "public class DemoOrderServiceImpl implements DemoOrderService {\n"
+                "  private DemoOrderMapper orderMapper;\n"
+                "  private DemoPartnerService partnerService;\n"
+                "  private DemoVendorService vendorService;\n"
+                "  public Long createOrder(DemoOrderSaveReqVO reqVO) {\n"
+                "    partnerService.validatePartnerExists(reqVO.getClientPartnerId());\n"
+                "    vendorService.validateVendorExists(reqVO.getMixedPartyId());\n"
+                "    orderMapper.insert(null);\n"
+                "    return 1L;\n"
+                "  }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (mod / "controller/admin/order/DemoPartnerController.java").write_text(
+                "package p;\n@RequestMapping(\"/demo/partner\") @RestController public class DemoPartnerController {\n"
+                "  private DemoPartnerService demoPartnerService;\n"
+                "  @GetMapping(\"/simple-list\") public Object list() { return demoPartnerService.list(); }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (mod / "controller/admin/order/DemoVendorController.java").write_text(
+                "package p;\n@RequestMapping(\"/demo/vendor\") @RestController public class DemoVendorController {\n"
+                "  private DemoVendorService demoVendorService;\n"
+                "  @GetMapping(\"/simple-list\") public Object list() { return demoVendorService.list(); }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (mod / "controller/admin/order/DemoOrderController.java").write_text(
+                "package p;\n@RequestMapping(\"/demo/order\") @RestController public class DemoOrderController {\n"
+                "  private DemoOrderService demoOrderService;\n"
+                "  @PostMapping(\"/create\") public CommonResult<Long> create(@RequestBody DemoOrderSaveReqVO reqVO) { return success(demoOrderService.createOrder(reqVO)); }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            ui_api_dir = troot / "ui/src/api/demo"
+            ui_view_dir = troot / "ui/src/views/demo/order"
+            ui_api_dir.mkdir(parents=True, exist_ok=True)
+            ui_view_dir.mkdir(parents=True, exist_ok=True)
+            (ui_api_dir / "order.ts").write_text("export const createOrder = (data: any) => request.post({ url: '/demo/order/create', data })\n", encoding="utf-8")
+            (ui_api_dir / "partner.ts").write_text("export const getPartnerSimpleList = () => request.get({ url: '/demo/partner/simple-list' })\n", encoding="utf-8")
+            (ui_view_dir / "OrderForm.vue").write_text(
+                "<template><el-form :model=\"formData\">"
+                "<el-form-item label=\"伙伴\" prop=\"clientPartnerId\"><el-select v-model=\"formData.clientPartnerId\"><el-option v-for=\"p in partnerList\" :value=\"p.id\" /></el-select></el-form-item>"
+                "<el-form-item label=\"矛盾\" prop=\"mixedPartyId\"><el-select v-model=\"formData.mixedPartyId\"><el-option v-for=\"m in mixedList\" :value=\"m.id\" /></el-select></el-form-item>"
+                "</el-form></template>\n<script setup lang=\"ts\">\n"
+                "import * as OrderApi from '@/api/demo/order'\n"
+                "import * as PartnerApi from '@/api/demo/partner'\n"
+                "const load = async () => { partnerList.value = await PartnerApi.getPartnerSimpleList(); mixedList.value = await PartnerApi.getPartnerSimpleList(); }\n"
+                "const submit = async () => { await OrderApi.createOrder(formData.value) }\n"
+                "</script>\n",
+                encoding="utf-8",
+            )
+            docs = {
+                "paths": {
+                    "/admin-api/demo/partner/simple-list": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"type": "array"}}}}}}},
+                    "/admin-api/demo/vendor/simple-list": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"type": "array"}}}}}}},
+                    "/admin-api/demo/order/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/OrderResp"}}}}}}},
+                    "/admin-api/demo/order/create": {
+                        "post": {
+                            "tags": ["管理后台 - 测试订单"],
+                            "requestBody": {"content": {"application/json": {"schema": {
+                                "type": "object", "required": ["clientPartnerId"],
+                                "properties": {
+                                    "clientPartnerId": {"type": "integer"},
+                                    "mixedPartyId": {"type": "integer"},
+                                    "bizType": {"type": "integer"},
+                                    "bizId": {"type": "integer"},
+                                },
+                            }}}},
+                            "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                        }
+                    },
+                },
+                "components": {
+                    "schemas": {
+                        "CommonResultLong": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "integer"}}},
+                        "OrderResp": {"type": "object", "properties": {"data": {"type": "object", "properties": {
+                            "id": {"type": "integer"}, "clientPartnerId": {"type": "integer"}, "mixedPartyId": {"type": "integer"},
+                            "bizType": {"type": "integer"}, "bizId": {"type": "integer"},
+                        }}}},
+                    }
+                },
+            }
+            port = YudaoConventionWritePort(FakeYudaoClient(), FakeGoalData(docs, source=YudaoSource(troot, release="v-w0-f2")))
+            sp = port.create_specs()["demo/order"]
+            self.assertEqual(sp.resolve_field("clientPartnerId").reference_entity, "demo/partner")
+            self.assertEqual(sp.resolve_field("mixedPartyId").reference_entity, "")
+            self.assertEqual(sp.resolve_field("bizId").reference_entity, "")
+
+    def test_w0_f3_string_array_empty_list_default_and_encode(self):
+        from web_operation_agent.business.compiled_writes import CompiledCreateHandler
+
+        with tempfile.TemporaryDirectory() as tmp:
+            troot = Path(tmp)
+            _write_synthetic_release(troot)
+            ui_api_dir = troot / "ui/src/api/oa"
+            ui_view_dir = troot / "ui/src/views/oa/note"
+            ui_api_dir.mkdir(parents=True, exist_ok=True)
+            ui_view_dir.mkdir(parents=True, exist_ok=True)
+            (ui_api_dir / "note.ts").write_text("export const createNote = (data: any) => request.post({ url: '/oa/note/create', data })\n", encoding="utf-8")
+            (ui_view_dir / "NoteForm.vue").write_text(
+                "<template><el-form :model=\"formData\"></el-form></template>\n<script setup lang=\"ts\">\n"
+                "import * as NoteApi from '@/api/oa/note'\n"
+                "const formData = ref<any>({\n  title: '',\n  fileUrls: [] as string[],\n})\n"
+                "const handleAddRow = () => { const row = { tags: [] }; formData.value.items.push(row) }\n"
+                "const submit = async () => { await NoteApi.createNote(formData.value) }\n"
+                "</script>\n",
+                encoding="utf-8",
+            )
+            docs = {
+                "paths": {
+                    "/admin-api/oa/note/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/NoteResp"}}}}}}},
+                    "/admin-api/oa/note/create": {
+                        "post": {
+                            "tags": ["管理后台 - 笔记"],
+                            "requestBody": {"content": {"application/json": {"schema": {
+                                "type": "object", "required": ["title", "fileUrls"],
+                                "properties": {"title": {"type": "string"}, "fileUrls": {"type": "array", "items": {"type": "string"}}},
+                            }}}},
+                            "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                        }
+                    },
+                },
+                "components": {
+                    "schemas": {
+                        "CommonResultLong": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "integer"}}},
+                        "NoteResp": {"type": "object", "properties": {"data": {"type": "object", "properties": {
+                            "id": {"type": "integer"}, "title": {"type": "string"}, "fileUrls": {"type": "array", "items": {"type": "string"}},
+                        }}}},
+                    }
+                },
+            }
+            port = YudaoConventionWritePort(FakeYudaoClient(), FakeGoalData(docs, source=YudaoSource(troot, release="v-w0-f3")))
+            sp = port.create_specs()["oa/note"]
+            f_spec = sp.resolve_field("fileUrls")
+            self.assertEqual(f_spec.kind, "string_array")
+            d_spec = next(d for d in sp.defaults if d.field == "fileUrls")
+            self.assertEqual(d_spec.value, [])
+            self.assertEqual(d_spec.display, "[]（空列表）")
+            val, _old, disp, _b = port.encode_field(sp, f_spec, ["https://a.test/1.png"], {"fileUrls": []})
+            self.assertEqual(val, ["https://a.test/1.png"])
+            self.assertIn("https://a.test/1.png", disp)
+            with self.assertRaises(BusinessToolRequestError):
+                port.encode_field(sp, f_spec, [123], {"fileUrls": []})
+            handler = CompiledCreateHandler(port)
+            prop = handler.prepare({"entity": "oa/note", "fields": [{"field": "title", "value": "随记"}]}, context=_ctx())
+            self.assertEqual(prop.args["payload"]["fileUrls"], [])
+
+    def test_w0_assert_true_rules_and_directory_line_formatting(self):
+        from web_operation_agent_yudao.writes.convention_writes import build_yudao_write_directory
+        from web_operation_agent_yudao.executor.domain_toolpacks import format_write_entry_line
+
+        with tempfile.TemporaryDirectory() as tmp:
+            troot = Path(tmp)
+            _write_synthetic_release(troot)
+            mod = troot / "server/yudao-module-oa/src/main/java/cn/iocoder/yudao/module/oa"
+            (mod / "controller/admin/rep/vo").mkdir(parents=True, exist_ok=True)
+            (mod / "dal/dataobject/rep").mkdir(parents=True, exist_ok=True)
+            (mod / "controller/admin/rep/vo/OaRepSaveReqVO.java").write_text(
+                "public class OaRepSaveReqVO {\n"
+                "  private Long id;\n"
+                "  private LocalDateTime startTime;\n"
+                "  private LocalDateTime endTime;\n"
+                "  private String summary;\n"
+                "  private String plan;\n"
+                "  private List<WorkItem> workItems;\n"
+                "  @AssertTrue(message = \"结束时间不能早于开始时间\")\n"
+                "  public boolean isTimeRangeValid() { return startTime == null || endTime == null || !startTime.isAfter(endTime); }\n"
+                "  @AssertTrue(message = \"文字或明细至少填一项\")\n"
+                "  public boolean isContentValid() { return StrUtil.isNotBlank(summary) || StrUtil.isNotBlank(plan) || CollUtil.isNotEmpty(workItems); }\n"
+                "  public static class WorkItem { private String content; }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (mod / "controller/admin/rep/vo/OaScalarPairSaveReqVO.java").write_text(
+                "public class OaScalarPairSaveReqVO {\n"
+                "  private Long id;\n"
+                "  private String summary;\n"
+                "  private String plan;\n"
+                "  @AssertTrue(message = \"请至少填写总结或计划\")\n"
+                "  public boolean isScalarValid() { return StrUtil.isNotBlank(summary) || StrUtil.isNotBlank(plan); }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (mod / "service/rep").mkdir(parents=True, exist_ok=True)
+            (mod / "service/rep/OaRepServiceImpl.java").write_text(
+                "public class OaRepServiceImpl implements OaRepService {\n"
+                "  private OaRepMapper mapper;\n"
+                "  public Long createRep(OaRepSaveReqVO reqVO) { mapper.insert(null); return 1L; }\n"
+                "  public Long createPair(OaScalarPairSaveReqVO reqVO) { mapper.insert(null); return 1L; }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (mod / "controller/admin/rep/OaRepController.java").write_text(
+                "package p;\n@RequestMapping(\"/oa/rep\") @RestController public class OaRepController {\n"
+                "  private OaRepService oaRepService;\n"
+                "  @PostMapping(\"/create\") public CommonResult<Long> create(@RequestBody OaRepSaveReqVO reqVO) { return success(oaRepService.createRep(reqVO)); }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (mod / "controller/admin/rep/OaScalarPairController.java").write_text(
+                "package p;\n@RequestMapping(\"/oa/scalarpair\") @RestController public class OaScalarPairController {\n"
+                "  private OaRepService oaRepService;\n"
+                "  @PostMapping(\"/create\") public CommonResult<Long> create(@RequestBody OaScalarPairSaveReqVO reqVO) { return success(oaRepService.createPair(reqVO)); }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            docs = {
+                "paths": {
+                    "/admin-api/oa/rep/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/RepResp"}}}}}}},
+                    "/admin-api/oa/rep/create": {
+                        "post": {
+                            "tags": ["管理后台 - 汇报"],
+                            "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/OaRepSaveReqVO"}}}},
+                            "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                        }
+                    },
+                    "/admin-api/oa/scalarpair/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/PairResp"}}}}}}},
+                    "/admin-api/oa/scalarpair/create": {
+                        "post": {
+                            "tags": ["管理后台 - 二选一"],
+                            "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/OaScalarPairSaveReqVO"}}}},
+                            "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                        }
+                    },
+                },
+                "components": {
+                    "schemas": {
+                        "CommonResultLong": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "integer"}}},
+                        "WorkItem": {"type": "object", "properties": {"content": {"type": "string"}}},
+                        "OaRepSaveReqVO": {"type": "object", "properties": {
+                            "startTime": {"type": "integer"}, "endTime": {"type": "integer"},
+                            "summary": {"type": "string"}, "plan": {"type": "string"},
+                            "workItems": {"type": "array", "items": {"$ref": "#/components/schemas/WorkItem"}},
+                            "timeRangeValid": {"type": "boolean"}, "contentValid": {"type": "boolean"},
+                        }},
+                        "RepResp": {"type": "object", "properties": {"data": {"type": "object", "properties": {
+                            "id": {"type": "integer"}, "startTime": {"type": "integer"}, "endTime": {"type": "integer"},
+                            "summary": {"type": "string"}, "plan": {"type": "string"},
+                            "workItems": {"type": "array", "items": {"$ref": "#/components/schemas/WorkItem"}},
+                        }}}},
+                        "OaScalarPairSaveReqVO": {"type": "object", "properties": {
+                            "summary": {"type": "string"}, "plan": {"type": "string"}, "scalarValid": {"type": "boolean"},
+                        }},
+                        "PairResp": {"type": "object", "properties": {"data": {"type": "object", "properties": {
+                            "id": {"type": "integer"}, "summary": {"type": "string"}, "plan": {"type": "string"},
+                        }}}},
+                    }
+                },
+            }
+            src = YudaoSource(troot, release="v-w0-vr")
+            port = YudaoConventionWritePort(FakeYudaoClient(), FakeGoalData(docs, source=src))
+            rep = port.create_specs()["oa/rep"]
+            self.assertIsNone(rep.resolve_field("timeRangeValid"))
+            self.assertIsNone(rep.resolve_field("contentValid"))
+            self.assertEqual([r.kind for r in rep.validation_rules], ["date_order"])
+            pair = port.create_specs()["oa/scalarpair"]
+            self.assertEqual([r.kind for r in pair.validation_rules], ["at_least_one"])
+            entries = build_yudao_write_directory(docs=docs, source=src, ui=None)
+            rep_entry = next(e for e in entries if e["entity"] == "oa/rep" and e["kind"] == "compiled_create")
+            line = format_write_entry_line(rep_entry)
+            self.assertIn("校验:", line)
+            self.assertIn("结束时间不能早于开始时间", line)
+
+    def test_w0_tree_cell_values_tree_ref_lookup_and_area_variants(self):
+        from web_operation_agent_yudao.executor.actor_knowledge import _cell_values
+        from web_operation_agent.business.convention_writes import ConventionFieldSpec
+
+        tree_rows = [
+            {
+                "id": 10,
+                "name": "总部",
+                "parentId": 0,
+                "children": [
+                    {"id": 20, "name": "华东", "parentId": 10},
+                ],
+            },
+            {
+                "id": 30,
+                "name": "分部",
+                "parentId": 0,
+                "children": [
+                    {"id": 40, "name": "华东", "parentId": 30},
+                ],
+            },
+        ]
+        cands, _bound = _cell_values(tree_rows, entity_slug="mes/md-workshop")
+        vals = {v for _k, v in cands}
+        self.assertIn("总部/华东", vals)
+        self.assertIn("分部/华东", vals)
+
+        class TreeRefClient(FakeYudaoClient):
+            def get(self, path: str, **params):
+                if path == "mes/md-workshop/tree":
+                    return tree_rows
+                return super().get(path, **params)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            troot = Path(tmp)
+            _write_synthetic_release(troot)
+            docs = {
+                "paths": {
+                    "/admin-api/mes/md-workshop/tree": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"type": "array"}}}}}}},
+                },
+                "components": {"schemas": {}},
+            }
+            port = YudaoConventionWritePort(TreeRefClient(), FakeGoalData(docs, source=YudaoSource(troot, release="v-w0-tree")))
+            rid, lbl, _b = port._resolve_single_ref("mes/md-workshop", "分部/华东")
+            self.assertEqual(rid, 40)
+            self.assertEqual(lbl, "华东")
+            area_field = ConventionFieldSpec(name="areaId", kind="integer", label="区域", reference_entity="system/area")
+            variants = port.reference_provenance_variants(area_field, "浙江省/杭州市")
+            self.assertIn("浙江", variants)
+            self.assertIn("浙江省", variants)
+            self.assertIn("杭州市", variants)
+
+    def test_w0_verify_companion_readback_outcomes(self):
+        from web_operation_agent.business.errors import BusinessMutationIndeterminate
+        from web_operation_agent_yudao.reads.client import YudaoReadRefused
+
+        class ReadbackClient(FakeYudaoClient):
+            def __init__(self, mode: str):
+                super().__init__()
+                self.mode = mode
+
+            def get(self, path: str, **params):
+                if path == "crm/contact/list":
+                    if self.mode == "ok":
+                        return [{"id": 501, "businessId": params.get("businessId")}]
+                    if self.mode == "empty":
+                        return []
+                    if self.mode == "403":
+                        raise YudaoReadRefused("无权限", code=403)
+                    if self.mode == "500":
+                        raise YudaoReadRefused("服务器内部错误", code=500)
+                return super().get(path, **params)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            troot = Path(tmp)
+            _write_synthetic_release(troot)
+            docs = {
+                "paths": {
+                    "/admin-api/crm/contact/list": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"type": "array"}}}}}}},
+                },
+                "components": {"schemas": {}},
+            }
+            spec = NS(entity="crm/business")
+            uncond_se = [{"target": "crm_contact_business", "action": "新增伴生记录（insertBatch）", "readback_entity": "crm/contact", "readback_query_field": "businessId", "condition": ""}]
+            cond_se = [{"target": "crm_contact_business", "action": "新增伴生记录（insertBatch）", "readback_entity": "crm/contact", "readback_query_field": "businessId", "condition": "按条件触发"}]
+            no_ep_se = [{"target": "work_log", "action": "新增伴生记录（insert）", "readback_entity": "", "readback_query_field": "", "condition": ""}]
+
+            src = YudaoSource(troot, release="v-w0-rb")
+            # 1. verified=True
+            port_ok = YudaoConventionWritePort(ReadbackClient("ok"), FakeGoalData(docs, source=src))
+            res_ok = port_ok.verify_companion_readback(spec, 88, {}, before_record=None, after_record={"id": 88}, side_effects=uncond_se)
+            self.assertTrue(res_ok[0]["verified"])
+            # 2. unconditional insert empty -> BusinessMutationIndeterminate
+            port_empty = YudaoConventionWritePort(ReadbackClient("empty"), FakeGoalData(docs, source=src))
+            with self.assertRaises(BusinessMutationIndeterminate):
+                port_empty.verify_companion_readback(spec, 88, {}, before_record=None, after_record={"id": 88}, side_effects=uncond_se)
+            # 3. early-return conditional insert empty -> verified=True (not false indeterminate)
+            res_cond = port_empty.verify_companion_readback(spec, 88, {}, before_record=None, after_record={"id": 88}, side_effects=cond_se)
+            self.assertTrue(res_cond[0]["verified"])
+            # 4. 500 error -> BusinessMutationIndeterminate
+            port_500 = YudaoConventionWritePort(ReadbackClient("500"), FakeGoalData(docs, source=src))
+            with self.assertRaises(BusinessMutationIndeterminate):
+                port_500.verify_companion_readback(spec, 88, {}, before_record=None, after_record={"id": 88}, side_effects=uncond_se)
+            # 5. 403 -> verified=False with honest note
+            port_403 = YudaoConventionWritePort(ReadbackClient("403"), FakeGoalData(docs, source=src))
+            res_403 = port_403.verify_companion_readback(spec, 88, {}, before_record=None, after_record={"id": 88}, side_effects=uncond_se)
+            self.assertFalse(res_403[0]["verified"])
+            self.assertIn("写后未核验", res_403[0]["note"])
+            # 6. No read endpoint -> verified=False with honest note
+            res_noep = port_ok.verify_companion_readback(spec, 88, {}, before_record=None, after_record={"id": 88}, side_effects=no_ep_se)
+            self.assertFalse(res_noep[0]["verified"])
+            self.assertIn("写后未核验", res_noep[0]["note"])
+
+    def test_w0_r2_salary_id_volatile_resolve_target_and_project_ref(self):
+        class W0R2Client(FakeYudaoClient):
+            tenant = "1"
+
+            def __init__(self):
+                super().__init__()
+                self.next_sal_pk = 900
+
+            def get(self, path: str, **params):
+                if path == "hrm/employee/page":
+                    return {"list": [{"id": 63, "name": "于振宁"}]}
+                if path == "hrm/salary/employee-info/page":
+                    return {"list": [{"id": self.next_sal_pk, "employeeId": 63, "employeeName": "于振宁"}]}
+                if path == "hrm/salary/employee-info/get":
+                    return {
+                        "id": self.next_sal_pk,
+                        "employeeId": int(params["employeeId"]),
+                        "employeeName": "于振宁",
+                        "salaryOptions": [{"code": 10101, "name": "基本工资", "value": 8000}],
+                    }
+                if path == "fms/config/account-set/simple-list":
+                    return [{"id": 7, "name": "主账套"}]
+                if path == "fms/config/finance-indicator/list":
+                    assert params.get("accountSetId") == 7
+                    return [{"id": 11, "accountSetId": 7, "name": "现金净额", "code": "cash"}]
+                if path == "fms/config/finance-indicator/get":
+                    return {"id": int(params["id"]), "accountSetId": 7, "name": "现金净额", "code": "cash"}
+                if path == "oa/task/published-page":
+                    return {"list": [{"id": 21, "title": "盘点清单"}]}
+                if path == "oa/task/received-page":
+                    return {"list": []}
+                if path == "oa/task/get":
+                    return {"id": 21, "title": "盘点清单"}
+                if path == "product/property/value/page":
+                    st = params.get("status")
+                    if st == 0:
+                        return {"list": [{"id": 31, "name": "红色", "status": 0}]}
+                    return {"list": []}
+                if path == "product/property/value/get":
+                    return {"id": 31, "name": "红色", "status": 0}
+                if path == "mes/qc/defect-record/get":
+                    return {"id": 1, "name": "表面划伤", "qcType": 1, "qcId": 10}
+                if path == "pms/pm/project/page":
+                    return {"list": [{"id": 5, "name": "研发项目A"}]}
+                if path == "pms/pm/work-item/page":
+                    if params.get("projectId") == 5:
+                        return {"list": [{"id": 88, "name": "登录联调"}]}
+                    return {"list": []}
+                return super().get(path, **params)
+
+            def write_once(self, method: str, path: str, *, body: dict, params=None, operation: str = "", expect_result: str = ""):
+                if path == "hrm/salary/employee-info/update":
+                    self.writes.append((method, path, copy.deepcopy(body)))
+                    self.next_sal_pk += 1
+                    return 701
+                return True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            troot = Path(tmp)
+            _write_synthetic_release(troot)
+            hrm_ctrl = troot / "server/yudao-module-hrm/src/main/java/cn/iocoder/yudao/module/hrm/controller/admin/salary"
+            hrm_svc = troot / "server/yudao-module-hrm/src/main/java/cn/iocoder/yudao/module/hrm/service/salary"
+            hrm_ctrl.mkdir(parents=True, exist_ok=True)
+            hrm_svc.mkdir(parents=True, exist_ok=True)
+            (hrm_svc / "HrmSalaryEmployeeInfoServiceImpl.java").write_text(
+                "public class HrmSalaryEmployeeInfoServiceImpl { public Long updateEmployeeSalary(HrmSalReq req) { changeRecordMapper.insert(null); return 701L; } }\n",
+                encoding="utf-8",
+            )
+            docs = {
+                "paths": {
+                    "/admin-api/hrm/salary/employee-info/page": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"type": "object"}}}}}}},
+                    "/admin-api/hrm/salary/employee-info/get": {"get": {"parameters": [{"name": "employeeId", "in": "query", "required": True, "schema": {"type": "integer"}}], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/SalGet"}}}}}}},
+                    "/admin-api/hrm/salary/employee-info/update": {"put": {"tags": ["员工薪资"], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/SalReq"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}}}},
+                    "/admin-api/hrm/salary/change-record/get": {"get": {"parameters": [{"name": "id", "in": "query", "required": True, "schema": {"type": "integer"}}], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/ChgGet"}}}}}}},
+                    "/admin-api/fms/config/account-set/simple-list": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"type": "array"}}}}}}},
+                    "/admin-api/fms/config/finance-indicator/list": {"get": {"parameters": [{"name": "accountSetId", "in": "query", "required": True, "schema": {"type": "integer"}}], "responses": {"200": {"content": {"*/*": {"schema": {"type": "array"}}}}}}},
+                    "/admin-api/fms/config/finance-indicator/get": {"get": {"parameters": [{"name": "accountSetId", "in": "query", "required": True, "schema": {"type": "integer"}}, {"name": "id", "in": "query", "required": True, "schema": {"type": "integer"}}], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/NamedGet"}}}}}}},
+                    "/admin-api/fms/config/finance-indicator/update": {"put": {"tags": ["财务指标"], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/NamedUpd"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}}}},
+                    "/admin-api/oa/task/published-page": {"get": {"parameters": [], "responses": {"200": {"content": {"*/*": {"schema": {"type": "object"}}}}}}},
+                    "/admin-api/oa/task/received-page": {"get": {"parameters": [], "responses": {"200": {"content": {"*/*": {"schema": {"type": "object"}}}}}}},
+                    "/admin-api/oa/task/get": {"get": {"parameters": [{"name": "id", "in": "query", "required": True, "schema": {"type": "integer"}}], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/NamedGet"}}}}}}},
+                    "/admin-api/oa/task/update": {"put": {"tags": ["OA任务"], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/NamedUpd"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}}}},
+                    "/admin-api/product/property/value/page": {"get": {"parameters": [{"name": "status", "in": "query", "required": True, "schema": {"type": "integer"}}], "responses": {"200": {"content": {"*/*": {"schema": {"type": "object"}}}}}}},
+                    "/admin-api/product/property/value/get": {"get": {"parameters": [{"name": "id", "in": "query", "required": True, "schema": {"type": "integer"}}], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/NamedGet"}}}}}}},
+                    "/admin-api/product/property/value/update": {"put": {"tags": ["属性值"], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/NamedUpd"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}}}},
+                    "/admin-api/mes/qc/defect-record/page": {"get": {"parameters": [{"name": "qcType", "in": "query", "required": True, "schema": {"type": "integer"}}, {"name": "qcId", "in": "query", "required": True, "schema": {"type": "integer"}}], "responses": {"200": {"content": {"*/*": {"schema": {"type": "object"}}}}}}},
+                    "/admin-api/mes/qc/defect-record/get": {"get": {"parameters": [{"name": "id", "in": "query", "required": True, "schema": {"type": "integer"}}], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/NamedGet"}}}}}}},
+                    "/admin-api/mes/qc/defect-record/update": {"put": {"tags": ["缺陷记录"], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/NamedUpd"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}}}},
+                    "/admin-api/pms/pm/project/page": {"get": {"parameters": [], "responses": {"200": {"content": {"*/*": {"schema": {"type": "object"}}}}}}},
+                    "/admin-api/pms/pm/work-item/page": {"get": {"parameters": [{"name": "projectId", "in": "query", "required": True, "schema": {"type": "integer"}}], "responses": {"200": {"content": {"*/*": {"schema": {"type": "object"}}}}}}},
+                },
+                "components": {
+                    "schemas": {
+                        "CommonResultBoolean": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "boolean"}}},
+                        "CommonResultLong": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "integer"}}},
+                        "OptItem": {"type": "object", "properties": {"code": {"type": "integer"}, "name": {"type": "string"}, "value": {"type": "number"}}},
+                        "SalReq": {"type": "object", "required": ["employeeId"], "properties": {"employeeId": {"type": "integer"}, "salaryOptions": {"type": "array", "items": {"$ref": "#/components/schemas/OptItem"}}}},
+                        "SalGet": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "employeeId": {"type": "integer"}, "employeeName": {"type": "string"}, "salaryOptions": {"type": "array", "items": {"$ref": "#/components/schemas/OptItem"}}}}}},
+                        "ChgGet": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "employeeId": {"type": "integer"}}}}},
+                        "NamedUpd": {"type": "object", "required": ["id"], "properties": {"id": {"type": "integer"}, "name": {"type": "string"}}},
+                        "NamedGet": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}, "title": {"type": "string"}}}}},
+                    }
+                },
+            }
+            port = YudaoConventionWritePort(W0R2Client(), FakeGoalData(docs, source=YudaoSource(troot, release="v-w0-r2")))
+            sal_spec = port.aggregate_update_specs()["hrm/salary/employee-info"]
+            self.assertIn("id", sal_spec.volatile_fields)
+            # Preservation snapshot check ignores changed internal PK `id` on employee-info
+            from web_operation_agent.business.compiled_writes import verify_preservation_snapshot
+            from web_operation_agent.business.errors import BusinessToolReferenceError
+            before_sal = port.read_record("hrm/salary/employee-info", 63, spec=sal_spec)
+            after_sal = port.read_record("hrm/salary/employee-info", 63, spec=sal_spec)
+            after_sal["id"] = before_sal["id"] + 1
+            self.assertEqual(
+                verify_preservation_snapshot(
+                    before_sal,
+                    after_sal,
+                    volatile=sal_spec.volatile_fields,
+                    ignore=frozenset({sal_spec.id_field}) | sal_spec.server_computed_fields,
+                ),
+                [],
+            )
+
+            # resolve_target across accountSetId /list, /published-page, status-required /page, and candidate-ref GET fallback
+            dummy_spec = NS(id_field="id", label="对象", name_fields=("name", "title"), composite_id_fields=())
+            self.assertEqual(port.resolve_target("fms/config/finance-indicator", "现金净额（ID=11）", spec=dummy_spec)["id"], 11)
+            self.assertEqual(port.resolve_target("oa/task", "盘点清单（ID=21）", spec=dummy_spec)["id"], 21)
+            self.assertEqual(port.resolve_target("product/property/value", "红色（ID=31）", spec=dummy_spec)["id"], 31)
+            self.assertEqual(port.resolve_target("mes/qc/defect-record", "表面划伤（ID=1）", spec=dummy_spec)["id"], 1)
+            with self.assertRaises(BusinessToolReferenceError):
+                port.resolve_target("mes/qc/defect-record", "错误名称（ID=1）", spec=dummy_spec)
+            with self.assertRaises(BusinessToolRequestError):
+                port.resolve_target("mes/qc/defect-record", "1", spec=dummy_spec)
+
+            # _list_ref_rows fans out across pms/pm/project/page when reference endpoint requires projectId
+            _, _, wi_rows, _ = port._list_ref_rows("pms/pm/work-item")
+            self.assertEqual([r["id"] for r in wi_rows], [88])
+
+    def test_w0_r3_child_derived_volatile_write_only_transform_and_project_refused_fallback(self):
+        from web_operation_agent.business.errors import BusinessToolRequestError
+        from web_operation_agent_yudao.reads.client import YudaoReadRefused
+
+        class R3Client(FakeYudaoClient):
+            tenant = "1"
+
+            def get(self, path: str, **params):
+                if path == "pms/pm/project/page":
+                    return {"list": [{"id": 9, "name": "核心项目"}]}
+                if path == "pms/pm/work-item/page":
+                    if "projectId" not in params:
+                        raise YudaoReadRefused("项目编号不能为空", code=400)
+                    return {"list": [{"id": 91, "name": "子工作项"}]} if params["projectId"] == 9 else {"list": []}
+                return super().get(path, **params)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            troot = Path(tmp)
+            _write_synthetic_release(troot)
+            oa_ctrl = troot / "server/yudao-module-oa/src/main/java/cn/iocoder/yudao/module/oa/controller/admin/task/vo"
+            oa_svc = troot / "server/yudao-module-oa/src/main/java/cn/iocoder/yudao/module/oa/service/task"
+            fms_ctrl = troot / "server/yudao-module-fms/src/main/java/cn/iocoder/yudao/module/fms/controller/admin/config"
+            fms_svc = troot / "server/yudao-module-fms/src/main/java/cn/iocoder/yudao/module/fms/service/config"
+            for d in (oa_ctrl, oa_svc, fms_ctrl, fms_svc):
+                d.mkdir(parents=True, exist_ok=True)
+            fms_vo = fms_ctrl / "vo"
+            fms_do = troot / "server/yudao-module-fms/src/main/java/cn/iocoder/yudao/module/fms/dal/dataobject/config"
+            oa_vo = oa_ctrl / "vo"
+            for d in (fms_vo, fms_do, oa_vo):
+                d.mkdir(parents=True, exist_ok=True)
+            (oa_svc / "OaTaskService.java").write_text(
+                "public interface OaTaskService { void updateTask(OaTaskSaveReqVO reqVO); }\n",
+                encoding="utf-8",
+            )
+            (oa_svc / "OaTaskServiceImpl.java").write_text(
+                "public class OaTaskServiceImpl implements OaTaskService {\n"
+                "  private OaTaskMapper taskMapper;\n"
+                "  private OaTaskReceiverMapper taskReceiverMapper;\n"
+                "  public void updateTask(OaTaskSaveReqVO reqVO) {\n"
+                "    taskMapper.updateById(BeanUtils.toBean(reqVO, OaTaskDO.class));\n"
+                "    taskReceiverMapper.deleteByTaskIdAndUserIds(reqVO.getId(), null);\n"
+                "    taskReceiverMapper.insertBatch(null);\n"
+                "  }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (oa_ctrl / "OaTaskController.java").write_text(
+                '@RequestMapping("/oa/task")\n'
+                "public class OaTaskController {\n"
+                "  private OaTaskService taskService;\n"
+                '  @PutMapping("/update") public CommonResult<Boolean> update(@RequestBody OaTaskSaveReqVO reqVO) { taskService.updateTask(reqVO); return success(true); }\n'
+                "}\n",
+                encoding="utf-8",
+            )
+            (fms_do / "FmsFinanceIndicatorDO.java").write_text(
+                '@TableName("fms_finance_indicator")\n'
+                "public class FmsFinanceIndicatorDO { private Long id; private String name; private String formula; }\n",
+                encoding="utf-8",
+            )
+            (fms_vo / "FmsFinReqVO.java").write_text(
+                "public class FmsFinReqVO { private String name; private String formula; }\n",
+                encoding="utf-8",
+            )
+            (fms_svc / "FmsFinanceIndicatorService.java").write_text(
+                "public interface FmsFinanceIndicatorService { Long createFinanceIndicator(FmsFinReqVO reqVO); }\n",
+                encoding="utf-8",
+            )
+            (fms_svc / "FmsFinanceIndicatorServiceImpl.java").write_text(
+                "public class FmsFinanceIndicatorServiceImpl implements FmsFinanceIndicatorService {\n"
+                "  private FmsFinanceIndicatorMapper indicatorMapper;\n"
+                "  private String normalizeFormula(String f) { return f; }\n"
+                "  private String bindFormula(String f) { return f; }\n"
+                "  public Long createFinanceIndicator(FmsFinReqVO reqVO) {\n"
+                "    FmsFinanceIndicatorDO entity = BeanUtils.toBean(reqVO, FmsFinanceIndicatorDO.class).setId(null)\n"
+                "      .setFormula(bindFormula(normalizeFormula(reqVO.getFormula())));\n"
+                "    indicatorMapper.insert(entity);\n"
+                "    return entity.getId();\n"
+                "  }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (fms_ctrl / "FmsFinanceIndicatorController.java").write_text(
+                '@RequestMapping("/fms/config/finance-indicator")\n'
+                "public class FmsFinanceIndicatorController {\n"
+                "  private FmsFinanceIndicatorService indicatorService;\n"
+                '  @PostMapping("/create") public CommonResult<Long> create(@RequestBody FmsFinReqVO reqVO) { return success(indicatorService.createFinanceIndicator(reqVO)); }\n'
+                "}\n",
+                encoding="utf-8",
+            )
+            docs = {
+                "paths": {
+                    "/admin-api/oa/task/get": {"get": {"parameters": [{"name": "id", "in": "query", "required": True, "schema": {"type": "integer"}}], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/OaResp"}}}}}}},
+                    "/admin-api/oa/task/update": {"put": {"tags": ["OA任务"], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/OaReq"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}}}},
+                    "/admin-api/fms/config/finance-indicator/get": {"get": {"parameters": [{"name": "id", "in": "query", "required": True, "schema": {"type": "integer"}}], "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/FinResp"}}}}}}},
+                    "/admin-api/fms/config/finance-indicator/create": {"post": {"tags": ["财务指标"], "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/FinReq"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}}}},
+                    "/admin-api/pms/pm/project/page": {"get": {"parameters": [], "responses": {"200": {"content": {"*/*": {"schema": {"type": "object"}}}}}}},
+                    "/admin-api/pms/pm/work-item/page": {"get": {"parameters": [{"name": "projectId", "in": "query", "required": False, "schema": {"type": "integer"}}], "responses": {"200": {"content": {"*/*": {"schema": {"type": "object"}}}}}}},
+                },
+                "components": {
+                    "schemas": {
+                        "CommonResultBoolean": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "boolean"}}},
+                        "CommonResultLong": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "integer"}}},
+                        "OaRec": {"type": "object", "properties": {"userId": {"type": "integer"}}},
+                        "OaReq": {"type": "object", "required": ["id", "title"], "properties": {"id": {"type": "integer"}, "title": {"type": "string"}, "receiverUserIds": {"type": "array", "items": {"type": "integer"}}}},
+                        "OaResp": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "title": {"type": "string"}, "receiverStatus": {"type": "integer"}, "receivers": {"type": "array", "items": {"$ref": "#/components/schemas/OaRec"}}}}}},
+                        "FinReq": {"type": "object", "required": ["name", "formula"], "properties": {"name": {"type": "string"}, "formula": {"type": "string"}}},
+                        "FinResp": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}, "formula": {"type": "string"}}}}},
+                    }
+                },
+            }
+            port = YudaoConventionWritePort(R3Client(), FakeGoalData(docs, source=YudaoSource(troot, release="v-w0-r3")))
+            oa_upd = port.update_specs()["oa/task"]
+            self.assertIn("receiverStatus", oa_upd.volatile_fields)
+            self.assertNotIn("title", oa_upd.volatile_fields)
+
+            fin_create = port.create_specs()["fms/config/finance-indicator"]
+            self.assertIn("formula", fin_create.write_only_fields)
+            self.assertTrue(fin_create.resolve_field("formula").required)
+
+            _, _, wi_rows, _ = port._list_ref_rows("pms/pm/work-item")
+            self.assertEqual([r["id"] for r in wi_rows], [91])
+
+    def test_w0_r4_recheck_bindings_project_scope_refusal_and_empty_simple_list_fallback(self):
+        from web_operation_agent.business.errors import BusinessMutationRefusedError
+        from web_operation_agent_yudao.reads.client import YudaoReadRefused
+
+        class R4Client(FakeYudaoClient):
+            tenant = "1"
+
+            def __init__(self):
+                super().__init__()
+                self.fail_recheck = False
+
+            def get(self, path: str, **params):
+                if path == "pms/pm/project/page":
+                    return {"list": [{"id": 12, "name": "交付项目"}]}
+                if path == "pms/pm/work-item/page":
+                    if self.fail_recheck or "projectId" not in params:
+                        raise YudaoReadRefused("项目编号不能为空", code=400)
+                    return {"list": [{"id": 301, "name": "联调任务"}]} if params["projectId"] == 12 else {"list": []}
+                if path == "mes/pro/route/simple-list":
+                    return []
+                if path == "mes/pro/route/page":
+                    return {"list": [{"id": 6, "name": "标准路线", "status": 1}]}
+                return super().get(path, **params)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            troot = Path(tmp)
+            _write_synthetic_release(troot)
+            docs = {
+                "paths": {
+                    "/admin-api/pms/pm/project/page": {"get": {"parameters": [], "responses": {"200": {"content": {"*/*": {"schema": {"type": "object"}}}}}}},
+                    "/admin-api/pms/pm/work-item/page": {"get": {"parameters": [{"name": "projectId", "in": "query", "required": False, "schema": {"type": "integer"}}], "responses": {"200": {"content": {"*/*": {"schema": {"type": "object"}}}}}}},
+                    "/admin-api/mes/pro/route/simple-list": {"get": {"parameters": [], "responses": {"200": {"content": {"*/*": {"schema": {"type": "array"}}}}}}},
+                    "/admin-api/mes/pro/route/page": {"get": {"parameters": [{"name": "pageNo", "in": "query", "required": False, "schema": {"type": "integer"}}, {"name": "pageSize", "in": "query", "required": False, "schema": {"type": "integer"}}], "responses": {"200": {"content": {"*/*": {"schema": {"type": "object"}}}}}}},
+                },
+                "components": {"schemas": {}},
+            }
+            client = R4Client()
+            port = YudaoConventionWritePort(client, FakeGoalData(docs, source=YudaoSource(troot, release="v-w0-r4")))
+
+            wi_id, wi_lbl, wi_bind = port._resolve_single_ref("pms/pm/work-item", "联调任务（ID=301）")
+            self.assertEqual(wi_id, 301)
+            self.assertEqual(wi_lbl, "联调任务")
+            self.assertEqual(wi_bind["query_params"].get("projectId"), 12)
+            port.recheck_bindings([wi_bind], actor_id="1")
+
+            client.fail_recheck = True
+            with self.assertRaises(BusinessMutationRefusedError):
+                port.recheck_bindings([wi_bind], actor_id="1")
+
+            r_list_path, _, routes, r_qp = port._list_ref_rows("mes/pro/route")
+            self.assertEqual(r_list_path, "mes/pro/route/page")
+            self.assertEqual([r["id"] for r in routes], [6])
+            self.assertEqual(r_qp, {"pageNo": 1, "pageSize": 100})
+            rt_id, rt_lbl, rt_bind = port._resolve_single_ref("mes/pro/route", "标准路线（ID=6）")
+            self.assertEqual((rt_id, rt_lbl, rt_bind["list_path"]), (6, "标准路线", "mes/pro/route/page"))
+            port.recheck_bindings([rt_bind], actor_id="1")
+
 
 if __name__ == "__main__":
     unittest.main()
