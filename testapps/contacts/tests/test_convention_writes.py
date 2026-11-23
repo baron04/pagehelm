@@ -626,6 +626,69 @@ class ContactsConventionWriteTests(unittest.TestCase):
         self.assertEqual(dossier["items"][1], {"id": "item-2", "label": "Office", "value": "London"})
         self.assertEqual(self.app.contact_groups[DEMO_WORKSPACE]["ada-lovelace"], ["Engineering", "VIP"])
 
+    def test_unavailable_propose_operation_routes_to_compiled_write_tool(self):
+        from web_operation_agent.business.convention_writes import (
+            WriteRouteCapability,
+            resolve_compiled_write_fallback,
+        )
+
+        # Direct helper & capability formatting checks
+        cap = WriteRouteCapability(compiled_api_writes=True, page_form_mode="prefill_handoff")
+        approvals_seen = []
+        executor, channel, chat, goal_port, _audit = self._executor(
+            [
+                _tool_reply((
+                    "propose_operation",
+                    {"operation": "contact_notes_create", "inputs": {"title": "From redirect"}},
+                )),
+                _tool_reply((
+                    "propose_operation",
+                    {
+                        "operation": "create_record",
+                        "inputs": {"entity": "contact-notes", "fields": {"title": "From redirect"}},
+                    },
+                )),
+                _tool_reply(("finish", {"status": "done", "answer": "Created via create_record."})),
+            ],
+            on_approval=approvals_seen.append,
+        )
+        with patch("web_operation_agent.goal.executor.RemoteBrowserClient", _RemoteBrowser):
+            result = executor.execute({
+                "message_id": "m_unavail_redirect",
+                "text": "Create a contact note titled From redirect.",
+                "page_url": self.app.origin + "/contacts",
+            })
+        self.assertEqual(result.terminal_reason, "agent_finished", result.user_answer)
+        first_tool_msg = next(
+            m["content"] for m in chat.calls[1][0] if m.get("role") == "tool"
+        )
+        self.assertIn("contact-notes", first_tool_msg)
+        self.assertIn('create_record(entity="contact-notes"', first_tool_msg)
+        self.assertNotIn("完成预填并用 then_highlight", first_tool_msg)
+        self.assertEqual(len(approvals_seen), 1)
+        self.assertEqual(self.app.contact_notes[DEMO_WORKSPACE][0]["title"], "From redirect")
+
+        # Also verify update, status, explicit entity input, and unknown/non-compiled fallback
+        defs = executor.application.ports.operations.tools.definitions
+        self.assertEqual(
+            resolve_compiled_write_fallback("contact_dossiers_update", {}, defs),
+            ("contact-dossiers", ("update_record",)),
+        )
+        self.assertEqual(
+            resolve_compiled_write_fallback("contact_subscriptions_update_status", {}, defs),
+            ("contact-subscriptions", ("toggle_record_status",)),
+        )
+        self.assertEqual(
+            resolve_compiled_write_fallback("custom_alias", {"entity": "contact-notes"}, defs),
+            ("contact-notes", ("create_record",)),
+        )
+        self.assertEqual(
+            resolve_compiled_write_fallback("contact_notes_delete", {}, defs),
+            ("", ()),
+        )
+        fallback_msg = cap.unavailable_operation_message("missing_op")
+        self.assertIn("完成预填并用 then_highlight", fallback_msg)
+
 
 if __name__ == "__main__":
     unittest.main()

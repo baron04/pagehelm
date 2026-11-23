@@ -26,6 +26,7 @@ from ..goal.skill_writes import SkillWrites
 from ..business.convention_writes import (
     normalize_changes_argument,
     normalize_create_arguments,
+    resolve_compiled_write_fallback,
     resolve_write_route_capability,
 )
 
@@ -1165,8 +1166,18 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             owned = writes.owner_for_operation(op_name)
             if owned is None:
                 cap = resolve_write_route_capability(self.goal_port)
+                entity, compiled_tools = resolve_compiled_write_fallback(
+                    op_name,
+                    op_inputs,
+                    writes.available_definitions(),
+                    goal_port=self.goal_port,
+                )
                 return LoopToolResult(
-                    cap.unavailable_operation_message(op_name),
+                    cap.unavailable_operation_message(
+                        op_name,
+                        entity=entity,
+                        compiled_tools=compiled_tools,
+                    ),
                     kind="write", state="unavailable", error_code="tool_unavailable")
             skill, definition = owned
             if skill.skill_id not in writes.loaded_ids:

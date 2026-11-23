@@ -49,6 +49,12 @@ _BLOCKED_ENTITY_PREFIXES = (
     "bpm/process-instance",
     "bpm/oa",
     "system/auth",
+    "system/role",
+    "system/menu",
+    "system/permission",
+    "system/tenant",
+    "system/oauth2",
+    "system/social-",
     "system/sms-send",
     "system/sms-channel",
     "system/mail-account",
@@ -71,7 +77,6 @@ _READ_ONLY_SERVICE_METHOD = re.compile(
 )
 _SAFE_EXTRA_SERVICE_METHODS = frozenset({
     "createPermission",
-    "publishUserProfileUpdatedIfChanged",
     "lockAccountSet",
     "updateReceivablePlanReceivableId",
     "setAuxiliaryCombinationIds",
@@ -88,8 +93,14 @@ _SAFE_EXTRA_SERVICE_METHODS = frozenset({
     "parsePeriod",
 })
 _DANGEROUS_SERVICE_TYPES = re.compile(
-    r"(?:Pay\w*Service|Wallet\w*Service|Sms\w*Service|Mail\w*Service|Notify\w*Service|MQ|Producer|Flowable|ProcessEngine|RuntimeService|TaskService)",
+    r"(?:^Pay\w*(?:Service|Api)|Wallet\w*(?:Service|Api)|Sms\w*(?:Service|Api)|Mail\w*(?:Service|Api)|Notify\w*(?:Service|Api)|BpmProcessInstance\w*(?:Service|Api)|MQ|Producer|Flowable|ProcessEngine|RuntimeService|(?:^|Bpm)TaskService$)",
     re.I,
+)
+_AUTH_CONFIG_ENTRY_SERVICE_RE = re.compile(
+    r"^(?:Role|Menu|Permission|Tenant\w*|OAuth2\w*|SocialClient\w*|.*ContentPermission)(?:Service|Api)$"
+)
+_AUTH_CONFIG_CALL_SERVICE_RE = re.compile(
+    r"^(?:Role|Menu|Permission|Tenant\w*|OAuth2Client\w*|SocialClient\w*|.*ContentPermission)(?:Service|Api)$"
 )
 
 # Java VO / Controller AST regexes
@@ -97,8 +108,10 @@ _PACKAGE_RE = re.compile(r"^\s*package\s+([\w.]+)\s*;", re.M)
 _IMPORT_RE = re.compile(r"^\s*import\s+(?:static\s+)?([\w.*]+)\s*;", re.M)
 _CLASS_DECL_RE = re.compile(r"\bclass\s+([A-Z]\w*)\b(?:\s+extends\s+([A-Za-z_][\w.$]*))?[^{]*\{")
 _SCHEMA_DESC_RE = re.compile(r'@Schema\([^)]*description\s*=\s*"([^"]+)"')
-_SVC_OR_API_FIELD_RE = re.compile(r"private\s+(?:final\s+)?(\w+(?:Service|Api))(?:<[^;{}()]*>)?\s+(\w+)\s*[=;]")
-_SVC_OR_API_CALL_RE = re.compile(r"\b(\w+(?:(?:Service|Api)|service|api))\s*\.\s*(\w+)\s*\(", re.I)
+_SVC_OR_API_FIELD_RE = re.compile(
+    r"private\s+(?:final\s+)?(\w+(?:Service|Api|Producer|Client|Template))(?:<[^;{}()]*>)?\s+(\w+)\s*[=;]"
+)
+_SVC_OR_API_CALL_RE = re.compile(r"\b(\w+)\s*\.\s*(\w+)\s*\(")
 _TOKEN_REVOKE_METHOD_RE = re.compile(r"^(?:remove|revoke|delete|clear|invalidate)\w*(?:Token|Session)\w*|^logout\b")
 _TOKEN_REVOKE_TYPE_RE = re.compile(r"(?:Token|Session|OAuth2|Auth)\w*(?:Service|Api)$", re.I)
 _VO_FIELD_DECL_RE = re.compile(
@@ -239,7 +252,7 @@ def _parse_vo_classes_in_text(
     pkg: str,
     imports: dict[str, str],
     wildcard_pkgs: tuple[str, ...],
-    class_spans_out: dict[str, tuple[str, dict[str, str], tuple[str, ...], str, tuple[str, ...], str]],
+    class_spans_out: dict[str, tuple[str, dict[str, str], tuple[str, ...], str, str, tuple[str, ...], str]],
 ) -> None:
     """Walk top-level and nested static classes in one VO file, storing exact own-class snippets."""
     def walk(span_text: str, raw_span: str, outer_chain: tuple[str, ...]) -> None:
@@ -261,16 +274,20 @@ def _parse_vo_classes_in_text(
             inner_raw = raw_span[open_idx + 1:close_idx]
             # Recurse into child classes first and blank out child bodies to avoid double-counting child fields
             cleaned_chunks = []
+            raw_chunks = []
             cpos = 0
             for cm in _CLASS_DECL_RE.finditer(inner_masked):
                 c_open = cm.end() - 1
                 c_close = _balanced_brace(inner_masked, c_open)
                 if c_close is not None and cm.start() >= cpos:
                     cleaned_chunks.append(inner_masked[cpos:cm.start()])
+                    raw_chunks.append(inner_raw[cpos:cm.start()])
                     cpos = c_close + 1
             cleaned_chunks.append(inner_masked[cpos:])
+            raw_chunks.append(inner_raw[cpos:])
             own_masked = "".join(cleaned_chunks)
-            class_spans_out[full_key] = (pkg, imports, wildcard_pkgs, own_masked, new_chain, parent_raw)
+            own_raw = "".join(raw_chunks)
+            class_spans_out[full_key] = (pkg, imports, wildcard_pkgs, own_masked, own_raw, new_chain, parent_raw)
             walk(inner_masked, inner_raw, new_chain)
             pos = close_idx + 1
 
@@ -308,8 +325,7 @@ def _index_java_tree_locked(
     vo_do_texts: list[tuple[str, str]],
     ctrl_texts: list[tuple[str, str]],
 ) -> tuple[dict[str, JavaVOAST], dict[str, ControllerEndpointAST]]:
-    raw_class_spans: dict[str, tuple[str, dict[str, str], tuple[str, ...], str, tuple[str, ...], str]] = {}
-    raw_by_key: dict[str, str] = {}
+    raw_class_spans: dict[str, tuple[str, dict[str, str], tuple[str, ...], str, str, tuple[str, ...], str]] = {}
     for _rel, raw in vo_do_texts:
         masked = _mask(raw)
         m_pkg = _PACKAGE_RE.search(masked)
@@ -317,10 +333,7 @@ def _index_java_tree_locked(
         all_imports = _IMPORT_RE.findall(masked)
         imports = {imp.rsplit(".", 1)[-1]: imp for imp in all_imports if not imp.endswith(".*")}
         wildcard_pkgs = tuple(imp[:-2] for imp in all_imports if imp.endswith(".*"))
-        before_keys = set(raw_class_spans)
         _parse_vo_classes_in_text(masked, raw, pkg, imports, wildcard_pkgs, raw_class_spans)
-        for nk in set(raw_class_spans) - before_keys:
-            raw_by_key[nk] = raw
 
     known_vos = set(raw_class_spans)
     top_counts: dict[str, list[str]] = {}
@@ -333,21 +346,19 @@ def _index_java_tree_locked(
 
     vo_map: dict[str, JavaVOAST] = {}
     vo_parents: dict[str, str] = {}
-    for full_key, (pkg, imports, wildcard_pkgs, own_body, chain, parent_raw) in raw_class_spans.items():
-        raw_src = raw_by_key.get(full_key, "")
+    for full_key, (pkg, imports, wildcard_pkgs, own_body, own_raw, chain, parent_raw) in raw_class_spans.items():
         fields: list[JavaFieldAST] = []
         for m in _VO_FIELD_DECL_RE.finditer(own_body):
             raw_type = " ".join(m.group(1).split())
             fname = m.group(2)
             start = m.start()
             sep = max(own_body.rfind(";", 0, start), own_body.rfind("{", 0, start), own_body.rfind("}", 0, start))
-            ctx = own_body[max(sep + 1, start - 500):start]
-            # Extract @Schema description from unmasked raw source if present near field declaration
-            raw_field_m = re.search(
-                rf"(@Schema\([^)]*\)[\s\S]{{0,240}}?private\s+[\w<>?.,\[\]\s@$()=-]+?\s+{re.escape(fname)}\s*(?:=[^;]*)?;)",
-                raw_src,
-            )
-            ann_ctx = raw_field_m.group(1) if raw_field_m else ctx
+            ctx_start = max(sep + 1, start - 500)
+            ctx = own_body[ctx_start:start]
+            # Strictly bound @Schema description to this field declaration (never crossing ;, {, }, or comments)
+            raw_ctx = own_raw[ctx_start:m.end()]
+            m_schema = re.search(r"@Schema\s*\(", own_body[ctx_start:m.end()])
+            ann_ctx = raw_ctx[m_schema.start():] if m_schema else ctx
             required = bool(_NOT_REQ_ANN_RE.search(ctx))
             m_enum = _IN_ENUM_RE.search(ctx)
             enum_cls = m_enum.group(1) if m_enum else ""
@@ -719,14 +730,14 @@ def _analyze_service_method(
     svc_by_iface: dict[str, str] | None = None,
     parsed_svc_cache: dict[str, tuple[str, dict[str, str], dict[str, list[tuple[int, int, int]]]]] | None = None,
     mode: str = "create_or_update",
-) -> tuple[bool, set[str], set[str], tuple[str, ...]]:
-    """Return ``(safe, unconditional_null_fields, dropped_or_blocked_fields, side_effects)``."""
+) -> tuple[bool, set[str], set[str], set[str], tuple[str, ...]]:
+    """Return ``(safe, unconditional_null_fields, dropped_fields, cond_side_effect_fields, side_effects)``."""
     if ep is None or not ep.service_iface or not ep.service_method:
-        return False, set(), set(), ()
+        return False, set(), set(), set(), ()
     if svc_by_iface is None and (source is None or not getattr(source, "root", None)):
-        return False, set(), set(), ()
-    if _DANGEROUS_SERVICE_TYPES.search(ep.service_iface):
-        return False, set(), set(), ()
+        return False, set(), set(), set(), ()
+    if _DANGEROUS_SERVICE_TYPES.search(ep.service_iface) or _AUTH_CONFIG_ENTRY_SERVICE_RE.fullmatch(ep.service_iface):
+        return False, set(), set(), set(), ()
 
     cached_svc = parsed_svc_cache.get(ep.service_iface) if parsed_svc_cache is not None else None
     if cached_svc is not None:
@@ -735,14 +746,14 @@ def _analyze_service_method(
         raw_svc = svc_by_iface.get(ep.service_iface) if svc_by_iface is not None else None
         if raw_svc is None:
             if svc_by_iface is not None:
-                return False, set(), set(), ()
+                return False, set(), set(), set(), ()
             target_file = None
             for path in source._java_files("ServiceImpl.java"):
                 if path.stem[:-len("Impl")] == ep.service_iface:
                     target_file = path
                     break
             if target_file is None:
-                return False, set(), set(), ()
+                return False, set(), set(), set(), ()
             raw_svc = source._read(source._relative(target_file))
         masked = _mask(raw_svc)
         svc_fields = {name: kind for kind, name in _SVC_OR_API_FIELD_RE.findall(masked)}
@@ -753,7 +764,7 @@ def _analyze_service_method(
             parsed_svc_cache[ep.service_iface] = (masked, svc_fields, sigs)
     spans = sigs.get(ep.service_method)
     if not spans:
-        return False, set(), set(), ()
+        return False, set(), set(), set(), ()
 
     entry_indices = list(range(len(spans)))
     if len(spans) > 1 and ep.request_vo:
@@ -785,7 +796,7 @@ def _analyze_service_method(
         # Version-forking pseudo-updates disable old record and insert a new ID so GET(old_id) never updates.
         entry_chunk = masked[bodies[0][2]:bodies[0][3]]
         if ".setId(null)" in entry_chunk and re.search(r"\b\w*Mapper\.insert\s*\(", entry_chunk):
-            return False, set(), set(), ()
+            return False, set(), set(), set(), ()
 
     cond_side_effect_fields: set[str] = set()
     side_effects: list[str] = []
@@ -793,7 +804,7 @@ def _analyze_service_method(
 
     for mname, s, bs, be in bodies:
         if re.search(r"@Async\b", masked[max(0, s - 200):bs]):
-            return False, set(), set(), ()
+            return False, set(), set(), set(), ()
         if allow_employee_station_notice and mname in {
             "executeAfterCommit",
             "sendEmployeeOpenedMessage",
@@ -801,10 +812,9 @@ def _analyze_service_method(
         }:
             continue
         chunk = masked[bs:be]
-        if mname != "publishUserProfileUpdatedIfChanged":
-            for _kind, pat in getattr(source, "_UNTRACEABLE", ()):
-                if pat.search(chunk):
-                    return False, set(), set(), ()
+        for _kind, pat in getattr(source, "_UNTRACEABLE", ()):
+            if pat.search(chunk):
+                return False, set(), set(), set(), ()
         # Own-mapper updates
         mapper_updates = re.findall(r"\b(\w+Mapper)\.(update\w*)\s*\(", chunk)
         for _m_name, m_verb in mapper_updates:
@@ -818,15 +828,17 @@ def _analyze_service_method(
                     if m_verb in {"update", "updateStatus"}:
                         continue
                 if not allow_child_mappers:
-                    return False, set(), set(), ()
-        # Check sibling Service / Api field calls
+                    return False, set(), set(), set(), ()
+        # Check sibling Service / Api / Producer / Client / Template field calls
         for call_m in _SVC_OR_API_CALL_RE.finditer(chunk):
             sc_var, sc_method = call_m.group(1), call_m.group(2)
             if sc_var not in svc_fields:
                 continue
             sc_type = svc_fields[sc_var]
             if _DANGEROUS_SERVICE_TYPES.search(sc_type):
-                return False, set(), set(), ()
+                return False, set(), set(), set(), ()
+            if _AUTH_CONFIG_CALL_SERVICE_RE.fullmatch(sc_type) and not _READ_ONLY_SERVICE_METHOD.fullmatch(sc_method):
+                return False, set(), set(), set(), ()
             if _READ_ONLY_SERVICE_METHOD.fullmatch(sc_method) or sc_method in _SAFE_EXTRA_SERVICE_METHODS:
                 continue
             if _TOKEN_REVOKE_METHOD_RE.search(sc_method) and _TOKEN_REVOKE_TYPE_RE.search(sc_type):
@@ -847,7 +859,7 @@ def _analyze_service_method(
                 or "SkuService" in sc_type
             ):
                 continue
-            return False, set(), set(), ()
+            return False, set(), set(), set(), ()
 
     uncond_nulls: set[str] = set()
     if is_put_update:
@@ -867,12 +879,12 @@ def _analyze_service_method(
                 if req_pat.search(ln):
                     nprops = [p[0].lower() + p[1:] for p in _SET_NULL_RE.findall(ln)]
                     if "?" in ln and "null" in ln:
-                        return False, set(), set(), ()
+                        return False, set(), set(), set(), ()
                     if nprops:
                         if brace_depth == 0 and not pending and not is_branch and ln.startswith(req_var + "."):
                             uncond_nulls.update(p for p in nprops if p != "id")
                         else:
-                            return False, set(), set(), ()
+                            return False, set(), set(), set(), ()
                 brace_depth += ln.count("{") - ln.count("}")
                 if is_branch and not ln.endswith("{") and ";" not in ln:
                     pending = True
@@ -882,9 +894,9 @@ def _analyze_service_method(
             if mname == ep.service_method:
                 continue
             if any(p != "Id" for p in _SET_NULL_RE.findall(masked[bs:be])):
-                return False, set(), set(), ()
+                return False, set(), set(), set(), ()
 
-    dropped: set[str] = set(cond_side_effect_fields)
+    dropped: set[str] = set()
     if do_fields and vo_field_names and bodies and mode != "status":
         all_body_text = "\n".join(masked[bs:be] for _m, _s, bs, be in bodies)
         entry_body = masked[bodies[0][2]:bodies[0][3]]
@@ -893,13 +905,23 @@ def _analyze_service_method(
             do_hits = re.findall(r"\b(\w+DO)\s+\w+\s*=\s*\w+Convert\.INSTANCE\.convert\s*\(", entry_body)
         if len(set(do_hits)) == 1 and do_hits[0] in do_fields:
             target_do = do_fields[do_hits[0]]
+            if (
+                is_put_update
+                and "name" not in vo_field_names
+                and "name" in target_do
+                and re.search(
+                    r"(?:BeanUtils\.toBean\s*\([^;]*\)\s*(?:\.\s*set[A-Z]\w*\s*\([^;]*\)\s*)*|[uU]pdate\w*\s*)\.\s*setName\s*\(",
+                    entry_body,
+                )
+            ):
+                return False, set(), set(), set(), ()
             for fname in vo_field_names:
                 if fname == "id" or fname in target_do:
                     continue
                 cap = fname[0].upper() + fname[1:] if fname else ""
                 if not re.search(rf"\.(?:get|is){re.escape(cap)}\s*\(", all_body_text):
                     dropped.add(fname)
-    return True, uncond_nulls, dropped, tuple(side_effects)
+    return True, uncond_nulls, dropped, cond_side_effect_fields, tuple(side_effects)
 
 
 def _infer_extended_reference(entity: str, prop: str, kind: str, desc: str, available_paths: set[str]) -> str:
@@ -931,10 +953,16 @@ def _infer_extended_reference(entity: str, prop: str, kind: str, desc: str, avai
             return "erp/supplier"
         if prop == "accountId" and entity.startswith("erp/") and "/admin-api/erp/account/simple-list" in available_paths:
             return "erp/account"
-        if prop in {"warehouseId", "sourceWarehouseId", "targetWarehouseId"} and entity.startswith("wms/") and "/admin-api/wms/warehouse/simple-list" in available_paths:
-            return "wms/warehouse"
-        if prop in {"warehouseId", "fromWarehouseId", "toWarehouseId"} and "/admin-api/erp/warehouse/simple-list" in available_paths:
-            return "erp/warehouse"
+        if prop in {"warehouseId", "sourceWarehouseId", "targetWarehouseId", "fromWarehouseId", "toWarehouseId"}:
+            if entity.startswith("wms/") and "/admin-api/wms/warehouse/simple-list" in available_paths:
+                return "wms/warehouse"
+            if entity.startswith("mes/"):
+                mes_wh = f"{entity.split('/', 1)[0]}/wm/warehouse"
+                if f"/admin-api/{mes_wh}/simple-list" in available_paths:
+                    return mes_wh
+                return ""
+            if "/admin-api/erp/warehouse/simple-list" in available_paths:
+                return "erp/warehouse"
         if entity.startswith("wms/"):
             if prop == "skuId" and "/admin-api/wms/item-sku/page" in available_paths:
                 return "wms/item-sku"
@@ -1269,11 +1297,15 @@ def _synthesize_props_from_java_vo(java_vo: JavaVOAST, schemas: dict, fallback_p
     """Reconstruct properties dict from exact Java AST VO when OpenAPI schema name collided."""
     out: dict[str, dict] = {}
     for jf in java_vo.fields:
-        if jf.name in fallback_props and not fallback_props.get(jf.name, {}).get("$ref"):
-            out[jf.name] = dict(fallback_props[jf.name])
-            continue
         m_desc = _SCHEMA_DESC_RE.search(jf.raw_annotations or "")
-        desc = m_desc.group(1).strip() if m_desc else jf.name
+        own_desc = m_desc.group(1).strip() if m_desc else ""
+        if jf.name in fallback_props and not fallback_props.get(jf.name, {}).get("$ref"):
+            prop = dict(fallback_props[jf.name])
+            if own_desc:
+                prop["description"] = own_desc
+            out[jf.name] = prop
+            continue
+        desc = own_desc or jf.name
         jt = jf.java_type.split("<", 1)[0].strip()
         if jt in {"Long", "Integer", "Short", "Byte", "long", "int"}:
             out[jf.name] = {"type": "integer", "description": desc}
@@ -1354,6 +1386,32 @@ def _agg_server_computed_fields(entity: str, *, is_salary_special: bool = False)
     elif is_salary_special:
         computed |= {"regularSalary", "probationSalary", "changeType", "recordType"}
     return computed
+
+
+def _has_unresolvable_required_page_param(entity: str, paths: dict) -> bool:
+    """Return True when /page requires a parent task key and no unparametrized list endpoint exists."""
+    page_op = (paths.get(f"/admin-api/{entity}/page") or {}).get("get")
+    if not isinstance(page_op, dict):
+        return False
+    req_q = {
+        p.get("name") for p in (page_op.get("parameters") or ())
+        if isinstance(p, dict) and p.get("in") == "query" and p.get("required") is True
+        and p.get("name") not in {"pageNo", "pageSize"}
+    }
+    if "taskId" not in req_q:
+        return False
+    for alt in ("list", "simple-list", "list-all-simple", "my-page"):
+        alt_op = (paths.get(f"/admin-api/{entity}/{alt}") or {}).get("get")
+        if not isinstance(alt_op, dict):
+            continue
+        alt_req = [
+            p.get("name") for p in (alt_op.get("parameters") or ())
+            if isinstance(p, dict) and p.get("in") == "query" and p.get("required") is True
+            and p.get("name") not in {"pageNo", "pageSize"}
+        ]
+        if not alt_req:
+            return False
+    return True
 
 
 def compile_yudao_write_catalog(
@@ -1519,7 +1577,10 @@ def _compile_yudao_write_catalog_locked(
     nonnull_refusals: dict[str, tuple[tuple[str, str], ...]] = {}
 
     def _blocked(entity: str) -> bool:
-        return any(entity == p or entity.startswith(p) for p in _BLOCKED_ENTITY_PREFIXES)
+        return (
+            any(entity == p or entity.startswith(p) for p in _BLOCKED_ENTITY_PREFIXES)
+            or entity.endswith(("/permission", "-permission"))
+        )
 
     # ------------------------------------------------------------------
     # Category 4a: Reversible two-state status toggles (dedicated + query/body/split/list-read)
@@ -1576,7 +1637,7 @@ def _compile_yudao_write_catalog_locked(
         ep_st_any = ctrl_endpoints.get(f"Put:{ent_part}")
         st_side_effects: tuple[str, ...] = ()
         if ep_st_any is not None and source is not None and getattr(source, "root", None):
-            st_safe, _, _, st_side_effects = _analyze_service_method(
+            st_safe, _, _, _, st_side_effects = _analyze_service_method(
                 source,
                 ep_st_any,
                 svc_by_iface=svc_by_iface,
@@ -1586,7 +1647,7 @@ def _compile_yudao_write_catalog_locked(
             if not st_safe:
                 continue
             if tail == "enable" and f"Put:{entity}/disable" in ctrl_endpoints:
-                dis_safe, _, _, dis_effects = _analyze_service_method(
+                dis_safe, _, _, _, dis_effects = _analyze_service_method(
                     source,
                     ctrl_endpoints[f"Put:{entity}/disable"],
                     svc_by_iface=svc_by_iface,
@@ -1894,10 +1955,12 @@ def _compile_yudao_write_catalog_locked(
             continue
         if not is_aggregate and ("id" not in req_props or "id" not in resp_props):
             continue
+        if not is_aggregate and _has_unresolvable_required_page_param(entity, paths):
+            continue
 
         dropped_fields: set[str] = set()
         if ep_ast is not None:
-            safe_svc, uncond_nulls, dropped_fields, _ = _analyze_service_method(
+            safe_svc, uncond_nulls, dropped_fields, cond_side_effect_fields, _ = _analyze_service_method(
                 source,
                 ep_ast,
                 allow_child_mappers=is_aggregate,
@@ -1908,8 +1971,8 @@ def _compile_yudao_write_catalog_locked(
             )
             if not safe_svc:
                 continue
-            if uncond_nulls or dropped_fields:
-                immutable_fields[entity] = frozenset(uncond_nulls | dropped_fields)
+            if uncond_nulls or dropped_fields or cond_side_effect_fields:
+                immutable_fields[entity] = frozenset(uncond_nulls | dropped_fields | cond_side_effect_fields)
             guards = []
             for ref in refusals.get((ep_ast.service_iface, ep_ast.service_method), ()):
                 cond = (getattr(ref, "condition", "") or "").strip()
@@ -2074,7 +2137,7 @@ def _compile_yudao_write_catalog_locked(
             continue
         create_dropped: set[str] = set()
         if ep_ast is not None:
-            safe_svc, _, create_dropped, _ = _analyze_service_method(
+            safe_svc, _, create_dropped, _, _ = _analyze_service_method(
                 source,
                 ep_ast,
                 allow_child_mappers=bool(nested_cols and enable_cat5_master_detail_creates),

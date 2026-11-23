@@ -1962,6 +1962,561 @@ class YudaoConventionWritesTests(unittest.TestCase):
                 updates = port.update_specs()
             self.assertIn("demo/item", updates)
 
+    def test_b3_f1_nested_vo_schema_label_boundary_and_approval_card_labels(self):
+        from web_operation_agent.business.compiled_writes import CompiledAggregateUpdateHandler
+
+        def _json_req(props, required=None):
+            return {"content": {"application/json": {"schema": {"type": "object", "required": list(required or ()), "properties": props}}}}
+
+        def _bool_resp():
+            return {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            troot = Path(tmp)
+            _write_synthetic_release(troot)
+            erp_mod = troot / "server/yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp"
+            (erp_mod / "controller/admin/sale/vo").mkdir(parents=True, exist_ok=True)
+            (erp_mod / "dal/dataobject/sale").mkdir(parents=True, exist_ok=True)
+            (erp_mod / "service/sale").mkdir(parents=True, exist_ok=True)
+            (erp_mod / "dal/dataobject/sale/ErpSaleOrderDO.java").write_text(
+                "package cn.iocoder.yudao.module.erp.dal.dataobject.sale;\n"
+                "public class ErpSaleOrderDO { private Long id; private String remark; }\n",
+                encoding="utf-8",
+            )
+            (erp_mod / "controller/admin/sale/vo/ErpSaleOrderSaveReqVO.java").write_text(
+                "package cn.iocoder.yudao.module.erp.controller.admin.sale.vo;\n"
+                "import io.swagger.v3.oas.annotations.media.Schema;\n"
+                "import jakarta.validation.constraints.NotNull;\n"
+                "import java.math.BigDecimal;\n"
+                "import java.util.List;\n"
+                "public class ErpSaleOrderSaveReqVO {\n"
+                "    private Long id;\n"
+                "    @Schema(description = \"备注\")\n"
+                "    private String remark;\n"
+                "    @Schema(description = \"订单清单列表\")\n"
+                "    private List<Item> items;\n"
+                "    public static class Item {\n"
+                "        @Schema(description = \"订单项编号\")\n"
+                "        private Long id;\n"
+                "        @Schema(description = \"产品单价\")\n"
+                "        private BigDecimal productPrice;\n"
+                "        @Schema(description = \"产品数量\")\n"
+                "        @NotNull\n"
+                "        private BigDecimal count;\n"
+                "        private String rawCode;\n"
+                "        // @Schema(description = \"旧注释标签\")\n"
+                "        private String commentFollowing;\n"
+                "    }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (erp_mod / "controller/admin/sale/vo/ErpSaleOrderRespVO.java").write_text(
+                "package cn.iocoder.yudao.module.erp.controller.admin.sale.vo;\n"
+                "import io.swagger.v3.oas.annotations.media.Schema;\n"
+                "import java.math.BigDecimal;\n"
+                "import java.util.List;\n"
+                "public class ErpSaleOrderRespVO {\n"
+                "    private Long id;\n"
+                "    private String remark;\n"
+                "    private List<Item> items;\n"
+                "    public static class Item {\n"
+                "        private Long id;\n"
+                "        @Schema(description = \"产品单价\")\n"
+                "        private BigDecimal productPrice;\n"
+                "        @Schema(description = \"产品数量\")\n"
+                "        private BigDecimal count;\n"
+                "        private String rawCode;\n"
+                "        private String commentFollowing;\n"
+                "    }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (erp_mod / "controller/admin/sale/ErpSaleOrderController.java").write_text(
+                "package cn.iocoder.yudao.module.erp.controller.admin.sale;\n"
+                "import cn.iocoder.yudao.module.erp.controller.admin.sale.vo.*;\n"
+                "@RequestMapping(\"/erp/sale-order\")\n"
+                "public class ErpSaleOrderController {\n"
+                "    private ErpSaleOrderService saleOrderService;\n"
+                "    @GetMapping(\"/get\") public CommonResult<ErpSaleOrderRespVO> get(@RequestParam(\"id\") Long id) { return success(saleOrderService.get(id)); }\n"
+                "    @PutMapping(\"/update\") public CommonResult<Boolean> update(@RequestBody ErpSaleOrderSaveReqVO req) { saleOrderService.update(req); return success(true); }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (erp_mod / "service/sale/ErpSaleOrderServiceImpl.java").write_text(
+                "package cn.iocoder.yudao.module.erp.service.sale;\n"
+                "public class ErpSaleOrderServiceImpl {\n"
+                "    public void update(ErpSaleOrderSaveReqVO req) { mapper.updateById(req); }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            # Simulate OpenAPI shared "Item" collision where Item lacks productPrice & has conflicting count description
+            docs = {
+                "paths": {
+                    "/admin-api/erp/sale-order/page": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/ListPage"}}}}}}},
+                    "/admin-api/erp/sale-order/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/SaleResp"}}}}}}},
+                    "/admin-api/erp/sale-order/update": {
+                        "put": {
+                            "tags": ["管理后台 - ERP 销售订单"],
+                            "requestBody": _json_req({
+                                "id": {"type": "integer"},
+                                "remark": {"type": "string"},
+                                "items": {"type": "array", "items": {"$ref": "#/components/schemas/Item"}},
+                            }),
+                            "responses": _bool_resp(),
+                        }
+                    },
+                },
+                "components": {
+                    "schemas": {
+                        "CommonResultBoolean": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "boolean"}}},
+                        "ListPage": {"type": "object", "properties": {"data": {"type": "object", "properties": {"list": {"type": "array", "items": {"type": "object"}}}}}},
+                        "Item": {"type": "object", "properties": {"id": {"type": "integer"}, "count": {"type": "number", "description": "碰撞后的错误数量描述"}}},
+                        "SaleResp": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "remark": {"type": "string"}, "items": {"type": "array", "items": {"$ref": "#/components/schemas/Item"}}}}}},
+                    }
+                },
+            }
+
+            class SaleClient(FakeYudaoClient):
+                def __init__(self):
+                    super().__init__()
+                    self.records[("erp/sale-order", 10)] = {
+                        "id": 10,
+                        "name": "销售订单10",
+                        "remark": "原备注",
+                        "items": [{"id": 101, "productPrice": 12.5, "count": 2, "rawCode": "R1", "commentFollowing": "C1"}],
+                    }
+
+            port = YudaoConventionWritePort(SaleClient(), FakeGoalData(docs, source=YudaoSource(troot, release="v-b3-f1")))
+            agg = port.aggregate_update_specs()["erp/sale-order"]
+            by_name = {f.name: f for f in agg.collections[0].fields}
+            self.assertEqual(by_name["productPrice"].label, "产品单价")
+            self.assertEqual(by_name["count"].label, "产品数量")
+            self.assertEqual(by_name["rawCode"].label, "rawCode")
+            self.assertEqual(by_name["commentFollowing"].label, "commentFollowing")
+
+            handler = CompiledAggregateUpdateHandler(port)
+            spec = handler.prepare(
+                {
+                    "entity": "erp/sale-order",
+                    "target": "销售订单10（ID=10）",
+                    "line_changes": [{"collection": "items", "match": "#1", "changes": [{"field": "count", "value": 5}]}],
+                },
+                context=_ctx(),
+            )
+            detail_labels = [d.label for d in spec.details]
+            self.assertTrue(any("产品数量" in lbl for lbl in detail_labels))
+            self.assertFalse(any("产品单价" in lbl for lbl in detail_labels))
+
+    def test_b3_fix2_mq_producer_client_template_and_auth_config_hard_exclusions(self):
+        from web_operation_agent_yudao.rules import compiled_write_source as cws
+
+        with tempfile.TemporaryDirectory() as tmp:
+            troot = Path(tmp)
+            _write_synthetic_release(troot)
+            sys_mod = troot / "server/yudao-module-system/src/main/java/cn/iocoder/yudao/module/system"
+            pms_mod = troot / "server/yudao-module-pms/src/main/java/cn/iocoder/yudao/module/pms"
+            crm_mod = troot / "server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm"
+            for p in (
+                sys_mod / "controller/admin/user/vo", sys_mod / "service/user", sys_mod / "dal/dataobject/user",
+                sys_mod / "controller/admin/tenant/vo", sys_mod / "service/tenant", sys_mod / "dal/dataobject/tenant",
+                sys_mod / "controller/admin/permission/vo", sys_mod / "service/permission", sys_mod / "dal/dataobject/permission",
+                sys_mod / "controller/admin/oauth2/vo", sys_mod / "service/oauth2", sys_mod / "dal/dataobject/oauth2",
+                sys_mod / "controller/admin/social/vo", sys_mod / "service/social", sys_mod / "dal/dataobject/social",
+                pms_mod / "controller/admin/kb/vo", pms_mod / "service/kb", pms_mod / "dal/dataobject/kb",
+                crm_mod / "controller/admin/contract/vo", crm_mod / "service/contract", crm_mod / "dal/dataobject/contract",
+            ):
+                p.mkdir(parents=True, exist_ok=True)
+
+            # 1) User update calling publishUserProfileUpdatedIfChanged -> adminUserProducer (MQ) must be blocked
+            (sys_mod / "dal/dataobject/user/AdminUserDO.java").write_text("package p;\npublic class AdminUserDO { private Long id; private String nickname; }\n", encoding="utf-8")
+            (sys_mod / "controller/admin/user/vo/UserSaveReqVO.java").write_text("package p;\npublic class UserSaveReqVO { private Long id; private String nickname; }\n", encoding="utf-8")
+            (sys_mod / "controller/admin/user/vo/UserProfileUpdateReqVO.java").write_text("package p;\npublic class UserProfileUpdateReqVO { private String nickname; }\n", encoding="utf-8")
+            (sys_mod / "controller/admin/user/UserController.java").write_text(
+                "package p;\n@RequestMapping(\"/system/user\")\npublic class UserController {\n"
+                "  private AdminUserService userService;\n"
+                "  @PutMapping(\"/update\") public CommonResult<Boolean> update(@RequestBody UserSaveReqVO req) { userService.updateUser(req); return success(true); }\n"
+                "}\n", encoding="utf-8",
+            )
+            (sys_mod / "controller/admin/user/UserProfileController.java").write_text(
+                "package p;\n@RequestMapping(\"/system/user/profile\")\npublic class UserProfileController {\n"
+                "  private AdminUserService userService;\n"
+                "  @PutMapping(\"/update\") public CommonResult<Boolean> update(@RequestBody UserProfileUpdateReqVO req) { userService.updateUserProfile(1L, req); return success(true); }\n"
+                "}\n", encoding="utf-8",
+            )
+            (sys_mod / "service/user/AdminUserServiceImpl.java").write_text(
+                "package p;\npublic class AdminUserServiceImpl {\n"
+                "  private AdminUserMapper userMapper;\n"
+                "  private AdminUserProducer adminUserProducer;\n"
+                "  public void updateUser(UserSaveReqVO req) { userMapper.updateById(req); publishUserProfileUpdatedIfChanged(req); }\n"
+                "  public void updateUserProfile(Long id, UserProfileUpdateReqVO req) { userMapper.updateById(req); publishUserProfileUpdatedIfChanged(req); }\n"
+                "  private void publishUserProfileUpdatedIfChanged(Object req) { adminUserProducer.sendUserProfileUpdateMessage(1L, \"a\", null); }\n"
+                "}\n", encoding="utf-8",
+            )
+            # 2) Client & Template field dependency calls must be rejected
+            (crm_mod / "dal/dataobject/contract/DemoClientDO.java").write_text("package p;\npublic class DemoClientDO { private Long id; private String name; }\n", encoding="utf-8")
+            (crm_mod / "controller/admin/contract/vo/DemoClientVO.java").write_text("package p;\npublic class DemoClientVO { private Long id; private String name; }\n", encoding="utf-8")
+            (crm_mod / "controller/admin/contract/DemoClientController.java").write_text(
+                "package p;\n@RequestMapping(\"/demo/client-call\")\npublic class DemoClientController {\n"
+                "  private DemoClientCallService clientCallService;\n"
+                "  @PutMapping(\"/update\") public CommonResult<Boolean> u(@RequestBody DemoClientVO r) { clientCallService.update(r); return success(true); }\n"
+                "}\n", encoding="utf-8",
+            )
+            (crm_mod / "service/contract/DemoClientCallServiceImpl.java").write_text(
+                "package p;\npublic class DemoClientCallServiceImpl {\n"
+                "  private SmsClient smsClient;\n"
+                "  public void update(DemoClientVO r) { mapper.updateById(r); smsClient.sendSms(1L); }\n"
+                "}\n", encoding="utf-8",
+            )
+            (crm_mod / "controller/admin/contract/DemoTemplateController.java").write_text(
+                "package p;\n@RequestMapping(\"/demo/template-call\")\npublic class DemoTemplateController {\n"
+                "  private DemoTemplateCallService templateCallService;\n"
+                "  @PutMapping(\"/update\") public CommonResult<Boolean> u(@RequestBody DemoClientVO r) { templateCallService.update(r); return success(true); }\n"
+                "}\n", encoding="utf-8",
+            )
+            (crm_mod / "service/contract/DemoTemplateCallServiceImpl.java").write_text(
+                "package p;\npublic class DemoTemplateCallServiceImpl {\n"
+                "  private StringRedisTemplate cache;\n"
+                "  public void update(DemoClientVO r) { mapper.updateById(r); cache.delete(\"k\"); }\n"
+                "}\n", encoding="utf-8",
+            )
+            # 3) Permission / Role / Menu / Tenant / TenantPackage / OAuth2Client / SocialClient / ContentPermission
+            for mod_dir, ctrl_name, svc_name, path_prefix, vo_name in (
+                (sys_mod / "controller/admin/permission", "RoleController", "RoleService", "/system/role", "RoleVO"),
+                (sys_mod / "controller/admin/permission", "MenuController", "MenuService", "/system/menu", "MenuVO"),
+                (sys_mod / "controller/admin/tenant", "TenantController", "TenantService", "/system/tenant", "TenantVO"),
+                (sys_mod / "controller/admin/tenant", "TenantPackageController", "TenantPackageService", "/system/tenant-package", "TenantPkgVO"),
+                (sys_mod / "controller/admin/oauth2", "OAuth2ClientController", "OAuth2ClientService", "/system/oauth2-client", "OAuth2ClientVO"),
+                (sys_mod / "controller/admin/social", "SocialClientController", "SocialClientService", "/system/social-client", "SocialClientVO"),
+                (pms_mod / "controller/admin/kb", "PmsKnowledgeContentPermissionController", "PmsKnowledgeContentPermissionService", "/pms/kb/content-permission", "PermVO"),
+            ):
+                (mod_dir / "vo" / f"{vo_name}.java").write_text(f"package p;\npublic class {vo_name} {{ private Long id; private String name; }}\n", encoding="utf-8")
+                (mod_dir / f"{ctrl_name}.java").write_text(
+                    f"package p;\n@RequestMapping(\"{path_prefix}\")\npublic class {ctrl_name} {{\n"
+                    f"  private {svc_name} targetService;\n"
+                    f"  @PostMapping(\"/create\") public CommonResult<Long> c(@RequestBody {vo_name} r) {{ return success(targetService.create(r)); }}\n"
+                    f"  @PutMapping(\"/update\") public CommonResult<Boolean> u(@RequestBody {vo_name} r) {{ targetService.update(r); return success(true); }}\n"
+                    "}\n", encoding="utf-8",
+                )
+            for svc_dir, svc_impl in (
+                (sys_mod / "service/permission", "RoleServiceImpl"),
+                (sys_mod / "service/permission", "MenuServiceImpl"),
+                (sys_mod / "service/tenant", "TenantServiceImpl"),
+                (sys_mod / "service/tenant", "TenantPackageServiceImpl"),
+                (sys_mod / "service/oauth2", "OAuth2ClientServiceImpl"),
+                (sys_mod / "service/social", "SocialClientServiceImpl"),
+                (pms_mod / "service/kb", "PmsKnowledgeContentPermissionServiceImpl"),
+            ):
+                (svc_dir / f"{svc_impl}.java").write_text(
+                    f"package p;\npublic class {svc_impl} {{\n"
+                    "  public Long create(Object r) { mapper.insert(r); return 1L; }\n"
+                    "  public void update(Object r) { mapper.updateById(r); }\n"
+                    "}\n", encoding="utf-8",
+                )
+            # 4) CrmPermissionService.createPermission remains allowed (B3 companion allowlist preserved)
+            (crm_mod / "controller/admin/contract/CrmContractController.java").write_text(
+                "package p;\n@RequestMapping(\"/crm/contract-demo\")\npublic class CrmContractController {\n"
+                "  private CrmContractDemoService contractDemoService;\n"
+                "  @PostMapping(\"/create\") public CommonResult<Long> c(@RequestBody DemoClientVO r) { return success(contractDemoService.create(r)); }\n"
+                "}\n", encoding="utf-8",
+            )
+            (crm_mod / "service/contract/CrmContractDemoServiceImpl.java").write_text(
+                "package p;\npublic class CrmContractDemoServiceImpl {\n"
+                "  private CrmPermissionService crmPermissionService;\n"
+                "  public Long create(DemoClientVO r) { mapper.insert(r); crmPermissionService.createPermission(1L); return 1L; }\n"
+                "}\n", encoding="utf-8",
+            )
+
+            schemas = {
+                "CommonResultLong": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "integer"}}},
+                "CommonResultBoolean": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "boolean"}}},
+                "SimpleReq": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}, "nickname": {"type": "string"}}},
+                "SimpleResp": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}, "nickname": {"type": "string"}}}}},
+            }
+            paths = {}
+            for ent in (
+                "system/user", "system/user/profile", "demo/client-call", "demo/template-call",
+                "system/role", "system/menu", "system/tenant", "system/tenant-package",
+                "system/oauth2-client", "system/social-client", "pms/kb/content-permission", "crm/contract-demo",
+            ):
+                paths[f"/admin-api/{ent}/get"] = {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/SimpleResp"}}}}}}}
+                if ent not in {"system/user", "system/user/profile", "demo/client-call", "demo/template-call"}:
+                    paths[f"/admin-api/{ent}/create"] = {"post": {"requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/SimpleReq"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}}}}
+                paths[f"/admin-api/{ent}/update"] = {"put": {"requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/SimpleReq"}}}}, "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}}}}
+            docs = {"paths": paths, "components": {"schemas": schemas}}
+            src = YudaoSource(troot, release="v-b3-fix2")
+            cat = cws.compile_yudao_write_catalog(
+                docs=docs, source=src, ui=None, dedicated_creates=frozenset(),
+                dedicated_updates=frozenset(), dedicated_statuses=frozenset(),
+                ui_metadata_fn=lambda _s, _u=None: ({}, {}, {}),
+            )
+            for blocked_ent in (
+                "system/user", "system/user/profile", "demo/client-call", "demo/template-call",
+                "system/role", "system/menu", "system/tenant", "system/tenant-package",
+                "system/oauth2-client", "system/social-client", "pms/kb/content-permission",
+            ):
+                self.assertNotIn(blocked_ent, cat["updates"], f"{blocked_ent} leaked into updates")
+                self.assertNotIn(blocked_ent, cat["creates"], f"{blocked_ent} leaked into creates")
+            self.assertIn("crm/contract-demo", cat["creates"])
+
+            # Direct _analyze_service_method check confirms service-type blocking even outside _blocked(entity)
+            self.assertFalse(cws._analyze_service_method(src, cws.ControllerEndpointAST("p", "Put", "TenantPackageService", "update", "", "", ()))[0])
+            self.assertFalse(cws._analyze_service_method(src, cws.ControllerEndpointAST("p", "Put", "PmsKnowledgeContentPermissionService", "update", "", "", ()))[0])
+            self.assertFalse(cws._analyze_service_method(src, cws.ControllerEndpointAST("p", "Put", "OAuth2ClientService", "update", "", "", ()))[0])
+            self.assertFalse(cws._analyze_service_method(src, cws.ControllerEndpointAST("p", "Put", "SocialClientService", "update", "", "", ()))[0])
+
+    def test_b3_fix3_cond_side_effect_fields_kept_in_spec_and_immutable_fields(self):
+        from web_operation_agent.business.convention_writes import ConventionUpdateHandler
+
+        def _json_req(props, required=None):
+            return {"content": {"application/json": {"schema": {"type": "object", "required": list(required or ()), "properties": props}}}}
+
+        def _bool_resp():
+            return {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            troot = Path(tmp)
+            _write_synthetic_release(troot)
+            mem_mod = troot / "server/yudao-module-member/src/main/java/cn/iocoder/yudao/module/member"
+            for p in (mem_mod / "controller/admin/user/vo", mem_mod / "dal/dataobject/user", mem_mod / "service/user"):
+                p.mkdir(parents=True, exist_ok=True)
+            (mem_mod / "dal/dataobject/user/MemberUserDO.java").write_text(
+                "package p;\npublic class MemberUserDO { private Long id; private Integer status; private String mark; }\n",
+                encoding="utf-8",
+            )
+            (mem_mod / "controller/admin/user/vo/MemberUserUpdateReqVO.java").write_text(
+                "package p;\nimport jakarta.validation.constraints.NotNull;\n"
+                "public class MemberUserUpdateReqVO {\n"
+                "  @NotNull private Long id;\n"
+                "  @NotNull private Integer status;\n"
+                "  private String mark;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (mem_mod / "controller/admin/user/vo/MemberUserRespVO.java").write_text(
+                "package p;\npublic class MemberUserRespVO { private Long id; private Integer status; private String mark; }\n",
+                encoding="utf-8",
+            )
+            (mem_mod / "controller/admin/user/MemberUserController.java").write_text(
+                "package p;\n@RequestMapping(\"/member/user\")\npublic class MemberUserController {\n"
+                "  private MemberUserService userService;\n"
+                "  @GetMapping(\"/get\") public CommonResult<MemberUserRespVO> get(@RequestParam(\"id\") Long id) { return success(userService.getUser(id)); }\n"
+                "  @PutMapping(\"/update\") public CommonResult<Boolean> update(@RequestBody MemberUserUpdateReqVO req) { userService.updateUser(req); return success(true); }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (mem_mod / "service/user/MemberUserServiceImpl.java").write_text(
+                "package p;\npublic class MemberUserServiceImpl {\n"
+                "  private MemberUserMapper memberUserMapper;\n"
+                "  private OAuth2TokenCommonApi oauth2TokenApi;\n"
+                "  public void updateUser(MemberUserUpdateReqVO req) {\n"
+                "    MemberUserDO updateObj = BeanUtils.toBean(req, MemberUserDO.class);\n"
+                "    memberUserMapper.updateById(updateObj);\n"
+                "    if (CommonStatusEnum.isDisable(updateObj.getStatus())) {\n"
+                "      oauth2TokenApi.removeAccessToken(updateObj.getId(), 1);\n"
+                "    }\n"
+                "  }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            docs = {
+                "paths": {
+                    "/admin-api/member/user/page": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/ListPage"}}}}}}},
+                    "/admin-api/member/user/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/MemResp"}}}}}}},
+                    "/admin-api/member/user/update": {
+                        "put": {
+                            "tags": ["管理后台 - 会员用户"],
+                            "requestBody": _json_req({
+                                "id": {"type": "integer"},
+                                "status": {"type": "integer", "description": "状态"},
+                                "mark": {"type": "string", "description": "备注"},
+                            }, required=["id", "status"]),
+                            "responses": _bool_resp(),
+                        }
+                    },
+                },
+                "components": {
+                    "schemas": {
+                        "CommonResultBoolean": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "boolean"}}},
+                        "ListPage": {"type": "object", "properties": {"data": {"type": "object", "properties": {"list": {"type": "array", "items": {"type": "object"}}}}}},
+                        "MemResp": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "status": {"type": "integer"}, "mark": {"type": "string"}}}}},
+                    }
+                },
+            }
+
+            class MemberClient(FakeYudaoClient):
+                def __init__(self):
+                    super().__init__()
+                    self.records[("member/user", 42)] = {"id": 42, "name": "会员甲", "status": 0, "mark": "旧备注"}
+
+            port = YudaoConventionWritePort(MemberClient(), FakeGoalData(docs, source=YudaoSource(troot, release="v-b3-fix3")))
+            spec = port.update_specs()["member/user"]
+            self.assertIn("status", [f.name for f in spec.fields])
+            self.assertIn("status", port._immutable_fields.get("member/user", ()))
+
+            handler = ConventionUpdateHandler(port)
+            prop = handler.prepare(
+                {"entity": "member/user", "target": "会员甲（ID=42）", "changes": [{"field": "mark", "value": "新备注"}]},
+                context=_ctx(),
+            )
+            self.assertEqual(prop.args["payload"]["status"], 0)
+            self.assertEqual(prop.args["payload"]["mark"], "新备注")
+            with self.assertRaises(BusinessToolRequestError):
+                handler.prepare(
+                    {"entity": "member/user", "target": "会员甲（ID=42）", "changes": [{"field": "status", "value": 1}]},
+                    context=_ctx(),
+                )
+
+    def test_b3_fix4_dangerous_service_word_boundaries(self):
+        from web_operation_agent_yudao.rules import compiled_write_source as cws
+
+        for blocked in (
+            "BpmTaskService",
+            "TaskService",
+            "PayOrderService",
+            "PayAppService",
+            "BpmProcessInstanceApi",
+            "BpmProcessInstanceService",
+            "PayWalletService",
+            "SmsSendService",
+            "MailSendService",
+            "NotifySendService",
+            "AdminUserProducer",
+        ):
+            self.assertIsNotNone(cws._DANGEROUS_SERVICE_TYPES.search(blocked), f"Expected {blocked} blocked")
+
+        for allowed in (
+            "OaTaskService",
+            "MesProTaskService",
+            "MesWmStockTakingTaskService",
+            "ErpFinancePaymentService",
+        ):
+            self.assertIsNone(cws._DANGEROUS_SERVICE_TYPES.search(allowed), f"Expected {allowed} allowed")
+
+    def test_b3_fix5_yudao_unavailable_propose_operation_routes_to_compiled_tool(self):
+        from web_operation_agent.business.convention_writes import resolve_compiled_write_fallback
+        from web_operation_agent.goal.skill_writes import SkillWrites
+        from web_operation_agent_yudao.host.application import YudaoApplication
+
+        def _json_req(props, required=None):
+            return {"content": {"application/json": {"schema": {"type": "object", "required": list(required or ()), "properties": props}}}}
+
+        def _bool_resp():
+            return {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            troot = Path(tmp)
+            _write_synthetic_release(troot)
+            docs = {
+                "paths": {
+                    "/admin-api/demo/item/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/ItemResp"}}}}}}},
+                    "/admin-api/demo/item/update": {
+                        "put": {
+                            "tags": ["管理后台 - 示例"],
+                            "requestBody": _json_req({"id": {"type": "integer"}, "name": {"type": "string"}}, required=["id"]),
+                            "responses": _bool_resp(),
+                        }
+                    },
+                },
+                "components": {
+                    "schemas": {
+                        "CommonResultBoolean": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "boolean"}}},
+                        "ItemResp": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}}}}},
+                    }
+                },
+            }
+            app = YudaoApplication("https://app.test", None, docs, client=FakeYudaoClient(), native_writes=True)
+            writes = SkillWrites(app, NS(principal=_ctx().principal, mutations_enabled=True))
+            defs = writes.available_definitions()
+            self.assertEqual(resolve_compiled_write_fallback("demo_item_update", {}, defs), ("demo/item", ("update_record",)))
+            msg = app.goal_data.write_route_capability().unavailable_operation_message(
+                "demo_item_update",
+                entity="demo/item",
+                compiled_tools=("update_record",),
+            )
+            self.assertIn('update_record(entity="demo/item"', msg)
+            self.assertNotIn("完成预填并用 then_highlight", msg)
+
+    def test_b3_fix4_exclusions_for_unmentioned_name_rewrite_and_required_task_page(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            troot = Path(tmp)
+            _write_synthetic_release(troot)
+            work_mod = troot / "server/yudao-module-work/src/main/java/cn/iocoder/yudao/module/work"
+            (work_mod / "controller/admin/task/vo").mkdir(parents=True, exist_ok=True)
+            (work_mod / "service/task").mkdir(parents=True, exist_ok=True)
+            (work_mod / "dal/dataobject/task").mkdir(parents=True, exist_ok=True)
+            (work_mod / "dal/dataobject/task/WorkTaskDO.java").write_text(
+                "package p;\npublic class WorkTaskDO { private Long id; private String name; private String remark; }\n",
+                encoding="utf-8",
+            )
+            (work_mod / "controller/admin/task/vo/WorkTaskSaveReqVO.java").write_text(
+                "package p;\npublic class WorkTaskSaveReqVO { private Long id; private String remark; }\n",
+                encoding="utf-8",
+            )
+            (work_mod / "controller/admin/task/WorkTaskController.java").write_text(
+                "package p;\n@RequestMapping(\"/work/task\")\npublic class WorkTaskController {\n"
+                "  private WorkTaskService taskService;\n"
+                "  @PutMapping(\"/update\") public CommonResult<Boolean> update(@RequestBody WorkTaskSaveReqVO reqVO) { taskService.updateTask(reqVO); return success(true); }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (work_mod / "service/task/WorkTaskServiceImpl.java").write_text(
+                "package p;\npublic class WorkTaskServiceImpl implements WorkTaskService {\n"
+                "  private WorkTaskMapper mapper;\n"
+                "  public void updateTask(WorkTaskSaveReqVO updateReqVO) {\n"
+                "    WorkTaskDO updateObj = BeanUtils.toBean(updateReqVO, WorkTaskDO.class).setName(buildName());\n"
+                "    mapper.updateById(updateObj);\n"
+                "  }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            docs = {
+                "paths": {
+                    "/admin-api/work/task/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/WorkResp"}}}}}}},
+                    "/admin-api/work/task/update": {
+                        "put": {
+                            "tags": ["管理后台 - 工单任务"],
+                            "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["id"], "properties": {"id": {"type": "integer"}, "remark": {"type": "string"}}}}}},
+                            "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}},
+                        }
+                    },
+                    "/admin-api/work/task-line/page": {
+                        "get": {
+                            "parameters": [{"name": "taskId", "in": "query", "required": True, "schema": {"type": "integer"}}],
+                            "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}},
+                        }
+                    },
+                    "/admin-api/work/task-line/get": {"get": {"responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/LineResp"}}}}}}},
+                    "/admin-api/work/task-line/create": {
+                        "post": {
+                            "tags": ["管理后台 - 任务行"],
+                            "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["taskId"], "properties": {"taskId": {"type": "integer"}, "remark": {"type": "string"}}}}}},
+                            "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultLong"}}}}},
+                        }
+                    },
+                    "/admin-api/work/task-line/update": {
+                        "put": {
+                            "tags": ["管理后台 - 任务行"],
+                            "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["id"], "properties": {"id": {"type": "integer"}, "remark": {"type": "string"}}}}}},
+                            "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/CommonResultBoolean"}}}}},
+                        }
+                    },
+                },
+                "components": {
+                    "schemas": {
+                        "CommonResultBoolean": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "boolean"}}},
+                        "CommonResultLong": {"type": "object", "properties": {"code": {"type": "integer"}, "data": {"type": "integer"}}},
+                        "WorkResp": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "name": {"type": "string"}, "remark": {"type": "string"}}}}},
+                        "LineResp": {"type": "object", "properties": {"data": {"type": "object", "properties": {"id": {"type": "integer"}, "taskId": {"type": "integer"}, "remark": {"type": "string"}}}}},
+                    }
+                },
+            }
+            port = YudaoConventionWritePort(FakeYudaoClient(), FakeGoalData(docs, source=YudaoSource(troot, release="v-b3-fix4-excl")))
+            updates = port.update_specs()
+            creates = port.create_specs()
+            self.assertNotIn("work/task", updates)
+            self.assertNotIn("work/task-line", updates)
+            self.assertIn("work/task-line", creates)
+
 
 if __name__ == "__main__":
     unittest.main()

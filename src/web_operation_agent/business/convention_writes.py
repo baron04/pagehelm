@@ -112,7 +112,20 @@ class WriteRouteCapability:
             row_hint = f"使用已安装的专用状态操作，或{self.form_fallback_phrase()}"
         return f"实体「{entity}」不属于通用两态互逆状态开关范围（多态业务流转请{row_hint}）。"
 
-    def unavailable_operation_message(self, op_name: str) -> str:
+    def unavailable_operation_message(
+        self,
+        op_name: str,
+        *,
+        entity: str = "",
+        compiled_tools: tuple[str, ...] = (),
+    ) -> str:
+        if entity and compiled_tools:
+            tools_str = " / ".join(compiled_tools)
+            return (
+                f"当前部署或账号下没有可用的专用写入操作「{op_name}」，"
+                f"但实体「{entity}」已在已编译写目录中提供 {tools_str}；"
+                f"请直接调用 {compiled_tools[0]}(entity=\"{entity}\", ...) 办理，不要误退回页面表单。"
+            )
         return (
             f"当前部署或账号下没有可用的写入操作「{op_name}」；"
             f"请核对“已安装的写入操作”清单，或{self.form_fallback_phrase()}。"
@@ -155,6 +168,133 @@ def resolve_write_route_capability(source: object) -> WriteRouteCapability:
     if callable(attr):
         attr = attr()
     return attr if isinstance(attr, WriteRouteCapability) else WriteRouteCapability()
+
+
+_OP_TOKEN_RE = re.compile(r"[A-Z]?[a-z]+\d*|[A-Z]+\d*(?=[A-Z][a-z]|\b)|\d+")
+_COMPILED_ACTION_VERBS: dict[str, str] = {
+    "create": "create_record",
+    "add": "create_record",
+    "new": "create_record",
+    "update": "update_record",
+    "edit": "update_record",
+    "modify": "update_record",
+    "status": "toggle_record_status",
+    "toggle": "toggle_record_status",
+    "enable": "toggle_record_status",
+    "disable": "toggle_record_status",
+}
+_NON_COMPILED_ACTION_VERBS = frozenset({
+    "delete", "remove", "approve", "audit", "reject", "cancel",
+    "export", "import", "submit", "transfer", "lock", "unlock",
+})
+_COMPILED_TOOL_ORDER = ("create_record", "update_record", "toggle_record_status")
+
+
+def _norm_entity_key(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(text or "").casefold())
+
+
+def _compiled_entity_tools(available_definitions: object, goal_port: object = None) -> dict[str, tuple[str, ...]]:
+    """Collect ``entity -> available compiled tool names`` from offered definitions and optional neutral port routes."""
+    defs = tuple(available_definitions or ())
+    offered_names = {getattr(d, "name", "") for d in defs}
+    tool_map: dict[str, set[str]] = {}
+    spec_getters = {
+        "create_record": ("create_specs",),
+        "update_record": ("update_specs", "aggregate_update_specs"),
+        "toggle_record_status": ("status_specs",),
+    }
+    for defn in defs:
+        tname = getattr(defn, "name", "")
+        getters = spec_getters.get(tname)
+        if not getters:
+            continue
+        port = getattr(getattr(defn, "handler", None), "port", None)
+        if port is None:
+            continue
+        for getter_name in getters:
+            getter = getattr(port, getter_name, None)
+            if callable(getter):
+                specs = getter() or {}
+                if isinstance(specs, dict):
+                    for ent in specs:
+                        clean = str(ent).strip().strip("/")
+                        if clean:
+                            tool_map.setdefault(clean, set()).add(tname)
+    routes_fn = getattr(goal_port, "compiled_write_routes", None) if goal_port is not None else None
+    if callable(routes_fn):
+        extra = routes_fn() or {}
+        if isinstance(extra, dict):
+            for ent, tools in extra.items():
+                clean = str(ent).strip().strip("/")
+                if not clean:
+                    continue
+                for tname in tools or ():
+                    if tname in spec_getters and (not offered_names or tname in offered_names):
+                        tool_map.setdefault(clean, set()).add(tname)
+    return {
+        ent: tuple(t for t in _COMPILED_TOOL_ORDER if t in tools)
+        for ent, tools in tool_map.items()
+        if tools
+    }
+
+
+def resolve_compiled_write_fallback(
+    op_name: str,
+    op_inputs: object,
+    available_definitions: object,
+    *,
+    goal_port: object = None,
+) -> tuple[str, tuple[str, ...]]:
+    """Locate compiled write tools for an uninstalled ``propose_operation`` target entity."""
+    entity_tools = _compiled_entity_tools(available_definitions, goal_port=goal_port)
+    if not entity_tools:
+        return "", ()
+
+    tokens = [t.lower() for t in _OP_TOKEN_RE.findall(str(op_name or ""))]
+    if tokens and (tokens[0] in _NON_COMPILED_ACTION_VERBS or tokens[-1] in _NON_COMPILED_ACTION_VERBS):
+        return "", ()
+
+    preferred_tool = ""
+    stem_tokens = list(tokens)
+    while len(stem_tokens) > 1 and stem_tokens[-1] in _COMPILED_ACTION_VERBS:
+        verb = stem_tokens.pop()
+        if not preferred_tool:
+            preferred_tool = _COMPILED_ACTION_VERBS[verb]
+    if not preferred_tool and len(stem_tokens) > 1 and stem_tokens[0] in _COMPILED_ACTION_VERBS:
+        preferred_tool = _COMPILED_ACTION_VERBS[stem_tokens.pop(0)]
+
+    matched_entity = ""
+    raw_ent = op_inputs.get("entity") if isinstance(op_inputs, dict) else None
+    if isinstance(raw_ent, str) and raw_ent.strip():
+        clean_ent = raw_ent.strip().strip("/")
+        if clean_ent in entity_tools:
+            matched_entity = clean_ent
+        else:
+            norm_req = _norm_entity_key(clean_ent)
+            hits = [e for e in entity_tools if _norm_entity_key(e) == norm_req]
+            if len(hits) == 1:
+                matched_entity = hits[0]
+
+    if not matched_entity and stem_tokens:
+        stem = "".join(stem_tokens)
+        exact = [e for e in entity_tools if _norm_entity_key(e) == stem]
+        if len(exact) == 1:
+            matched_entity = exact[0]
+        else:
+            variants = {stem, f"{stem}s"}
+            if stem.endswith("s") and len(stem) > 1:
+                variants.add(stem[:-1])
+            approx = [e for e in entity_tools if _norm_entity_key(e) in variants]
+            if len(approx) == 1:
+                matched_entity = approx[0]
+
+    if not matched_entity:
+        return "", ()
+    tools = entity_tools[matched_entity]
+    if preferred_tool:
+        return (matched_entity, (preferred_tool,)) if preferred_tool in tools else ("", ())
+    return matched_entity, tools
 
 
 def normalize_field_items(raw: object) -> object:
@@ -1424,6 +1564,7 @@ __all__ = [
     "normalize_create_arguments",
     "normalize_field_items",
     "normalize_update_arguments",
+    "resolve_compiled_write_fallback",
     "resolve_write_route_capability",
     "validate_single_field_provenance",
 ]
