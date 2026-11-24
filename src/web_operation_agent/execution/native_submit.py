@@ -582,6 +582,56 @@ class NativeSubmitMixin:
             return f"已看到你点击「{marked}」，应用已接受写入，回读到新记录（编号 {new_id}）。"
         return f"已看到你点击「{marked}」，应用已接受写入；同一账号回读未发现待核对的变化。"
 
+    def _build_post_handoff_watch_context(self, s, turn) -> dict | None:
+        """Capture the target/mark/actor context needed to read back a user save after form handoff."""
+        port = getattr(self, "native_submit", None)
+        if port is None or not turn.get("handoff"):
+            return None
+        marked = str(turn.get("handoff_button") or "")
+        if not marked and isinstance(turn.get("handoff"), tuple) and len(turn["handoff"]) > 1:
+            marked = str(turn["handoff"][1] or "")
+        mark_fn = getattr(port, "user_write_mark", None)
+        event_fn = getattr(port, "user_write_event", None)
+        if not marked or not callable(event_fn):
+            return None
+        targets = turn.get("submit_targets") or {}
+        target = targets.get(turn.get("handoff_target_key")) or {}
+        record_id = str(target.get("record_id") or "")
+        prefixes = tuple(target.get("prefixes") or ())
+        if not prefixes:
+            recent_fn = getattr(port, "recent_reads", None)
+            prefixes_fn = getattr(port, "prefixes", None)
+            if callable(recent_fn) and callable(prefixes_fn):
+                reads = recent_fn() or ()
+                inferred = tuple(prefixes_fn(reads, mode=("update" if record_id else "create"), record_id=record_id) or ())
+                if len(inferred) == 1:
+                    prefixes = inferred
+        if not prefixes:
+            return None
+        mark = turn.get("handoff_mark")
+        if mark is None and callable(mark_fn):
+            mark = mark_fn()
+        if mark is None:
+            return None
+        contract_fn = getattr(port, "contract", None)
+        conventions = contract_fn() if callable(contract_fn) else None
+        zone = conventions.epoch_zone if conventions is not None else None
+        create = target.get("mode") == "create" or (target.get("kind") == "form" and not record_id) or (not record_id)
+        expected_fields = dict(((turn.get("form_field_outcomes") or turn.get("field_outcomes") or {}).get("applied_fields")) or {})
+        return {
+            "port": port,
+            "prefixes": prefixes,
+            "record_id": record_id,
+            "create": create,
+            "mark": mark,
+            "marked": marked,
+            "baseline": target.get("baseline"),
+            "expected_fields": expected_fields,
+            "zone": zone,
+            "ledger": s.ledger,
+            "step": s.step,
+        }
+
     # -- the adapter's declared record conventions --------------------------------------
     def _conventions(self, port):
         contract_fn = getattr(port, "contract", None)
@@ -1170,3 +1220,95 @@ def _readback_changes(baseline, record, *, zone=None) -> list:
         if len(out) >= 8:
             break
     return out
+
+
+def _poll_post_handoff_readback(ctx: dict) -> dict | None:
+    """Check once whether the user saved a handed-off form and read back under the same actor."""
+    import inspect
+
+    port = ctx["port"]
+    event_fn = getattr(port, "user_write_event", None)
+    if not callable(event_fn):
+        return None
+    try:
+        params = inspect.signature(event_fn).parameters
+        if "create" in params:
+            event = event_fn(ctx["prefixes"], ctx["record_id"], ctx["mark"], create=ctx["create"])
+        else:
+            event = event_fn(ctx["prefixes"], ctx["record_id"], ctx["mark"])
+    except Exception:
+        return None
+    if event is None:
+        return None
+    marked = ctx["marked"]
+    ledger = ctx["ledger"]
+    step = ctx["step"]
+    ledger.append(
+        "handoff_wait_result",
+        step=step,
+        result="pressed",
+        method=str(event.get("method") or ""),
+        path=str(event.get("path") or "")[:200],
+        status=int(event.get("status") or 0),
+        dispatched=False,
+        side_effect_possible=False,
+    )
+    eff_prefixes = (event["prefix"],) if event.get("prefix") else ctx["prefixes"]
+    new_id = str(event.get("record_id") or ctx["record_id"] or "")
+    record = None
+    readback_error = ""
+    if new_id and callable(getattr(port, "read_record", None)):
+        try:
+            record = port.read_record(eff_prefixes, new_id)
+        except Exception as exc:  # noqa: BLE001 -- readback failure is recorded and surfaced honestly
+            readback_error = type(exc).__name__
+            ledger.append(
+                "handoff_readback_failed",
+                step=step,
+                error_type=readback_error,
+                dispatched=False,
+                side_effect_possible=False,
+            )
+    changes = _readback_changes(ctx.get("baseline"), record, zone=ctx.get("zone")) if record is not None else []
+    verified = isinstance(record, dict) and bool(new_id)
+    if not bool(str(ctx.get("record_id") or "").strip()) and new_id and isinstance(record, dict) and not changes:
+        created_parts = []
+        for k, v in list((ctx.get("expected_fields") or {}).items())[:6]:
+            if k in record:
+                created_parts.append(f"{k}：{record.get(k)}")
+        if not created_parts:
+            for k in ("name", "title", "code"):
+                if record.get(k) not in (None, ""):
+                    created_parts.append(f"{k}：{record.get(k)}")
+        changes = created_parts
+    ledger.append(
+        "handoff_post_save_readback",
+        step=step,
+        record_id=new_id,
+        readback_verified=verified,
+        changes=changes[:10],
+        **({"error_type": readback_error} if readback_error else {}),
+        dispatched=False,
+        side_effect_possible=False,
+    )
+    if not verified:
+        note = (
+            f"已看到你点击「{marked}」，应用已接受写入；但写后同账号回读记录未成功，请到应用里核对结果。"
+        )
+    elif changes:
+        note = (
+            f"已看到你点击「{marked}」，应用已接受写入；同一账号回读核对到变化："
+            + "、".join(changes)
+            + f"（记录编号 {new_id}）。"
+        )
+    elif new_id:
+        note = f"已看到你点击「{marked}」，应用已接受写入，同一账号回读到记录（编号 {new_id}）。"
+    else:
+        note = f"已看到你点击「{marked}」，应用已接受写入；同一账号回读完成。"
+    return {
+        "record_id": new_id,
+        "verified": verified,
+        "changes": changes,
+        "note": note,
+        "marked": marked,
+    }

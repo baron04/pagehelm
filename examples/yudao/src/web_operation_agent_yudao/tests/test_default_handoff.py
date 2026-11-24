@@ -223,6 +223,33 @@ class DefaultHandoffTests(unittest.TestCase):
         self.assertEqual(facts2["restricted_controls"], [{"label": "用户密码", "kind": "password", "ref": "e12"}])
         self.assertEqual(facts2["pending_fields"], [{"name": "用户密码"}])
 
+    def test_form_handoff_captures_post_handoff_watch_context_for_item16(self):
+        class NS:
+            def recent_reads(self):
+                return (("/admin-api/system/user/get", "id=5"),)
+
+            def prefixes(self, _reads, *, mode, record_id, source=""):
+                return ("/admin-api/system/user/",)
+
+            def user_write_mark(self):
+                return 7
+
+            def user_write_event(self, prefixes, record_id, mark, create=False):
+                return None
+
+        self.intent("save", "帮我新增系统用户，昵称林晓峰")
+        loop = Loop([fill(), finish()])
+        loop.native_submit = NS()
+        loop.turn["handoff_target_key"] = "form:k"
+        loop.turn["submit_targets"] = {"form:k": {"kind": "form"}}
+        loop._await_handoff_press = lambda *_: self.fail("form handoff must stay non-blocking")
+        answer = self._run_loop(loop)
+        self.assertIn("尚未提交", answer)
+        ctx = loop._build_post_handoff_watch_context(loop.state, loop.turn)
+        self.assertIsNotNone(ctx)
+        self.assertEqual(ctx["prefixes"], ("/admin-api/system/user/",))
+        self.assertEqual(ctx["mark"], 7)
+
 
 if __name__ == "__main__":
     unittest.main()

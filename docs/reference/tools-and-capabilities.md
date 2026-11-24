@@ -3,7 +3,7 @@ title: Tools, Capabilities & Checks
 description: Catalog of model-visible tools, GoalPort capability declarations, and ProgramCheckSpec verification checks.
 ---
 
-The tools visible to the model on each step are projected dynamically by the server from the current session state and permissions (`ToolSurface` in `execution/tools.py`). Adapters declare supported optional capabilities via `GoalPort.capabilities()`, and every turn runs code-level `ProgramCheckSpec` verification before delivery.
+The tools visible to the model on each step are projected dynamically by the server from the current session state and permissions (`ToolSurface` in `execution/tools.py`). Adapters declare supported optional capabilities via `GoalPort.capabilities()` (and optional convention write-port hooks via `ConventionWritePort.capabilities()`), and every turn runs code-level `ProgramCheckSpec` verification before delivery.
 
 ## 1. Model-Visible Tool Catalog
 
@@ -75,6 +75,14 @@ Enabled only when the host injects an allowlisted `SourceTree` (`runtime_source=
 | `source` | Compiled source rules and read-only route candidates |
 | `values` | Looking up valid same-actor candidate values before write proposals |
 | `updates` | Symmetric flat `ConventionWritePort` (`update_record`, `toggle_record_status`) |
+
+### `ConventionWritePort` Optional Capabilities (`WRITE_PORT_OPTIONAL`)
+
+- `companion_readback`: Enables same-actor companion write readback (`verify_companion_readback`) and pre-dispatch destructive-delete child row count inspection (`count_companion_rows`).
+- `preserved_field_extraction`: Enables adapter-specific preserved field extraction (`extract_preserved_field`) when reading full flat/projected records before update.
+- `reference_variants`: Enables adapter-specific display/token variants (`reference_provenance_variants`) during foreign-key provenance validation.
+
+When an optional capability is omitted from `port.capabilities()`, core ignores any hook on the port, marks companion writes as unverified, and fails closed on destructive-delete companion updates.
 
 ## 3. Programmatic Turn Verification (`ProgramCheckSpec`)
 

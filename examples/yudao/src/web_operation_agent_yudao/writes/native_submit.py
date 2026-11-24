@@ -20,7 +20,7 @@ from web_operation_agent.execution.submit_contract import (ActionRequest, Submit
 from ..reads.client import YudaoReadRefused
 
 _WRITE_METHODS = ("post", "put", "patch", "delete")
-_LIST_READ = re.compile(r"/(?:page|list)(?:-[a-z0-9-]+)?$")
+_LIST_READ = re.compile(r"/(?:page|list|tree)(?:-[a-z0-9-]+)?$")
 _PREFIX = re.compile(r"^/admin-api(?:/[A-Za-z0-9_-]+)+/$")
 _MISSING = re.compile(r"不存在|未找到|找不到")
 _DANGER = re.compile(r"删除|移除|清除|作废|关闭|撤销|取消|注销|清空|反审|退款|终止|重置密码")

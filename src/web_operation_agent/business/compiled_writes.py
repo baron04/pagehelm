@@ -46,6 +46,7 @@ from .convention_writes import (
     run_companion_readback,
     serialize_companion_specs,
     validate_single_field_provenance,
+    write_capabilities_of,
 )
 from .effects import EffectProjection, RequestedEffect, canonical
 from .errors import (
@@ -1143,7 +1144,11 @@ class CompiledCreateHandler:
                 receipt_vals = tuple(dict.fromkeys([*receipt_vals, *extra_dates]))
 
         enum_tokens_fn = getattr(self.port, "enum_provenance_tokens", None)
-        ref_variants_fn = getattr(self.port, "reference_provenance_variants", None)
+        ref_variants_fn = (
+            getattr(self.port, "reference_provenance_variants", None)
+            if "reference_variants" in write_capabilities_of(self.port)
+            else None
+        )
         prov_errors: list[str] = []
         for item in inputs.get("fields") or ():
             f_spec = spec.resolve_field(str(item.get("field") or "").strip())
@@ -1740,7 +1745,11 @@ class CompiledAggregateUpdateHandler:
         joined_words = "\n".join(texts)
         ledger, receipt_vals = collect_provenance_context(existing_values)
 
-        ref_variants_fn = getattr(self.port, "reference_provenance_variants", None)
+        ref_variants_fn = (
+            getattr(self.port, "reference_provenance_variants", None)
+            if "reference_variants" in write_capabilities_of(self.port)
+            else None
+        )
         for item in inputs.get("changes") or ():
             f_spec = spec.resolve_field(str(item.get("field") or "").strip())
             if f_spec is None:
@@ -2065,7 +2074,12 @@ class CompiledRelationHandler:
             raise BusinessToolRequestError(
                 f"关系「{spec.relation_label}」一次仅支持关联 1 个目标对象，请只传入 1 项。"
             )
-        after_ids, after_labels, bindings = self.port.resolve_relation_items(spec, raw_items)
+        resolve_for_rec = getattr(self.port, "resolve_relation_items_for_record", None)
+        after_ids, after_labels, bindings = (
+            resolve_for_rec(spec, raw_items, target_record=record)
+            if callable(resolve_for_rec)
+            else self.port.resolve_relation_items(spec, raw_items)
+        )
         before_ids = list(self.port.read_relation_ids(spec, record_id))
         if {str(x) for x in before_ids} == {str(x) for x in after_ids}:
             raise BusinessMutationRefusedError(

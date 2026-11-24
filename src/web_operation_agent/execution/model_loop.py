@@ -55,6 +55,7 @@ from .model_loop_contracts import (
     normalize_input_options,
     normalize_table_payload,
 )
+import threading
 import time
 from pathlib import Path
 from ..modeling.provider import ProviderError
@@ -318,7 +319,22 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             return None
         chinese = getattr(s, "chinese", True)
         header = "以下修改已获批准执行，并经同账号应用回读确认：" if chinese else "The approved changes completed and were verified via same-actor readback:"
-        return header + "\n" + "\n".join(f"- {line}" for line in written)
+        summary = header + "\n" + "\n".join(f"- {line}" for line in written)
+        unverified_targets: list[str] = []
+        for item in outcomes:
+            for comp in item.get("unverified_companions") or ():
+                if isinstance(comp, dict) and str(comp.get("target") or "").strip():
+                    tgt = str(comp["target"]).strip()
+                    if tgt not in unverified_targets:
+                        unverified_targets.append(tgt)
+        if unverified_targets:
+            t_str = "、".join(unverified_targets)
+            summary += (
+                f"\n\n注意：以下关联伴生写入写后未核验（无同账号回读接口或未能确认）：{t_str}。"
+                if chinese
+                else f"\n\nNote: companion writes could not be verified via same-actor readback: {t_str}."
+            )
+        return summary
 
     def _delivery_correction(self, s, turn, args, feedback, *, terminal=False):
         """One correction per check/item position; then close with an honest result."""
@@ -469,6 +485,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
     @observed_turn
     def execute(self, message: dict) -> AgentTurnExecution:
         """Execute one already-dequeued wire turn via composed `TurnHarness`."""
+        self._flush_post_handoff_watch()
         harness = self._ensure_harness()
         harness.permits_offline_start = self.permits_offline_start
         harness.turn_events = self.turn_events
@@ -697,6 +714,12 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
         try:
             return self._loop(s, prompt, turn, verified=not self.verify)
         finally:
+            if not getattr(s, "mutation_outcomes", None) and turn.get("handoff"):
+                builder = getattr(self, "_build_post_handoff_watch_context", None)
+                if callable(builder):
+                    watch_ctx = builder(s, turn)
+                    if watch_ctx is not None:
+                        setattr(s, "_post_handoff_watch_ctx", watch_ctx)
             self._carried_skills = tuple(sorted(turn.skills))
             tables = turn.pop("turn_tables", None)
             if tables is not None and hasattr(tables, "close"):
@@ -704,7 +727,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
 
     def _settle(self, s, current, text):
         trace, self._trace = self._trace, None
-        return self._ensure_harness().settle(
+        execution = self._ensure_harness().settle(
             s,
             current,
             text,
@@ -713,6 +736,99 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             trace=trace,
             trace_steps=self._trace_steps,
         )
+        self._start_post_handoff_watch(s, current, text, execution)
+        return execution
+
+    def _start_post_handoff_watch(self, s, current, text, execution) -> None:
+        watch_ctx = getattr(s, "_post_handoff_watch_ctx", None)
+        if not watch_ctx or getattr(self, "disable_post_handoff_watch", False):
+            return
+        self._flush_post_handoff_watch()
+        from .native_submit import _poll_post_handoff_readback
+
+        watch = {
+            "ctx": watch_ctx,
+            "lock": threading.Lock(),
+            "stop_event": threading.Event(),
+            "done": False,
+            "channel": getattr(self, "channel", None),
+            "turn_id": getattr(s.message, "message_id", ""),
+            "answer": text,
+            "terminal_reason": getattr(execution, "terminal_reason", "") or "",
+            "answer_targets": [t.to_json() for t in (getattr(execution, "answer_targets", ()) or ())],
+            "handoff_payload": getattr(s, "handoff_payload", None),
+            "finish_table": getattr(s, "finish_table", None),
+        }
+        timeout_s = float(getattr(self, "post_handoff_watch_timeout_s", 25.0))
+
+        def _poll_once(*, publish: bool) -> bool:
+            with watch["lock"]:
+                if watch["done"]:
+                    return True
+                res = _poll_post_handoff_readback(watch["ctx"])
+                if res is None:
+                    return False
+                watch["done"] = True
+                self._last_handoff_readback = res
+                ch = watch["channel"]
+                if (
+                    publish
+                    and ch is not None
+                    and watch["turn_id"]
+                    and not watch["stop_event"].is_set()
+                    and getattr(ch, "idle", False)
+                ):
+                    payload = {
+                        "state": "finished",
+                        "terminal_reason": watch["terminal_reason"],
+                        "message": res["note"],
+                        "post_handoff_readback": res,
+                    }
+                    try:
+                        ch.publish("progress", payload, turn_id=watch["turn_id"])
+                    except Exception:
+                        watch["ctx"]["ledger"].append(
+                            "handoff_post_save_publish_failed",
+                            step=watch["ctx"]["step"],
+                            dispatched=False,
+                            side_effect_possible=False,
+                        )
+                return True
+
+        watch["poll_once"] = _poll_once
+
+        def _worker() -> None:
+            deadline = time.monotonic() + max(0.0, timeout_s)
+            while not watch["stop_event"].is_set() and time.monotonic() < deadline:
+                ch = watch["channel"]
+                if ch is not None and getattr(ch, "_closed", False):
+                    break
+                if ch is not None and not getattr(ch, "idle", False):
+                    watch["stop_event"].wait(0.05)
+                    continue
+                if _poll_once(publish=True):
+                    break
+                watch["stop_event"].wait(0.25)
+
+        t = threading.Thread(target=_worker, name="woa-post-handoff-watch", daemon=True)
+        watch["thread"] = t
+        self._post_handoff_watch = watch
+        if timeout_s > 0:
+            t.start()
+
+    def _flush_post_handoff_watch(self) -> dict | None:
+        watch = getattr(self, "_post_handoff_watch", None)
+        if not watch:
+            return None
+        self._post_handoff_watch = None
+        watch["stop_event"].set()
+        thread = watch.get("thread")
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=0.5)
+        poll_once = watch.get("poll_once")
+        if callable(poll_once):
+            poll_once(publish=False)
+        return getattr(self, "_last_handoff_readback", None)
 
     def _publish_step(self, facts: dict, turn_id: str) -> None:
         text = describe_step(facts)
@@ -2408,11 +2524,40 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                 # The explicit handoff belongs to the server's verified outcome,
                 # not to whether the model remembered to mention manual submission.
                 answer += f"\n\n**请核对后，手动点击「{handoff[1]}」提交。**"
+            if effective_status == "done":
+                answer = self._ensure_unverified_companion_disclosure(s, answer)
             return self._with_not_executed(s, turn, answer)
         if not s.terminal_reason:
             s.terminal_reason, s.detail = "agent_refused", "the turn's model steps were used up"
             harness.set_stop_reason(s, "model_steps_exhausted", trace=trace)
         return "步骤用完，没有完成。"
+
+    @staticmethod
+    def _ensure_unverified_companion_disclosure(s, answer: str) -> str:
+        outcomes = getattr(s, "mutation_outcomes", None) or ()
+        missing_targets: list[str] = []
+        for item in outcomes:
+            if not isinstance(item, dict):
+                continue
+            for comp in item.get("unverified_companions") or ():
+                if isinstance(comp, dict):
+                    tgt = str(comp.get("target") or "").strip()
+                    if tgt and tgt not in missing_targets:
+                        missing_targets.append(tgt)
+        if not missing_targets:
+            return answer
+        has_phrase = any(tok in answer for tok in ("未核验", "未能核验", "未回读", "无法确认伴生", "unverified"))
+        uncovered = [t for t in missing_targets if not has_phrase or t not in answer]
+        if not uncovered:
+            return answer
+        t_str = "、".join(uncovered if uncovered else missing_targets)
+        chinese = getattr(s, "chinese", True)
+        note = (
+            f"\n\n注：本次变更触发的伴生写入（{t_str}）写后未核验（无同账号回读接口或未能确认），无法确认该关联子表是否同步生效。"
+            if chinese
+            else f"\n\nNote: companion writes triggered by this mutation ({t_str}) could not be verified via same-actor readback."
+        )
+        return (answer or "").rstrip() + note
 
     def _unsaid(self, prompt: str, turn: dict) -> list[str]:
         return answer_check.unsaid_entries(self, prompt, turn)
@@ -2601,19 +2746,36 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
         if outcome.state == 'completed':
             proposal, content = (outcome.proposal, outcome.result.content)
             detail_list = [f'{d.label}：{d.text}'[:200] for d in proposal.details if d.kind in ('change', 'body')][:12]
+            effects = content.get('effects') if isinstance(content, dict) else ()
+            unverified_companions = [
+                eff for eff in (effects or ())
+                if isinstance(eff, dict) and eff.get('effect') == 'companion_write'
+                and eff.get('verified') is not True and not eff.get('not_triggered')
+            ]
+            if unverified_companions:
+                existing_uc = list(turn.get('unverified_companion_effects') or ())
+                existing_uc.extend(unverified_companions)
+                turn['unverified_companion_effects'] = existing_uc
             s.mutation_outcomes.append({
                 'position': len(s.mutation_outcomes),
                 'effect': proposal.effect,
                 'targets': list(proposal.targets),
                 'verified': True,
                 **({'details': detail_list} if detail_list else {}),
+                **({'unverified_companions': unverified_companions} if unverified_companions else {}),
                 'receipt': content,
             })
             details = '；'.join(detail_list)[:1500]
             done = f"{proposal.effect} — {'、'.join(proposal.targets)}" + (f'（{details}）' if details else '') + (f"；记录：{content['reference']}" if content.get('reference') else '')
             turn['written'].append(done)
             turn['last_verified_mutation_call'] = turn.get('tool_calls', 0)
-            return result('已执行并核对（用户已批准，应用回读确认）：' + done)
+            warn = ''
+            if unverified_companions:
+                u_targets = '、'.join(
+                    dict.fromkeys(str(c.get('target') or '').strip() for c in unverified_companions if str(c.get('target') or '').strip())
+                )
+                warn = f"\n注意：以下关联伴生写入写后未核验（{u_targets}），答复用户时须如实披露未核验，不得宣称已确认生效。"
+            return result('已执行并核对（用户已批准，应用回读确认）：' + done + warn)
         if outcome.state == 'repeated':
             return result('这项写入本轮已经执行并核对过，不会重复执行。')
         error = str(outcome.error)[:300] if outcome.error is not None else ''

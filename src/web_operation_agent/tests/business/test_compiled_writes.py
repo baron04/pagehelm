@@ -25,14 +25,20 @@ from web_operation_agent.business.convention_writes import (
     ConventionUpdateHandler,
     ConventionUpdateSpec,
     ValidationRuleSpec,
+    WRITE_PORT_OPTIONAL,
     evaluate_validation_rules,
     extract_projected_field_value,
     format_companion_details,
     normalize_create_arguments,
     resolve_spec_field,
     run_companion_readback,
+    write_capabilities_of,
 )
-from web_operation_agent.business.errors import BusinessMutationIndeterminate, BusinessToolRequestError
+from web_operation_agent.business.errors import (
+    BusinessMutationIndeterminate,
+    BusinessMutationRefusedError,
+    BusinessToolRequestError,
+)
 from web_operation_agent.business.tools.contracts import BusinessMutationProposal
 
 
@@ -438,6 +444,7 @@ class CompiledWritesTests(unittest.TestCase):
                 for se in side_effects
             ]
 
+        port.capabilities = lambda: WRITE_PORT_OPTIONAL
         port.verify_companion_readback = verify_companion
         port.read_created_record = lambda sp, rid, p: dict(port.created[rid])
         handler = CompiledCreateHandler(port)
@@ -568,6 +575,7 @@ class CompiledWritesTests(unittest.TestCase):
             if f_sp.name == "regionId" and raw in {"浙江", "浙江省"}
             else (raw, "", str(raw), None)
         )
+        port.capabilities = lambda: WRITE_PORT_OPTIONAL
         port.reference_provenance_variants = lambda f_sp, tok: (
             ("浙江", "浙江省") if f_sp.reference_entity == "regions" and tok in {"浙江", "浙江省"} else ()
         )
@@ -705,6 +713,170 @@ class CompiledWritesTests(unittest.TestCase):
         mode["drop_watcher_write"] = True
         with self.assertRaises(BusinessMutationIndeterminate):
             handler.dispatch(mut2.args)
+
+    def test_write_capability_gating_destructive_delete_derived_display_and_negated_boolean(self):
+        # 1. Optional capabilities default empty when port does not declare them
+        class _UndeclaredPort:
+            def extract_preserved_field(self, *_a):
+                raise AssertionError("must not call extract_preserved_field without capability")
+
+            def verify_companion_readback(self, *_a, **_kw):
+                raise AssertionError("must not call verify_companion_readback without capability")
+
+        undeclared = _UndeclaredPort()
+        self.assertEqual(write_capabilities_of(undeclared), frozenset())
+        rb = run_companion_readback(
+            undeclared,
+            object(),
+            1,
+            {},
+            before_record=None,
+            after_record={"id": 1},
+            side_effects=[{"target": "child_tbl"}],
+        )
+        self.assertFalse(rb[0]["verified"])
+
+        # 2. Item 17 destructive delete guard + derived_display_fields + negated boolean provenance
+        spec = ConventionUpdateSpec(
+            entity="plans",
+            label="检验计划",
+            fields=(
+                ConventionFieldSpec("remark", "string", label="备注"),
+                ConventionFieldSpec("frozen", "boolean", label="冻结"),
+                ConventionFieldSpec(
+                    "keeperUserId",
+                    "integer",
+                    label="保管人",
+                    reference_entity="users",
+                    derived_display_fields=("keeperName",),
+                ),
+                ConventionFieldSpec(
+                    "planId",
+                    "integer",
+                    label="关联方案",
+                    reference_entity="schemes",
+                ),
+            ),
+            side_effects=(
+                CompanionWriteSpec(
+                    target="plan_lines",
+                    action="清理伴生记录（deleteByPlanId）",
+                    source_method="PlanService.updatePlan -> PlanLineMapper.deleteByPlanId",
+                    condition="条件成立（涉及 planId）",
+                    readback_entity="plan-lines",
+                    readback_query_field="planId",
+                    destructive_delete=True,
+                    trigger_mode="on_field_change",
+                    trigger_fields=("planId",),
+                ),
+            ),
+            name_fields=("remark",),
+        )
+        store = {1: {"id": 1, "remark": "初始", "frozen": True, "keeperUserId": 10, "keeperName": "张三", "planId": 5}}
+        child_count = {"n": 3, "fail_count": False, "corrupt_keeper": False}
+
+        class _Port:
+            def capabilities(self):
+                return WRITE_PORT_OPTIONAL
+
+            def update_specs(self):
+                return {"plans": spec}
+
+            def status_specs(self):
+                return {}
+
+            def verify_actor(self, context):
+                return "actor-1"
+
+            def resolve_target(self, entity, target, *, spec):
+                return dict(store[1])
+
+            def read_record(self, entity, record_id):
+                return dict(store[1])
+
+            def encode_field(self, _spec, field, raw_value, cur):
+                if field.name == "frozen":
+                    bval = False if str(raw_value).strip() in {"false", "不冻结", "否"} else bool(raw_value)
+                    return bval, cur.get(field.name), str(raw_value), None
+                return raw_value, cur.get(field.name), f"User#{raw_value}", None
+
+            def recheck_bindings(self, bindings, *, actor_id):
+                pass
+
+            def count_companion_rows(self, _spec, record_id, payload, *, before_record, side_effect, changed=None):
+                if child_count["fail_count"]:
+                    return None
+                return child_count["n"]
+
+            def dispatch_update(self, _spec, record_id, payload):
+                store[1].update(payload)
+                if payload.get("keeperUserId") == 20:
+                    store[1]["keeperName"] = "李四"
+                if child_count["corrupt_keeper"]:
+                    store[1]["keeperName"] = "意外篡改"
+
+            def verify_companion_readback(self, _spec, record_id, payload, *, before_record, after_record, side_effects):
+                return [
+                    {"effect": "companion_write", "target": se["target"], "verified": True, "note": "已核验"}
+                    for se in side_effects
+                ]
+
+            def dispatch_status(self, _spec, record_id, status_code):
+                pass
+
+            def invalidate_reads(self, entities):
+                pass
+
+        handler = ConventionUpdateHandler(_Port())
+
+        # Negated boolean provenance ("不冻结") passes; non-triggering update succeeds without count read
+        mut_neg = handler.prepare({
+            "entity": "plans",
+            "target": "初始",
+            "changes": [{"field": "冻结", "value": "不冻结"}, {"field": "保管人", "value": 20}],
+        })
+        prop_neg = BusinessMutationProposal(
+            tool="update_record",
+            args=mut_neg.args,
+            effect=mut_neg.effect,
+            targets=mut_neg.targets,
+            nonce="a" * 32,
+            details=mut_neg.details,
+            effect_projection=mut_neg.effect_projection,
+        )
+        handler.validate_provenance(
+            mut_neg.args,
+            ("把计划改为不冻结，保管人换成 李四", "User#20"),
+            prop_neg,
+        )
+        self.assertIn("本次未触发", "\n".join(d.text for d in mut_neg.details if d.kind == "side_effect"))
+        res_ok = handler.dispatch(mut_neg.args)
+        self.assertTrue(res_ok.content["verified"])
+        self.assertEqual(store[1]["keeperName"], "李四")
+
+        # When keeperUserId is NOT changed, keeperName mutation MUST still fail closed
+        mut_unprot = handler.prepare({"entity": "plans", "target": "初始", "changes": [{"field": "备注", "value": "新备注"}]})
+        child_count["corrupt_keeper"] = True
+        with self.assertRaises(BusinessMutationIndeterminate):
+            handler.dispatch(mut_unprot.args)
+        child_count["corrupt_keeper"] = False
+        store[1]["keeperName"] = "李四"
+
+        # Triggering destructive-delete update discloses live count on card and blocks drift at dispatch
+        mut_del = handler.prepare({
+            "entity": "plans",
+            "target": "初始",
+            "changes": [{"field": "关联方案", "value": 9}],
+        })
+        self.assertIn("受影响 3 条记录", "\n".join(d.text for d in mut_del.details if d.kind == "side_effect"))
+        child_count["n"] = 4
+        with self.assertRaises(BusinessMutationRefusedError):
+            handler.dispatch(mut_del.args)
+
+        # Unreadable pre-dispatch count fails closed before proposal card creation
+        child_count["fail_count"] = True
+        with self.assertRaises(BusinessToolRequestError):
+            handler.prepare({"entity": "plans", "target": "初始", "changes": [{"field": "关联方案", "value": 10}]})
 
 
 if __name__ == "__main__":

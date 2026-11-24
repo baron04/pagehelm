@@ -111,7 +111,7 @@ _IMPORT_RE = re.compile(r"^\s*import\s+(?:static\s+)?([\w.*]+)\s*;", re.M)
 _CLASS_DECL_RE = re.compile(r"\bclass\s+([A-Z]\w*)\b(?:\s+extends\s+([A-Za-z_][\w.$]*))?[^{]*\{")
 _SCHEMA_DESC_RE = re.compile(r'@Schema\([^)]*description\s*=\s*"([^"]+)"')
 _SVC_OR_API_FIELD_RE = re.compile(
-    r"private\s+(?:final\s+)?(\w+(?:Service|Api|Producer|Client|Template|Mapper))(?:<[^;{}()]*>)?\s+(\w+)\s*[=;]"
+    r"private\s+(?:final\s+)?(?:[\w]+\.)*(\w+(?:Service|Api|Producer|Client|Template|Mapper))(?:<[^;{}()]*>)?\s+(\w+)\s*[=;]"
 )
 _SVC_OR_API_CALL_RE = re.compile(r"\b(\w+)\s*\.\s*(\w+)\s*\(")
 _TOKEN_REVOKE_METHOD_RE = re.compile(r"^(?:remove|revoke|delete|clear|invalidate)\w*(?:Token|Session)\w*|^logout\b")
@@ -173,6 +173,7 @@ class JavaFieldAST:
     maximum: float | None = None
     min_length: int | None = None
     max_length: int | None = None
+    non_empty: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -511,11 +512,19 @@ def _parse_assert_true_rules(
                 seen_sigs.add(sig)
                 rules.append(rule)
 
-        # 1. Date order: !end.isBefore(start) | end.isAfter(start) | isAfterOrEqual(end, start) | isBeforeOrEqual(start, end)
+        # 1. Date order: !start.isAfter(end) | !end.isBefore(start) | end.isAfter(start) | start.isBefore(end) | isAfterOrEqual(end, start) | isBeforeOrEqual(start, end)
+        m_d_not_after = re.search(r"!\s*([A-Za-z_]\w*(?:\s*\(\s*\))?)\s*\.isAfter\s*\(\s*([A-Za-z_]\w*(?:\s*\(\s*\))?)\s*\)", body)
         m_d1 = re.search(r"!\s*([A-Za-z_]\w*(?:\s*\(\s*\))?)\s*\.isBefore\s*\(\s*([A-Za-z_]\w*(?:\s*\(\s*\))?)\s*\)", body)
-        m_d2 = re.search(r"([A-Za-z_]\w*(?:\s*\(\s*\))?)\s*\.isAfter\s*\(\s*([A-Za-z_]\w*(?:\s*\(\s*\))?)\s*\)", body)
+        m_d2 = None if m_d_not_after else re.search(r"(?<![!\w])([A-Za-z_]\w*(?:\s*\(\s*\))?)\s*\.isAfter\s*\(\s*([A-Za-z_]\w*(?:\s*\(\s*\))?)\s*\)", body)
+        m_d_before = None if m_d1 else re.search(r"(?<![!\w])([A-Za-z_]\w*(?:\s*\(\s*\))?)\s*\.isBefore\s*\(\s*([A-Za-z_]\w*(?:\s*\(\s*\))?)\s*\)", body)
         m_d3 = re.search(r"\bisAfterOrEqual\s*\(\s*([^,]+),\s*([^)]+)\)", body)
         m_d4 = re.search(r"\bisBeforeOrEqual\s*\(\s*([^,]+),\s*([^)]+)\)", body)
+        if m_d_not_after:
+            start_f = _java_expr_to_field(m_d_not_after.group(1), known_fields)
+            end_f = _java_expr_to_field(m_d_not_after.group(2), known_fields)
+            if start_f and end_f and start_f != end_f:
+                _add_rule(ValidationRuleSpec("date_order", (start_f, end_f), msg))
+                continue
         if m_d1 or m_d2 or m_d3:
             m_use = m_d1 or m_d2 or m_d3
             end_f = _java_expr_to_field(m_use.group(1), known_fields)
@@ -523,9 +532,10 @@ def _parse_assert_true_rules(
             if start_f and end_f and start_f != end_f:
                 _add_rule(ValidationRuleSpec("date_order", (start_f, end_f), msg))
                 continue
-        if m_d4:
-            start_f = _java_expr_to_field(m_d4.group(1), known_fields)
-            end_f = _java_expr_to_field(m_d4.group(2), known_fields)
+        if m_d_before or m_d4:
+            m_use = m_d_before or m_d4
+            start_f = _java_expr_to_field(m_use.group(1), known_fields)
+            end_f = _java_expr_to_field(m_use.group(2), known_fields)
             if start_f and end_f and start_f != end_f:
                 _add_rule(ValidationRuleSpec("date_order", (start_f, end_f), msg))
                 continue
@@ -632,6 +642,7 @@ def _index_java_tree_locked(
                 list_elem = _resolve_java_type(
                     m_list.group(1), pkg, imports, wildcard_pkgs, chain, known_vos, unique_top
                 )
+            non_empty = bool(re.search(r"@NotEmpty\b", ctx)) or (f_min_len is not None and f_min_len >= 1)
             fields.append(JavaFieldAST(
                 name=fname,
                 java_type=raw_type,
@@ -644,6 +655,7 @@ def _index_java_tree_locked(
                 maximum=f_max,
                 min_length=f_min_len,
                 max_length=f_max_len,
+                non_empty=non_empty,
             ))
         if parent_raw and not parent_raw.endswith("BaseDO"):
             resolved_parent = _resolve_java_type(
@@ -994,7 +1006,7 @@ _AUTH_PERMISSION_MAPPER_RE = re.compile(
     r"^(?:RoleMenu|UserRole|(?:Sys|System|Admin)?Role|(?:Sys|System|Admin)?Menu|Tenant\w*|OAuth2\w*|Social\w*|\w*(?:File|Content)Permission\w*)Mapper$"
 )
 _CAMEL_TO_KEBAB_RE = re.compile(r"(?<!^)(?=[A-Z])")
-_POLYMORPHIC_REF_STEMS = frozenset({"biz", "object", "target", "source", "ref", "orderItem", "parent"})
+_POLYMORPHIC_REF_STEMS = frozenset({"biz", "object", "target", "source", "sourceDoc", "sourceLine", "ref", "orderItem", "parent"})
 
 
 def _collect_table_mappings(source, *, do_texts: list[tuple[str, str]] | None = None) -> tuple[dict[str, str], dict[str, str]]:
@@ -1027,27 +1039,205 @@ def _collect_table_mappings(source, *, do_texts: list[tuple[str, str]] | None = 
     return do_to_table, mapper_to_table
 
 
+def _balanced_paren(text: str, open_idx: int) -> int | None:
+    if open_idx < 0 or open_idx >= len(text) or text[open_idx] != "(":
+        return None
+    depth = 0
+    for idx in range(open_idx, len(text)):
+        ch = text[idx]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return idx
+    return None
+
+
+def _split_top_args(arg_text: str) -> list[str]:
+    args: list[str] = []
+    depth = 0
+    start = 0
+    for idx, ch in enumerate(arg_text):
+        if ch in "([<":
+            depth += 1
+        elif ch in ")]>":
+            depth = max(0, depth - 1)
+        elif ch == "," and depth == 0:
+            args.append(arg_text[start:idx].strip())
+            start = idx + 1
+    tail = arg_text[start:].strip()
+    if tail:
+        args.append(tail)
+    return args
+
+
+def _extract_local_var_defs(chunk: str, limit_pos: int) -> dict[str, str]:
+    """Collect bounded local variable initializer expressions declared before ``limit_pos``."""
+    defs: dict[str, str] = {}
+    prefix = chunk[:limit_pos]
+    for stmt in prefix.split(";"):
+        st = stmt.strip()
+        if not st or len(st) > 400 or "{" in st or st.startswith(("if", "for", "while", "return", "throw")):
+            continue
+        m_as = re.match(
+            r"(?:final\s+)?(?:[A-Za-z_]\w*(?:<[^=;{}()]*>)?\s+)?([a-z_]\w*)\s*=\s*([\s\S]+)$",
+            st,
+        )
+        if m_as:
+            var_name, rhs = m_as.group(1), m_as.group(2).strip()
+            if (
+                var_name not in {"if", "else", "return", "id"}
+                and len(rhs) <= 280
+                and not re.search(rf"\b{re.escape(var_name)}\b", rhs)
+            ):
+                defs[var_name] = rhs
+    return defs
+
+
+def _expand_expr_vars(expr: str, var_defs: dict[str, str], depth: int = 3) -> str:
+    cur = expr
+    seen: set[str] = set()
+    for _ in range(depth):
+        if len(cur) > 1200:
+            break
+        changed = False
+        newly_seen: set[str] = set()
+
+        def _rep(m: re.Match[str]) -> str:
+            nonlocal changed
+            name = m.group(0)
+            if name in seen:
+                return name
+            start, end = m.start(), m.end()
+            if start > 0 and cur[start - 1] == ".":
+                return name
+            if end < len(cur) and cur[end:].lstrip().startswith("("):
+                return name
+            if name in var_defs:
+                changed = True
+                newly_seen.add(name)
+                return f"({var_defs[name]})"
+            return name
+
+        nxt = re.sub(r"\b[a-z_]\w*\b", _rep, cur)
+        cur = nxt
+        seen.update(newly_seen)
+        if not changed:
+            break
+    return cur
+
+
+def _extract_getter_fields(expr: str) -> tuple[str, ...]:
+    fields: list[str] = []
+    for g in re.findall(r"\.get([A-Z]\w*)\s*\(\s*\)", expr):
+        fname = g[0].lower() + g[1:]
+        if fname != "id" and fname not in fields:
+            fields.append(fname)
+    return tuple(fields)
+
+
+def _extract_diff_remove_fields(expanded_expr: str) -> tuple[str, ...]:
+    if not re.search(r"\bdiff\w*\s*\.\s*get\s*\(\s*2\s*\)|\.get\s*\(\s*2\s*\)", expanded_expr):
+        return ()
+    for m_diff in re.finditer(r"\bdiffList\s*\(", expanded_expr):
+        close_idx = _balanced_paren(expanded_expr, m_diff.end() - 1)
+        if close_idx is None:
+            continue
+        args = _split_top_args(expanded_expr[m_diff.end():close_idx])
+        if len(args) >= 2:
+            flds = _extract_getter_fields(args[1])
+            if flds:
+                return flds
+    return ()
+
+
+def _analyze_guard_at(
+    chunk: str,
+    call_pos: int,
+    *,
+    var_defs: dict[str, str] | None = None,
+    param_bools: dict[str, bool] | None = None,
+) -> tuple[bool, str, tuple[str, ...], str]:
+    """Return ``(dead_branch, trigger_mode, trigger_fields, cond_text)`` at ``call_pos``."""
+    vdefs = var_defs if var_defs is not None else _extract_local_var_defs(chunk, call_pos)
+    enclosing_exprs: list[str] = []
+    for m_if in re.finditer(r"\bif\s*\(", chunk[:call_pos]):
+        open_p = m_if.end() - 1
+        close_p = _balanced_paren(chunk, open_p)
+        if close_p is None:
+            continue
+        after = chunk[close_p + 1:].lstrip()
+        if not after.startswith("{"):
+            continue
+        brace_open = close_p + 1 + (len(chunk[close_p + 1:]) - len(after))
+        brace_close = _balanced_brace(chunk, brace_open)
+        if brace_close is not None and brace_open <= call_pos <= brace_close:
+            enclosing_exprs.append(" ".join(chunk[open_p + 1:close_p].split()))
+
+    active_exprs: list[str] = []
+    for expr in enclosing_exprs:
+        stripped = expr.strip()
+        if param_bools:
+            m_pos = re.fullmatch(r"([A-Za-z_]\w*)", stripped)
+            m_neg = re.fullmatch(r"!\s*([A-Za-z_]\w*)", stripped)
+            if m_pos and m_pos.group(1) in param_bools:
+                if not param_bools[m_pos.group(1)]:
+                    return True, "always", (), ""
+                continue
+            if m_neg and m_neg.group(1) in param_bools:
+                if param_bools[m_neg.group(1)]:
+                    return True, "always", (), ""
+                continue
+        active_exprs.append(expr)
+
+    # Walk from innermost to outermost enclosing condition to determine trigger mode/fields
+    for expr in reversed(active_exprs):
+        expanded = _expand_expr_vars(expr, vdefs)
+        diff_fields = _extract_diff_remove_fields(expanded)
+        if not diff_fields:
+            diff_fields = _extract_diff_remove_fields(
+                _expand_expr_vars(expr.replace(".get(2)", "").strip(), vdefs)
+            )
+        if diff_fields:
+            return (
+                False,
+                "on_remove",
+                diff_fields,
+                f"条件成立（涉及 {'/'.join(diff_fields[:3])}）",
+            )
+        if re.search(r"\bObj(?:ect)?Util\.notEqual\b|!\s*Obj(?:ect)?s?\.equals\b|\.compareTo\s*\(", expanded):
+            flds = _extract_getter_fields(expanded)
+            if flds:
+                return (
+                    False,
+                    "on_field_change",
+                    flds,
+                    f"条件成立（涉及 {'/'.join(flds[:3])}）",
+                )
+        flds = _extract_getter_fields(expanded)
+        if flds:
+            return (
+                False,
+                "on_field_present",
+                flds,
+                f"条件成立（涉及 {'/'.join(flds[:3])}）",
+            )
+
+    if active_exprs or re.search(r"\breturn\s*;", chunk[:call_pos]):
+        return False, "always", (), "按条件触发"
+    return False, "always", (), ""
+
+
 def _extract_conditional_trigger_fields(chunk: str, call_pos: int) -> set[str]:
     """Identify VO/DO getter fields referenced in the enclosing ``if (...)`` guard around ``call_pos``."""
-    prefix = chunk[max(0, call_pos - 320):call_pos]
-    ifs = list(re.finditer(r"\bif\s*\(([^;{}]{1,220})\)\s*\{", prefix))
-    if not ifs:
-        return set()
-    guard_expr = ifs[-1].group(1)
-    getters = [g[0].lower() + g[1:] for g in re.findall(r"\.get([A-Z]\w*)\s*\(\s*\)", guard_expr)]
-    return {f for f in getters if f != "id"}
+    _dead, _mode, fields, _text = _analyze_guard_at(chunk, call_pos)
+    return set(fields)
 
 
 def _extract_conditional_guard_text(chunk: str, call_pos: int) -> str:
-    prefix = chunk[max(0, call_pos - 320):call_pos]
-    ifs = list(re.finditer(r"\bif\s*\(([^;{}]{1,180})\)\s*\{", prefix))
-    if not ifs:
-        return ""
-    guard = " ".join(ifs[-1].group(1).split())
-    getters = [g[0].lower() + g[1:] for g in re.findall(r"\.get([A-Z]\w*)\s*\(\s*\)", guard)]
-    if getters:
-        return f"条件成立（涉及 {'/'.join(dict.fromkeys(getters[:3]))}）"
-    return "按条件触发"
+    _dead, _mode, _fields, text = _analyze_guard_at(chunk, call_pos)
+    return text
 
 
 def _load_parsed_service(
@@ -1200,6 +1390,12 @@ def _analyze_service_method(
         caller_iface: str,
         caller_method: str,
         cond_text: str = "",
+        *,
+        destructive_delete: bool = False,
+        trigger_mode: str = "always",
+        trigger_fields: tuple[str, ...] = (),
+        payload_fk_field: str = "",
+        expect_field: str = "",
     ) -> None:
         if mode == "status":
             return
@@ -1210,11 +1406,19 @@ def _analyze_service_method(
         if sig in seen_companions:
             return
         seen_companions.add(sig)
-        rb_entity, rb_qfield = (
-            companion_readback_fn(mapper_type, tbl, ep.path)
-            if callable(companion_readback_fn)
-            else ("", "")
-        )
+        rb_entity, rb_qfield, rb_expect = ("", "", "")
+        if callable(companion_readback_fn):
+            hint = companion_readback_fn(
+                mapper_type,
+                tbl,
+                ep.path,
+                payload_fk_field=payload_fk_field,
+                expect_field=expect_field,
+            )
+            if isinstance(hint, tuple) and len(hint) >= 3:
+                rb_entity, rb_qfield, rb_expect = hint[0], hint[1], hint[2]
+            elif isinstance(hint, tuple) and len(hint) >= 2:
+                rb_entity, rb_qfield = hint[0], hint[1]
         companion_specs.append(
             CompanionWriteSpec(
                 target=tbl,
@@ -1223,8 +1427,45 @@ def _analyze_service_method(
                 condition=cond_text,
                 readback_entity=rb_entity,
                 readback_query_field=rb_qfield,
+                destructive_delete=bool(destructive_delete),
+                trigger_mode=trigger_mode if trigger_mode in {"always", "on_field_change", "on_field_present", "on_remove"} else "always",
+                trigger_fields=tuple(trigger_fields),
+                readback_expect_field=rb_expect,
             )
         )
+
+    def _call_literal_bool_args(call_chunk: str, call_pos: int, c_masked: str, c_spans: list[tuple[int, int, int]]) -> dict[str, bool]:
+        """Bind formal boolean parameter names to literal ``true``/``false`` call arguments when present."""
+        open_p = call_chunk.find("(", call_pos)
+        close_p = _balanced_paren(call_chunk, open_p) if open_p >= 0 else None
+        if close_p is None or not c_spans:
+            return {}
+        call_args = _split_top_args(call_chunk[open_p + 1:close_p])
+        for s_i, bs_i, _be_i in c_spans:
+            params = _signature_params(c_masked, s_i, bs_i)
+            if len(params) != len(call_args):
+                continue
+            out: dict[str, bool] = {}
+            for pname, aval in zip(params, call_args):
+                if aval == "true":
+                    out[pname] = True
+                elif aval == "false":
+                    out[pname] = False
+            if out:
+                return out
+        return {}
+
+    def _merge_guard(
+        outer: tuple[str, tuple[str, ...], str],
+        inner: tuple[str, tuple[str, ...], str],
+    ) -> tuple[str, tuple[str, ...], str]:
+        o_mode, o_fields, o_cond = outer
+        i_mode, i_fields, i_cond = inner
+        if o_fields and o_mode != "always":
+            return o_mode, o_fields, o_cond
+        if i_fields and i_mode != "always":
+            return i_mode, i_fields, i_cond
+        return o_mode, (o_fields or i_fields), (o_cond or i_cond)
 
     def _trace_callee_2hop(
         callee_iface: str,
@@ -1233,6 +1474,9 @@ def _analyze_service_method(
         depth: int,
         visiting: frozenset[tuple[str, str]],
         enclosing_cond: str,
+        enclosing_trigger_mode: str = "always",
+        enclosing_trigger_fields: tuple[str, ...] = (),
+        param_bools: dict[str, bool] | None = None,
     ) -> bool:
         if depth > 2 or _DANGEROUS_SERVICE_TYPES.search(callee_iface):
             return False
@@ -1253,6 +1497,8 @@ def _analyze_service_method(
                             action=f"伴生调用（{callee_method}）",
                             source_method=f"{callee_iface}.{callee_method}",
                             condition=enclosing_cond,
+                            trigger_mode=enclosing_trigger_mode,
+                            trigger_fields=enclosing_trigger_fields,
                         )
                     )
                 return True
@@ -1269,20 +1515,58 @@ def _analyze_service_method(
             for _kind, pat in getattr(source, "_UNTRACEABLE", ()):
                 if pat.search(c_chunk):
                     return False
+            c_vdefs = _extract_local_var_defs(c_chunk, len(c_chunk))
             for m_call in re.finditer(r"\b(\w+)\s*\.\s*(\w+)\s*\(", c_chunk):
                 d_var, d_meth = m_call.group(1), m_call.group(2)
                 if d_var not in c_fields:
                     continue
                 d_type = c_fields[d_var]
+                dead, in_mode, in_fields, in_cond = _analyze_guard_at(
+                    c_chunk, m_call.start(), var_defs=c_vdefs, param_bools=param_bools if depth == 1 else None
+                )
+                if dead:
+                    continue
+                eff_mode, eff_fields, eff_cond = _merge_guard(
+                    (enclosing_trigger_mode, enclosing_trigger_fields, enclosing_cond),
+                    (in_mode, in_fields, in_cond),
+                )
                 if d_type.endswith("Mapper"):
                     is_r = bool(_READ_ONLY_SERVICE_METHOD.fullmatch(d_meth)) or d_meth.startswith(("select", "count", "exists"))
                     if not is_r:
                         if _AUTH_PERMISSION_MAPPER_RE.search(d_type):
                             return False
-                        cond = enclosing_cond or _extract_conditional_guard_text(c_chunk, m_call.start())
-                        if not cond and re.search(r"\breturn\s*;", c_chunk[:m_call.start()]):
-                            cond = "按条件触发"
-                        _record_companion(d_type, d_meth, callee_iface, callee_method, cond)
+                        expect_f = ""
+                        payload_fk = ""
+                        if d_meth == "updateById":
+                            stmt_end = c_chunk.find(";", m_call.start())
+                            stmt_txt = c_chunk[m_call.start():stmt_end] if stmt_end > m_call.start() else ""
+                            setters = [
+                                sname[0].lower() + sname[1:]
+                                for sname in re.findall(r"\.set([A-Z]\w*)\s*\(", stmt_txt)
+                                if sname != "Id"
+                            ]
+                            if len(setters) == 1:
+                                expect_f = setters[0]
+                            if eff_mode == "on_field_present" and len(eff_fields) == 1:
+                                payload_fk = eff_fields[0]
+                        is_destr_del = bool(
+                            is_put_update
+                            and not allow_child_mappers
+                            and d_meth.startswith("delete")
+                            and d_type not in child_mapper_names
+                        )
+                        _record_companion(
+                            d_type,
+                            d_meth,
+                            callee_iface,
+                            callee_method,
+                            eff_cond,
+                            destructive_delete=is_destr_del,
+                            trigger_mode=eff_mode,
+                            trigger_fields=eff_fields,
+                            payload_fk_field=payload_fk,
+                            expect_field=expect_f,
+                        )
                     continue
                 if _DANGEROUS_SERVICE_TYPES.search(d_type):
                     return False
@@ -1292,8 +1576,15 @@ def _analyze_service_method(
                     continue
                 if depth >= 2:
                     return False
-                sub_cond = enclosing_cond or _extract_conditional_guard_text(c_chunk, m_call.start())
-                if not _trace_callee_2hop(d_type, d_meth, depth=depth + 1, visiting=next_vis, enclosing_cond=sub_cond):
+                if not _trace_callee_2hop(
+                    d_type,
+                    d_meth,
+                    depth=depth + 1,
+                    visiting=next_vis,
+                    enclosing_cond=eff_cond,
+                    enclosing_trigger_mode=eff_mode,
+                    enclosing_trigger_fields=eff_fields,
+                ):
                     return False
         return True
 
@@ -1307,6 +1598,7 @@ def _analyze_service_method(
         }:
             continue
         chunk = masked[bs:be]
+        chunk_vdefs = _extract_local_var_defs(chunk, len(chunk))
         for _kind, pat in getattr(source, "_UNTRACEABLE", ()):
             if pat.search(chunk):
                 return False, set(), set(), set(), ()
@@ -1322,6 +1614,7 @@ def _analyze_service_method(
                     continue
             if _AUTH_PERMISSION_MAPPER_RE.search(m_name):
                 return False, set(), set(), set(), ()
+            _dead_mc, g_mode, g_fields, g_cond = _analyze_guard_at(chunk, mc.start(), var_defs=chunk_vdefs)
             if m_verb.startswith("update"):
                 if m_verb in {"updateById", "updateForEdit", "updateForSave"} and (not primary_mapper or m_name == primary_mapper):
                     continue
@@ -1335,19 +1628,33 @@ def _analyze_service_method(
                         continue
                 if allow_child_mappers or allow_1n_child_sync or (is_write_mode and not is_put_update):
                     if m_name != primary_mapper and m_name not in child_mapper_names:
-                        _record_companion(m_name, m_verb, ep.service_iface, mname, _extract_conditional_guard_text(chunk, mc.start()))
+                        _record_companion(
+                            m_name, m_verb, ep.service_iface, mname, g_cond,
+                            trigger_mode=g_mode, trigger_fields=g_fields,
+                        )
                     elif is_put_update and m_name != primary_mapper and allow_1n_child_sync:
-                        _record_companion(m_name, m_verb, ep.service_iface, mname, _extract_conditional_guard_text(chunk, mc.start()))
+                        _record_companion(
+                            m_name, m_verb, ep.service_iface, mname, g_cond,
+                            trigger_mode=g_mode, trigger_fields=g_fields,
+                        )
                     continue
                 return False, set(), set(), set(), ()
             elif is_put_update and m_name != primary_mapper:
                 if allow_child_mappers or (allow_1n_child_sync and not is_child_delete_unsafe(m_name, m_verb)):
                     if m_name not in child_mapper_names:
-                        _record_companion(m_name, m_verb, ep.service_iface, mname, _extract_conditional_guard_text(chunk, mc.start()))
+                        is_destr_del = bool(not allow_child_mappers and m_verb.startswith("delete"))
+                        _record_companion(
+                            m_name, m_verb, ep.service_iface, mname, g_cond,
+                            destructive_delete=is_destr_del,
+                            trigger_mode=g_mode, trigger_fields=g_fields,
+                        )
                     continue
                 return False, set(), set(), set(), ()
             elif not is_put_update and m_name != primary_mapper and m_name not in child_mapper_names:
-                _record_companion(m_name, m_verb, ep.service_iface, mname, _extract_conditional_guard_text(chunk, mc.start()))
+                _record_companion(
+                    m_name, m_verb, ep.service_iface, mname, g_cond,
+                    trigger_mode=g_mode, trigger_fields=g_fields,
+                )
 
         # Check sibling Service / Api / Producer / Client / Template field calls
         for call_m in _SVC_OR_API_CALL_RE.finditer(chunk):
@@ -1383,13 +1690,22 @@ def _analyze_service_method(
                 continue
             if not is_write_mode and sc_method not in _SAFE_EXTRA_SERVICE_METHODS:
                 return False, set(), set(), set(), ()
-            guard_txt = _extract_conditional_guard_text(chunk, call_m.start())
+            _dead_sc, sc_mode, sc_fields, guard_txt = _analyze_guard_at(chunk, call_m.start(), var_defs=chunk_vdefs)
+            callee_pre = _load_parsed_service(sc_type, source, svc_by_iface, parsed_svc_cache)
+            p_bools = (
+                _call_literal_bool_args(chunk, call_m.start(), callee_pre[0], callee_pre[2].get(sc_method, []))
+                if callee_pre is not None
+                else {}
+            )
             if not _trace_callee_2hop(
                 sc_type,
                 sc_method,
                 depth=1,
                 visiting=frozenset({(ep.service_iface, ep.service_method)}),
                 enclosing_cond=guard_txt,
+                enclosing_trigger_mode=sc_mode,
+                enclosing_trigger_fields=sc_fields,
+                param_bools=p_bools,
             ):
                 return False, set(), set(), set(), ()
 
@@ -1469,6 +1785,41 @@ def _analyze_service_method(
     if analysis_ctx is not None:
         analysis_ctx["volatiles"] = frozenset(now_volatiles)
         analysis_ctx["transformed"] = frozenset(transformed_fields)
+
+    if mode == "create_or_update" and ep.verb.casefold() == "post" and bodies:
+        all_body_text_create = "\n".join(masked[bs:be] for _m, _s, bs, be in bodies)
+        if re.search(r"\bvalidate\w*NotExists\s*\(\s*\)", all_body_text_create):
+            return False, set(), set(), set(), ()
+        _m0, s0, bs0, _be0 = bodies[0]
+        has_tx = bool(re.search(r"@Transactional\b", masked[max(0, s0 - 250):bs0]))
+        if (
+            not has_tx
+            and companion_specs
+            and re.search(r"\bvalidate\w*Confirmed\s*\(", all_body_text_create)
+            and re.search(
+                r"Obj(?:ect)?Util\.notEqual\s*\([^;\n]*\.get[A-Z]\w*Id\s*\(\s*\)\s*,\s*[^;\n]*\.get[A-Z]\w*Id\s*\(\s*\)",
+                all_body_text_create,
+            )
+        ):
+            return False, set(), set(), set(), ()
+
+    if is_put_update and not allow_child_mappers:
+        for se in companion_specs:
+            if not se.destructive_delete:
+                continue
+            has_live_readback = bool(
+                se.readback_entity
+                and se.readback_query_field
+                and not se.readback_query_field.startswith("payload:")
+            )
+            has_on_remove_readback = bool(
+                se.trigger_mode == "on_remove"
+                and se.trigger_fields
+                and all(tf in vo_field_names for tf in se.trigger_fields)
+            )
+            if not (has_live_readback or has_on_remove_readback):
+                return False, set(), set(), set(), ()
+
     out_effects: tuple[object, ...] = (
         tuple(status_side_effects) if mode == "status" else tuple(companion_specs)
     )
@@ -1653,6 +2004,33 @@ def _compile_f2_ref_indexes(
     return listable_entities, entity_query_params, unique_svc_entity, ui_field_refs
 
 
+def _split_top_level_call_args(text: str, open_paren_pos: int) -> list[str] | None:
+    """Extract top-level call arguments starting at '(' using balanced parens."""
+    depth = 0
+    in_arg_start = open_paren_pos + 1
+    args: list[str] = []
+    i = open_paren_pos
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                tail = text[in_arg_start:i].strip()
+                if tail:
+                    args.append(tail)
+                return args
+        elif ch == "," and depth == 1:
+            args.append(text[in_arg_start:i].strip())
+            in_arg_start = i + 1
+        elif ch in "{};" and depth == 1:
+            return None
+        i += 1
+    return None
+
+
 def _infer_f2_reference(
     entity: str,
     prop: str,
@@ -1676,7 +2054,7 @@ def _infer_f2_reference(
     if not stem or stem in _POLYMORPHIC_REF_STEMS:
         return ""
 
-    # Source A: Backend service AST validation / existence check calls
+    # Source A: Backend service AST validation / single-arg PK lookup calls (+ 1-hop helper forwarding)
     backend_hits: set[str] = set()
     if ep_ast and ep_ast.service_iface:
         loaded = _load_parsed_service(ep_ast.service_iface, source, svc_by_iface, parsed_svc_cache)
@@ -1685,27 +2063,123 @@ def _infer_f2_reference(
             bodies = _collect_reachable_bodies(masked, sigs, ep_ast.service_method)
             all_txt = "\n".join(masked[bs:be] for _mn, _s, bs, be in bodies)
             cap = prop[0].upper() + prop[1:]
-            pat = re.compile(
-                rf"\b(\w+)\s*\.\s*(?:validate\w*|get\w*|selectById)\s*\([^;{{}})]*\.get{re.escape(cap)}\s*\(\s*\)"
-            )
-            for m in pat.finditer(all_txt):
-                dep_type = svc_fields.get(m.group(1), "")
-                te = unique_svc_entity.get(dep_type, "")
-                if te and te != entity:
-                    backend_hits.add(te)
+            getter_re = re.compile(rf"(?:\b\w+\s*\.\s*)?get{re.escape(cap)}\s*\(\s*\)\s*$")
+            dep_call_re = re.compile(r"\b(\w+)\s*\.\s*(validate\w*|get(?!\w*By(?!Id\b))\w*|selectById)\s*\(")
 
-    # Source B: Vue selector + module-scoped unique OpenAPI entity match
+            all_vdefs = _extract_local_var_defs(all_txt, len(all_txt))
+            alias_vars = {
+                vname
+                for vname, vrhs in all_vdefs.items()
+                if re.search(rf"\.get{re.escape(cap)}\s*\(\s*\)", _expand_expr_vars(vrhs, all_vdefs, depth=2))
+            }
+
+            def _scan_dep_calls(scan_txt: str, var_names: set[str]) -> None:
+                for m in dep_call_re.finditer(scan_txt):
+                    dep_type = svc_fields.get(m.group(1), "")
+                    te = unique_svc_entity.get(dep_type, "")
+                    if not te or te == entity:
+                        continue
+                    c_args = _split_top_level_call_args(scan_txt, m.end() - 1)
+                    if not c_args:
+                        continue
+                    m_name = m.group(2)
+                    if m_name.startswith("validate") and not m_name.endswith("Unique"):
+                        if not (1 <= len(c_args) <= 2):
+                            continue
+                    elif len(c_args) != 1:
+                        continue
+                    arg0 = c_args[0].strip()
+                    if getter_re.search(arg0) or arg0 in var_names:
+                        backend_hits.add(te)
+
+            _scan_dep_calls(all_txt, alias_vars)
+
+            # 1-hop private helper parameter forwarding: helper(reqVO.getProp()) -> dep.validate...(param_i)
+            for h_name, sig_pos, bs, be in bodies[1:]:
+                sig_hdr = masked[sig_pos:bs]
+                m_params = re.search(r"\(([^)]*)\)", sig_hdr)
+                if not m_params or not m_params.group(1).strip():
+                    continue
+                p_names = [
+                    tok.strip().split()[-1].strip("[] ")
+                    for tok in m_params.group(1).split(",")
+                    if tok.strip()
+                ]
+                if not p_names:
+                    continue
+                forwarded_params: set[str] = set()
+                for cm in re.finditer(rf"\b{re.escape(h_name)}\s*\(", all_txt):
+                    c_args = _split_top_level_call_args(all_txt, cm.end() - 1)
+                    if not c_args:
+                        continue
+                    for p_idx, a_expr in enumerate(c_args):
+                        a_s = a_expr.strip()
+                        if p_idx < len(p_names) and p_names[p_idx] and (getter_re.search(a_s) or a_s in alias_vars):
+                            forwarded_params.add(p_names[p_idx])
+                if forwarded_params:
+                    _scan_dep_calls(masked[bs:be], forwarded_params)
+
+    # Source B: Vue selector + tiered structural OpenAPI entity match
     ui_hit = ui_field_refs.get((entity, prop), "")
     ui_hits: set[str] = {ui_hit} if (ui_hit and ui_hit != entity) else set()
 
     mod = entity.split("/", 1)[0]
     sub_prefix = entity.rsplit("/", 1)[0] if entity.count("/") >= 2 else mod
     kebab = _CAMEL_TO_KEBAB_RE.sub("-", stem).lower()
+    mod_prefix = mod + "/"
     schema_hits: set[str] = set()
-    for pref in (sub_prefix, mod):
-        cand = f"{pref}/{kebab}"
+
+    # Tier 1: exact sub_prefix/mod/entity sibling match
+    for cand in (f"{sub_prefix}/{kebab}", f"{mod}/{kebab}", f"{entity}-{kebab}"):
         if cand in listable_entities and cand != entity:
             schema_hits.add(cand)
+
+    # Tier 2: child-to-parent prefix & detail/activity sibling match
+    if not schema_hits:
+        for cand in listable_entities:
+            if cand != entity and entity.startswith(cand + "-") and (cand.endswith("/" + kebab) or cand.endswith("-" + kebab)):
+                schema_hits.add(cand)
+        if not schema_hits and entity.endswith("-detail") and prop == "lineId":
+            sib = entity[:-len("-detail")] + "-line"
+            if sib in listable_entities:
+                schema_hits.add(sib)
+        if not schema_hits and entity.endswith("-activity") and kebab == "config":
+            sib = entity[:-len("-activity")] + "-config"
+            if sib in listable_entities:
+                schema_hits.add(sib)
+
+    def _tier_suffix(prefix: str, kb: str) -> set[str]:
+        return {
+            cand
+            for cand in listable_entities
+            if cand != entity
+            and cand.startswith(prefix)
+            and cand.count("/") <= 2
+            and (cand.endswith("/" + kb) or cand.endswith("-" + kb))
+        }
+
+    def _tier3_mod_suffix(kb: str) -> set[str]:
+        if sub_prefix != mod:
+            sub_hits = _tier_suffix(sub_prefix + "/", kb)
+            if sub_hits:
+                return sub_hits
+        return _tier_suffix(mod_prefix, kb)
+
+    # Tier 2.5 / 3: submodule-scoped then module-scoped unique suffix match
+    if not schema_hits:
+        schema_hits = _tier3_mod_suffix(kebab)
+
+    # Tier 4: directional-prefix normalized match
+    if not schema_hits:
+        for dir_pfx in ("from-", "to-", "source-", "target-", "bom-"):
+            if kebab.startswith(dir_pfx) and len(kebab) > len(dir_pfx):
+                k_norm = kebab[len(dir_pfx):]
+                cand_t4 = _tier3_mod_suffix(k_norm)
+                if cand_t4:
+                    schema_hits = cand_t4
+                    break
+
+    # Tier 5: cross-module conventional fallbacks
     if not schema_hits and re.search(r"(?:^|[a-z])(?:[Uu]ser)(?:Id|Ids)$", prop):
         for cand in listable_entities:
             if cand.endswith("/user") and cand.startswith("system/"):
@@ -1753,7 +2227,7 @@ def _infer_extended_reference(entity: str, prop: str, kind: str, desc: str, avai
             return "system/user"
         if prop in {"leaderEmployeeId", "employeeId", "interviewEmployeeId"}:
             return "hrm/employee"
-        if prop == "areaId" and ("地区" in desc or "省" in desc or "区域" in desc):
+        if (prop == "areaId" or prop.endswith("AreaId")) and ("地区" in desc or "省" in desc or "区域" in desc):
             return "system/area"
         if prop == "customerId":
             if entity.startswith("erp/") and "/admin-api/erp/customer/simple-list" in available_paths:
@@ -1973,6 +2447,7 @@ def _build_field_spec(
     status_in_status_specs: bool,
     known_java_enums: frozenset[str] = frozenset(),
     readback_projection: tuple[str, str] = (),
+    derived_display_fields: tuple[str, ...] = (),
     f2_ctx: dict | None = None,
 ) -> ConventionFieldSpec | None:
     prop = _deref(raw_prop, schemas)
@@ -2050,6 +2525,7 @@ def _build_field_spec(
             date_kind=date_kind,
             is_hierarchy_parent=(fname == "parentId"),
             readback_projection=readback_projection,
+            derived_display_fields=derived_display_fields,
         )
     except ValueError:
         return None
@@ -2071,6 +2547,7 @@ def _compile_child_collection(
     ent_scales: dict[str, tuple[int, str]],
     depth: int = 1,
     known_java_enums: frozenset[str] = frozenset(),
+    f2_ctx: dict | None = None,
 ) -> CompiledChildCollectionSpec | None:
     if depth > 2:
         return None
@@ -2125,6 +2602,7 @@ def _compile_child_collection(
                     ent_scales=ent_scales,
                     depth=depth + 1,
                     known_java_enums=known_java_enums,
+                    f2_ctx=f2_ctx,
                 )
                 if sub_col is None:
                     return None
@@ -2147,6 +2625,7 @@ def _compile_child_collection(
             has_java_vo=bool(java_vo),
             status_in_status_specs=False,
             known_java_enums=known_java_enums,
+            f2_ctx=f2_ctx,
         )
         if f_spec is None:
             if jf and jf.required:
@@ -2419,30 +2898,65 @@ def _compile_yudao_write_catalog_locked(
         paths, ctrl_endpoints, source, svc_by_iface, parsed_svc_cache, ui=ui,
     )
 
-    def _companion_readback_hint(mapper_type: str, _table: str, main_ep_path: str) -> tuple[str, str]:
+    def _companion_readback_hint(
+        mapper_type: str,
+        _table: str,
+        main_ep_path: str,
+        *,
+        payload_fk_field: str = "",
+        expect_field: str = "",
+    ) -> tuple[str, str, str]:
         comp_ent = unique_svc_entity.get(mapper_type, "")
         main_ent = main_ep_path.rsplit("/", 1)[0] if "/" in main_ep_path else main_ep_path
         if not comp_ent or comp_ent == main_ent:
-            return "", ""
+            return "", "", ""
         last_seg = main_ent.rsplit("/", 1)[-1]
         parts = [seg for seg in last_seg.split("-") if seg]
         if parts:
             camel_last = parts[0] + "".join(p.capitalize() for p in parts[1:])
-            cand_q = f"{camel_last}Id"
-            list_op = (paths.get(f"/admin-api/{comp_ent}/list") or {}).get("get")
-            page_op = (paths.get(f"/admin-api/{comp_ent}/page") or {}).get("get")
-            for op_dict in (list_op, page_op):
-                if not isinstance(op_dict, dict):
-                    continue
-                params_list = [q for q in (op_dict.get("parameters") or ()) if isinstance(q, dict) and q.get("in") == "query"]
+            cq_cands = [f"{camel_last}Id"]
+            if len(parts) > 1 and f"{parts[-1]}Id" not in cq_cands:
+                cq_cands.append(f"{parts[-1]}Id")
+            for cand_q in cq_cands:
+                q_kebab = _CAMEL_TO_KEBAB_RE.sub("-", cand_q).lower()
+                for tail in ("list", "simple-list", "list-all-simple", f"list-by-{q_kebab}", "page"):
+                    op_dict = (paths.get(f"/admin-api/{comp_ent}/{tail}") or {}).get("get")
+                    if not isinstance(op_dict, dict):
+                        continue
+                    params_list = [q for q in (op_dict.get("parameters") or ()) if isinstance(q, dict) and q.get("in") == "query"]
+                    q_names = {q.get("name") for q in params_list if q.get("name")}
+                    req_others = [
+                        q.get("name") for q in params_list
+                        if q.get("required") is True and q.get("name") not in {"pageNo", "pageSize", cand_q}
+                    ]
+                    if not req_others and cand_q in q_names:
+                        return comp_ent, cand_q, ""
+        if payload_fk_field and expect_field:
+            comp_get = (paths.get(f"/admin-api/{comp_ent}/get") or {}).get("get")
+            if isinstance(comp_get, dict):
+                params_list = [q for q in (comp_get.get("parameters") or ()) if isinstance(q, dict) and q.get("in") == "query"]
                 q_names = {q.get("name") for q in params_list if q.get("name")}
-                req_others = [
-                    q.get("name") for q in params_list
-                    if q.get("required") is True and q.get("name") not in {"pageNo", "pageSize", cand_q}
-                ]
-                if not req_others and cand_q in q_names:
-                    return comp_ent, cand_q
-        return "", ""
+                req_others = [q.get("name") for q in params_list if q.get("required") is True and q.get("name") != "id"]
+                if not req_others and "id" in q_names:
+                    return comp_ent, f"payload:{payload_fk_field}", expect_field
+        prop_op = (paths.get(f"/admin-api/{main_ent}/get-property") or {}).get("get")
+        if isinstance(prop_op, dict):
+            params_list = [q for q in (prop_op.get("parameters") or ()) if isinstance(q, dict) and q.get("in") == "query"]
+            q_names = {q.get("name") for q in params_list if q.get("name")}
+            req_others = [q.get("name") for q in params_list if q.get("required") is True and q.get("name") != "id"]
+            if not req_others and "id" in q_names:
+                p_props = _resp_schema_props(prop_op, schemas)
+                comp_parts = [p for p in comp_ent.rsplit("/", 1)[-1].split("-") if p]
+                comp_compact = "".join(comp_parts).lower()
+                for pk, raw_p in p_props.items():
+                    p_schema = _deref(raw_p, schemas)
+                    if p_schema.get("type") != "array":
+                        continue
+                    pk_low = pk.lower().rstrip("s")
+                    item_ref = str((p_schema.get("items") or {}).get("$ref") or "").rsplit("/", 1)[-1].lower()
+                    if (comp_compact and comp_compact in item_ref) or (pk_low and pk_low in comp_parts):
+                        return f"get-property:{main_ent}", "id", ""
+        return "", "", ""
 
     def _validation_rules_for_fields(java_vo: JavaVOAST | None, active_names: set[str]) -> tuple[ValidationRuleSpec, ...]:
         if java_vo is None or not java_vo.validation_rules:
@@ -2482,11 +2996,18 @@ def _compile_yudao_write_catalog_locked(
     def _filter_create_defaults(
         raw_defs: tuple[CompiledFieldDefault, ...],
         spec_map: dict[str, ConventionFieldSpec],
+        java_fields: dict[str, JavaFieldAST] | None = None,
     ) -> tuple[CompiledFieldDefault, ...]:
         kept: list[CompiledFieldDefault] = []
         for d in raw_defs:
             f_sp = spec_map.get(d.field)
             if f_sp is None:
+                continue
+            jf_def = java_fields.get(d.field) if java_fields else None
+            if d.value == [] and (
+                (jf_def is not None and jf_def.non_empty)
+                or (f_sp.min_length is not None and f_sp.min_length >= 1)
+            ):
                 continue
             if d.kind == "actor":
                 kept.append(d)
@@ -2996,6 +3517,55 @@ def _compile_yudao_write_catalog_locked(
                 if fname not in resp_props and not proj:
                     disqualified = True
                     break
+                derived_disp = ()
+                if fname.endswith("Id") and len(fname) > 2:
+                    fk_stem = fname[:-2]
+                    fk_stems = [fk_stem]
+                    if fk_stem.endswith("User") and len(fk_stem) > 4:
+                        fk_stems.append(fk_stem[:-4])
+                    disp_cands: list[str] = []
+                    for st in fk_stems:
+                        for sfx in ("Name", "Nickname", "Title", "Label"):
+                            cand = f"{st}{sfx}"
+                            if (
+                                cand in resp_props
+                                and cand not in req_props
+                                and cand not in _VOLATILE
+                                and cand not in disp_cands
+                                and _deref(resp_props[cand], schemas).get("type") == "string"
+                            ):
+                                disp_cands.append(cand)
+                    derived_disp = tuple(disp_cands)
+                elif fname.endswith("Ids") and len(fname) > 3:
+                    fk_stem = fname[:-3]
+                    fk_stems = [fk_stem]
+                    if fk_stem.endswith("User") and len(fk_stem) > 4:
+                        fk_stems.append(fk_stem[:-4])
+                    disp_cands = []
+                    for st in fk_stems:
+                        for sfx in ("Name", "Names", "Nickname", "Nicknames", "Title", "Titles", "Label", "Labels"):
+                            cand = f"{st}{sfx}"
+                            if (
+                                cand in resp_props
+                                and cand not in req_props
+                                and cand not in _VOLATILE
+                                and cand not in disp_cands
+                                and _deref(resp_props[cand], schemas).get("type") in {"string", "array"}
+                            ):
+                                disp_cands.append(cand)
+                        obj_cand = f"{st}s"
+                        if (
+                            obj_cand in resp_props
+                            and obj_cand not in req_props
+                            and obj_cand not in _VOLATILE
+                            and obj_cand not in disp_cands
+                        ):
+                            obj_schema = _deref(resp_props[obj_cand], schemas)
+                            if obj_schema.get("type") == "array":
+                                obj_item = _deref(obj_schema.get("items") or {}, schemas)
+                                if obj_item.get("type") == "object" or bool(obj_item.get("properties")):
+                                    disp_cands.append(obj_cand)
+                    derived_disp = tuple(disp_cands)
                 f_spec = _build_field_spec(
                     entity, fname, raw_fp, schemas=schemas, available_paths=available_paths,
                     java_field=jf, req_required=req_required, ent_labels=ent_labels,
@@ -3003,6 +3573,7 @@ def _compile_yudao_write_catalog_locked(
                     status_in_status_specs=(entity in statuses),
                     known_java_enums=known_java_enums,
                     readback_projection=proj,
+                    derived_display_fields=derived_disp,
                     f2_ctx=f2_ctx,
                 )
                 if f_spec is None:
@@ -3053,6 +3624,7 @@ def _compile_yudao_write_catalog_locked(
                         resp_arr_prop=resp_props.get(fname) or {},
                         ent_labels=ent_labels, ent_dicts=ent_dicts, ent_scales=ent_scales, depth=1,
                         known_java_enums=known_java_enums,
+                        f2_ctx=f2_ctx,
                     )
                     if col_spec is None:
                         disqualified = True
@@ -3247,6 +3819,7 @@ def _compile_yudao_write_catalog_locked(
                     ent_scales=ent_scales,
                     depth=1,
                     known_java_enums=known_java_enums,
+                    f2_ctx=f2_ctx,
                 )
                 if col_spec is None:
                     disqualified = True
@@ -3287,7 +3860,7 @@ def _compile_yudao_write_catalog_locked(
 
         raw_defaults = form_defaults.get(entity, ())
         spec_by_name = {f.name: f for f in field_specs}
-        filtered_defaults = _filter_create_defaults(raw_defaults, spec_by_name)
+        filtered_defaults = _filter_create_defaults(raw_defaults, spec_by_name, java_fields=java_fields)
         computed = frozenset(k for k in req_props if k != "id" and k not in col_names and k not in dropped_optional_cols and k not in resp_props)
         if child_specs:
             computed = computed | _agg_server_computed_fields(entity)

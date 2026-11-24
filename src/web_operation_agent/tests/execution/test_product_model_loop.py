@@ -1311,3 +1311,100 @@ class FormHandoffSettlementTests(unittest.TestCase):
                 answer = fx.run()
                 self.assertEqual(fx.state.terminal_reason, "agent_refused")
                 self.assertNotIn("手动点击「确定」提交", answer)
+
+    def test_unverified_companion_disclosure_guaranteed_on_done(self):
+        fx = LoopFixture([reply(call("finish", status="done", answer="已创建模板，全部完成。"))], lambda *_: None)
+        fx.state.mutation_outcomes.append({
+            "position": 0,
+            "effect": "新建模板",
+            "targets": ["模板"],
+            "verified": True,
+            "unverified_companions": [{"effect": "companion_write", "target": "promotion_diy_page", "verified": False}],
+        })
+        answer = fx.run()
+        self.assertEqual(fx.state.terminal_reason, "agent_finished")
+        self.assertIn("promotion_diy_page", answer)
+        self.assertIn("未核验", answer)
+
+        # Already-disclosed answer must not be duplicated
+        fx2 = LoopFixture([
+            reply(call("finish", status="done", answer="已创建模板，伴生写入 promotion_diy_page 写后未核验。")),
+        ], lambda *_: None)
+        fx2.state.mutation_outcomes.append(fx.state.mutation_outcomes[0])
+        answer2 = fx2.run()
+        self.assertEqual(answer2.count("promotion_diy_page"), 1)
+
+    def test_post_handoff_watch_waits_for_channel_idle_and_publishes_concise_note(self):
+        import threading
+        import time
+
+        published: list[tuple[str, dict, str]] = []
+        poll_calls = []
+
+        class _Channel:
+            _closed = False
+            idle = False
+
+            def publish(self, kind, payload, *, turn_id=""):
+                published.append((kind, payload, turn_id))
+
+        ch = _Channel()
+        events_out = [None]
+
+        class _NativeSubmit:
+            def user_write_mark(self):
+                return 1
+
+            def user_write_event(self, prefixes, record_id, mark, create=False):
+                poll_calls.append(ch.idle)
+                return events_out.pop(0) if events_out else {
+                    "method": "PUT", "path": "/admin-api/demo/update", "status": 200, "record_id": "42",
+                }
+
+            def read_record(self, prefixes, record_id):
+                return {"id": 42, "name": "新名称"}
+
+        fx = LoopFixture([reply(call("finish", status="cannot", answer="表单已填好，请核对后点击确定。"))], lambda *_: None)
+        fx.verify = False
+        fx.channel = ch
+        fx.native_submit = _NativeSubmit()
+        fx.post_handoff_watch_timeout_s = 2.0
+        fx.turn["handoff"] = (fx._page_fingerprint(fx.state.obs), "确定")
+        fx.turn["handoff_button"] = "确定"
+        fx.turn["handoff_mark"] = 1
+        fx.turn["handoff_target_key"] = "form:k"
+        fx.turn["submit_targets"] = {
+            "form:k": {
+                "kind": "form",
+                "mode": "update",
+                "prefixes": ("/admin-api/demo/",),
+                "record_id": "42",
+                "baseline": {"id": 42, "name": "旧名称"},
+            },
+        }
+        watch_ctx = fx._build_post_handoff_watch_context(fx.state, fx.turn)
+        self.assertIsNotNone(watch_ctx)
+        setattr(fx.state, "_post_handoff_watch_ctx", watch_ctx)
+        setattr(fx.state, "finish_table", {"columns": ["col"], "rows": [["v"]]})
+        setattr(fx.state, "handoff_payload", {"completed_fields": [{"name": "名称"}]})
+
+        exec_obj = NS(terminal_reason="", answer_targets=())
+        fx._start_post_handoff_watch(fx.state, None, "表单已填好，请核对后点击确定。", exec_obj)
+        # Worker must wait until channel becomes idle (simulate complete_turn finishing shortly after settle)
+        time.sleep(0.15)
+        self.assertEqual(poll_calls, [])
+        ch.idle = True
+        deadline = time.monotonic() + 1.5
+        while not published and time.monotonic() < deadline:
+            time.sleep(0.05)
+        fx._flush_post_handoff_watch()
+
+        self.assertEqual(len(published), 1)
+        kind, payload, tid = published[0]
+        self.assertEqual((kind, tid), ("progress", "m-1"))
+        self.assertEqual(payload["state"], "finished")
+        self.assertIn("name：旧名称→新名称", payload["message"])
+        self.assertNotIn("表单已填好", payload["message"])
+        self.assertNotIn("table", payload)
+        self.assertNotIn("handoff", payload)
+        self.assertTrue(payload["post_handoff_readback"]["verified"])

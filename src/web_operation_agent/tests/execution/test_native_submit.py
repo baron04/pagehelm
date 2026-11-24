@@ -984,6 +984,43 @@ class HandoffWaitTests(_Setup, unittest.TestCase):
         self.assertEqual(seen, [True])
         self.assertIn("已接受", note)
 
+    def test_build_post_handoff_watch_context_and_poll_readback_update_and_create(self):
+        from web_operation_agent.execution.native_submit import _poll_post_handoff_readback
+
+        self.arm_wait(event={"method": "PUT", "path": PREFIX + "update", "status": 200, "record_id": "7"})
+        self.ex.turn["handoff"] = ("fp", "保存")
+        self.ex.native_submit.record = {**LOADED, "mobile": "13900000000"}
+        ctx = self.ex._build_post_handoff_watch_context(self.ex.s, self.ex.turn)
+        self.assertIsNotNone(ctx)
+        res = _poll_post_handoff_readback(ctx)
+        self.assertIsNotNone(res)
+        self.assertTrue(res["verified"])
+        self.assertIn("mobile：13800000000→13900000000", res["note"])
+        self.assertIn("handoff_post_save_readback", [e for e, _ in self.ex.s.events])
+
+        # Create mode falls back to field_outcomes when form_field_outcomes is absent
+        self.arm_wait(mark=0)
+        self.ex.turn["handoff"] = ("fp", "保存")
+        self.ex.turn["field_outcomes"] = {"applied_fields": {"名称": "新建项"}}
+        self.ex.turn["submit_targets"][("dialog:编辑", "i1")] = {
+            "kind": "form", "mode": "create", "prefixes": [PREFIX], "record_id": "",
+        }
+        self.ex.native_submit.user_write_event = lambda *a, **kw: {
+            "method": "POST", "path": PREFIX + "create", "status": 200, "record_id": "19",
+        }
+        self.ex.native_submit.record = {"id": 19, "name": "新建项"}
+        ctx_create = self.ex._build_post_handoff_watch_context(self.ex.s, self.ex.turn)
+        res_create = _poll_post_handoff_readback(ctx_create)
+        self.assertTrue(res_create["verified"])
+        self.assertEqual(res_create["record_id"], "19")
+        self.assertIn("编号 19", res_create["note"])
+
+        # Unavailable readback reports unverified honestly
+        self.ex.native_submit.exists = False
+        res_fail = _poll_post_handoff_readback(ctx_create)
+        self.assertFalse(res_fail["verified"])
+        self.assertIn("回读记录未成功", res_fail["note"])
+
 
 class NativeSubmitIndeterminateAccountingTests(_Setup, unittest.TestCase):
     def test_partial_blocked_extra_request_records_mutation_indeterminate_on_approvals(self):

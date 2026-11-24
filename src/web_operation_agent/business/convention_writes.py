@@ -392,13 +392,37 @@ class CompanionWriteSpec:
     readback_entity: str = ""
     readback_query_field: str = ""
     description: str = ""
+    #: True when this companion deletes existing child rows and rebuilds them on trigger.
+    destructive_delete: bool = False
+    #: Execution trigger condition: ``always``, ``on_field_change``, ``on_field_present``, or ``on_remove``.
+    trigger_mode: str = "always"
+    #: Field keys whose modification/presence/removal activates this companion write.
+    trigger_fields: tuple[str, ...] = ()
+    #: Optional expected field key on readback rows used to verify non-trivial companion persistence.
+    readback_expect_field: str = ""
 
     def __post_init__(self) -> None:
         if not self.target or not self.action or not self.source_method:
             raise ValueError("companion write spec requires target, action, and source_method")
+        if self.trigger_mode not in {"always", "on_field_change", "on_field_present", "on_remove"}:
+            raise ValueError(f"unsupported companion trigger_mode: {self.trigger_mode!r}")
 
-    def format_card_text(self) -> str:
-        parts = [f"目标：{self.target}", f"动作：{self.action}", f"来源：{self.source_method}"]
+    def format_card_text(self, *, triggered: bool = True, delete_count: int | None = None) -> str:
+        if not triggered:
+            parts = [f"目标：{self.target}", f"动作：{self.action}", f"来源：{self.source_method}"]
+            if self.condition:
+                parts.append(f"条件：{self.condition}")
+            parts.append("本次未触发（未触及触发字段）")
+            if self.description:
+                parts.append(self.description)
+            return "；".join(parts)
+        parts: list[str] = []
+        if self.destructive_delete:
+            if delete_count is not None:
+                parts.append(f"⚠️ 删除并重建子表（写前同账号已读取受影响 {delete_count} 条记录）")
+            else:
+                parts.append("⚠️ 删除并重建子表（须写前读取受影响记录数）")
+        parts.extend([f"目标：{self.target}", f"动作：{self.action}", f"来源：{self.source_method}"])
         if self.condition:
             parts.append(f"条件：{self.condition}")
         if self.readback_entity:
@@ -409,7 +433,7 @@ class CompanionWriteSpec:
             parts.append(self.description)
         return "；".join(parts)
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "target": self.target,
             "action": self.action,
@@ -418,6 +442,10 @@ class CompanionWriteSpec:
             "readback_entity": self.readback_entity,
             "readback_query_field": self.readback_query_field,
             "description": self.description,
+            "destructive_delete": self.destructive_delete,
+            "trigger_mode": self.trigger_mode,
+            "trigger_fields": list(self.trigger_fields),
+            "readback_expect_field": self.readback_expect_field,
         }
 
 
@@ -526,12 +554,21 @@ def evaluate_validation_rules(
     return list(dict.fromkeys(errors))
 
 
-def serialize_companion_specs(side_effects: tuple[CompanionWriteSpec | str, ...]) -> list[dict[str, str]]:
+def serialize_companion_specs(
+    side_effects: tuple[CompanionWriteSpec | str, ...],
+    *,
+    evaluated: list[tuple[CompanionWriteSpec | str, bool, int | None]] | None = None,
+) -> list[dict[str, object]]:
     """Serialize companion write specs to JSON-safe dicts for dispatch verification."""
-    out: list[dict[str, str]] = []
-    for item in side_effects or ():
+    items = evaluated if evaluated is not None else [(item, True, None) for item in (side_effects or ())]
+    out: list[dict[str, object]] = []
+    for item, triggered, delete_count in items:
         if isinstance(item, CompanionWriteSpec):
-            out.append(item.to_dict())
+            entry = item.to_dict()
+            entry["triggered"] = triggered
+            if delete_count is not None:
+                entry["expected_delete_count"] = delete_count
+            out.append(entry)
         elif isinstance(item, str) and item.strip():
             out.append({
                 "target": item.strip(),
@@ -541,20 +578,126 @@ def serialize_companion_specs(side_effects: tuple[CompanionWriteSpec | str, ...]
                 "readback_entity": "",
                 "readback_query_field": "",
                 "description": "",
+                "destructive_delete": False,
+                "trigger_mode": "always",
+                "trigger_fields": [],
+                "readback_expect_field": "",
+                "triggered": triggered,
             })
     return out
 
 
-def format_companion_details(side_effects: tuple[CompanionWriteSpec | str, ...]) -> list[ApprovalDetail]:
+def format_companion_details(
+    side_effects: tuple[CompanionWriteSpec | str, ...],
+    *,
+    evaluated: list[tuple[CompanionWriteSpec | str, bool, int | None]] | None = None,
+) -> list[ApprovalDetail]:
     """Render each declared companion write onto the visible approval card."""
+    items = evaluated if evaluated is not None else [(item, True, None) for item in (side_effects or ())]
     out: list[ApprovalDetail] = []
-    for item in side_effects or ():
+    for item, triggered, delete_count in items:
         if isinstance(item, CompanionWriteSpec):
             lbl = f"伴生写入（{item.target}）"[:200]
-            out.append(side_effect_detail(lbl, item.format_card_text()))
+            out.append(side_effect_detail(lbl, item.format_card_text(triggered=triggered, delete_count=delete_count)))
         elif isinstance(item, str) and item.strip():
             out.append(side_effect_detail("伴生写入", item.strip()))
     return out
+
+
+def _companion_is_triggered(
+    item: CompanionWriteSpec,
+    port: object,
+    spec: "ConventionUpdateSpec",
+    payload: dict,
+    *,
+    before_record: dict,
+    changed: dict,
+) -> bool:
+    mode = item.trigger_mode or "always"
+    if mode == "always":
+        return True
+    if not item.trigger_fields:
+        return True
+    if mode == "on_field_change":
+        return any(tf in changed for tf in item.trigger_fields)
+    if mode == "on_field_present":
+        return any(not _is_empty_rule_val(payload.get(tf)) for tf in item.trigger_fields)
+    if mode == "on_remove":
+        for tf in item.trigger_fields:
+            f_sp = spec.resolve_field(tf)
+            b_val = (
+                extract_projected_field_value(port, spec, f_sp, before_record)
+                if f_sp is not None
+                else before_record.get(tf)
+            )
+            if b_val is _MISSING or b_val is None:
+                b_list: list[object] = []
+            elif isinstance(b_val, (list, tuple, set)):
+                b_list = list(b_val)
+            else:
+                b_list = [b_val]
+            a_val = payload.get(tf)
+            a_list = (
+                list(a_val)
+                if isinstance(a_val, (list, tuple, set))
+                else ([] if a_val is None else [a_val])
+            )
+            if {str(x) for x in b_list} - {str(x) for x in a_list}:
+                return True
+        return False
+    return True
+
+
+def evaluate_update_companions(
+    port: object,
+    spec: "ConventionUpdateSpec",
+    record_id: object,
+    payload: dict,
+    *,
+    before_record: dict,
+    changed: dict,
+) -> list[tuple[CompanionWriteSpec | str, bool, int | None]]:
+    """Evaluate companion write triggers and enforce pre-dispatch child row count reads on destructive deletes."""
+    evaluated: list[tuple[CompanionWriteSpec | str, bool, int | None]] = []
+    has_cap = "companion_readback" in write_capabilities_of(port)
+    count_fn = getattr(port, "count_companion_rows", None) if has_cap else None
+    for item in spec.side_effects or ():
+        if not isinstance(item, CompanionWriteSpec):
+            if isinstance(item, str) and item.strip():
+                evaluated.append((item, True, None))
+            continue
+        triggered = _companion_is_triggered(
+            item,
+            port,
+            spec,
+            payload,
+            before_record=before_record,
+            changed=changed,
+        )
+        delete_count: int | None = None
+        if triggered and item.destructive_delete:
+            if not callable(count_fn):
+                raise BusinessToolRequestError(
+                    f"修改「{spec.label}」会触发对「{item.target}」的删除并重建，"
+                    "但当前端口未声明同账号写前子表行数读取能力（companion_readback），"
+                    "无法核验受影响记录数；请改用页面表单确认或仅修改不触发重建的字段。"
+                )
+            delete_count = count_fn(
+                spec,
+                record_id,
+                payload,
+                before_record=before_record,
+                side_effect=item.to_dict(),
+                changed=changed,
+            )
+            if delete_count is None or isinstance(delete_count, bool) or not isinstance(delete_count, int) or delete_count < 0:
+                raise BusinessToolRequestError(
+                    f"修改「{spec.label}」会触发对「{item.target}」的删除并重建，"
+                    f"但当前账号无法写前读取受影响子表记录数（{item.readback_entity or '无只读子表接口'}），"
+                    "已按 fail-closed 拦截；请改用页面表单确认或仅修改不触发重建的字段。"
+                )
+        evaluated.append((item, triggered, delete_count))
+    return evaluated
 
 
 def run_companion_readback(
@@ -567,31 +710,52 @@ def run_companion_readback(
     after_record: dict,
     side_effects: list[dict] | tuple,
 ) -> list[dict]:
-    """Verify declared companion writes via optional port readback or mark as unverified."""
+    """Verify declared companion writes via capability-gated port readback or mark as unverified."""
     if not side_effects:
         return []
-    verify_companion_fn = getattr(port, "verify_companion_readback", None)
+    pending: list[object] = []
+    results: list[dict] = []
+    for se in side_effects:
+        if isinstance(se, dict) and se.get("triggered") is False:
+            results.append({
+                "effect": "companion_write",
+                "target": se.get("target", ""),
+                "verified": True,
+                "not_triggered": True,
+                "note": "本次修改未触及触发字段，未执行伴生写入",
+            })
+        else:
+            pending.append(se)
+    if not pending:
+        return results
+    verify_companion_fn = (
+        getattr(port, "verify_companion_readback", None)
+        if "companion_readback" in write_capabilities_of(port)
+        else None
+    )
     if callable(verify_companion_fn):
-        return list(
+        results.extend(
             verify_companion_fn(
                 spec,
                 record_id,
                 payload,
                 before_record=before_record,
                 after_record=after_record,
-                side_effects=side_effects,
+                side_effects=pending,
             )
             or ()
         )
-    return [
+        return results
+    results.extend(
         {
             "effect": "companion_write",
             "target": se.get("target", "") if isinstance(se, dict) else str(se),
             "verified": False,
-            "note": "写后未核验（无同账号回读接口）",
+            "note": "写后未核验（未声明或无同账号回读接口）",
         }
-        for se in side_effects
-    ]
+        for se in pending
+    )
+    return results
 
 
 def resolve_spec_field(fields: tuple["ConventionFieldSpec", ...], token: str) -> "ConventionFieldSpec | None":
@@ -648,6 +812,8 @@ class ConventionFieldSpec:
     is_hierarchy_parent: bool = False
     #: Optional ``(detail_collection_field, item_id_key)`` for 1:N projected ID arrays.
     readback_projection: tuple[str, str] = ()
+    #: Optional server-computed display columns derived from this field (e.g. keeperName from keeperUserId).
+    derived_display_fields: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.name or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", self.name):
@@ -662,6 +828,10 @@ class ConventionFieldSpec:
             len(self.readback_projection) != 2 or not all(isinstance(x, str) and x for x in self.readback_projection)
         ):
             raise ValueError(f"invalid readback_projection: {self.readback_projection!r}")
+        if self.derived_display_fields and not all(
+            isinstance(x, str) and bool(x.strip()) for x in self.derived_display_fields
+        ):
+            raise ValueError(f"invalid derived_display_fields: {self.derived_display_fields!r}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -736,9 +906,31 @@ class TwoStateStatusSpec:
         return None
 
 
-class ConventionWritePort(Protocol):
-    """Adapter-supplied runtime behavior for flat convention updates and two-state toggles."""
+#: Optional write-port capabilities declared via ``ConventionWritePort.capabilities()``.
+WRITE_PORT_OPTIONAL = frozenset({
+    "companion_readback",
+    "preserved_field_extraction",
+    "reference_variants",
+})
 
+
+def write_capabilities_of(port: object) -> frozenset[str]:
+    """Optional write-port capabilities declared via ``port.capabilities()``, bounded to ``WRITE_PORT_OPTIONAL``."""
+    method = getattr(port, "capabilities", None)
+    if not callable(method):
+        return frozenset()
+    return frozenset(str(name) for name in (method() or ())) & WRITE_PORT_OPTIONAL
+
+
+class ConventionWritePort(Protocol):
+    """Adapter-supplied runtime behavior for flat convention updates and two-state toggles.
+
+    Optional hooks (``verify_companion_readback`` / ``count_companion_rows``,
+    ``extract_preserved_field``, ``reference_provenance_variants``) are activated
+    only when declared in ``capabilities()`` (a subset of ``WRITE_PORT_OPTIONAL``).
+    """
+
+    def capabilities(self) -> frozenset[str]: ...
     def update_specs(self) -> dict[str, ConventionUpdateSpec]: ...
     def status_specs(self) -> dict[str, TwoStateStatusSpec]: ...
     def verify_actor(self, context) -> str: ...
@@ -795,7 +987,11 @@ def extract_projected_field_value(port, spec, f_spec: ConventionFieldSpec, recor
         val = record[f_spec.name]
         if val is not None or not f_spec.readback_projection:
             return val
-    extract_fn = getattr(port, "extract_preserved_field", None)
+    extract_fn = (
+        getattr(port, "extract_preserved_field", None)
+        if "preserved_field_extraction" in write_capabilities_of(port)
+        else None
+    )
     if callable(extract_fn):
         custom = extract_fn(spec, f_spec, record)
         if custom is not _MISSING and custom is not None:
@@ -904,6 +1100,67 @@ def _reference_token_variants(token: str) -> set[str]:
     return out
 
 
+def _boolean_field_stems(f_spec: ConventionFieldSpec) -> tuple[str, ...]:
+    """Derive clean semantic stems from a boolean field label/name without matching bare 是否 prefixes."""
+    raw_candidates: list[str] = []
+    if f_spec.label:
+        raw_candidates.extend(re.split(r"[（(\[/\s,，;；:：]+", f_spec.label))
+    if f_spec.name:
+        raw_candidates.append(f_spec.name)
+    stems: list[str] = []
+    skip_generic = {"true", "false", "boolean", "bool", "status", "flag", "state", "状态", "开关", "标识", "标志"}
+    for raw in raw_candidates:
+        cleaned = str(raw or "").strip()
+        if not cleaned:
+            continue
+        stripped = re.sub(r"^(?:是否|能否|可否|有无)", "", cleaned)
+        stripped = re.sub(r"(?:状态|开关|标识|标志)$", "", stripped).strip()
+        cands = (stripped,) if (cleaned != stripped and stripped) else (cleaned,)
+        for cand in cands:
+            if not cand or cand.lower() in skip_generic:
+                continue
+            has_cjk = bool(re.search(r"[\u4e00-\u9fff]", cand))
+            if (has_cjk and len(cand) >= 2) or (re.fullmatch(r"[A-Za-z0-9_-]{3,}", cand)):
+                if cand not in stems:
+                    stems.append(cand)
+    stems.sort(key=len, reverse=True)
+    return tuple(stems)
+
+
+def _infer_boolean_intent(raw_val: object, stems: tuple[str, ...]) -> bool | None:
+    if isinstance(raw_val, bool):
+        return raw_val
+    s = str(raw_val or "").strip()
+    sl = s.lower()
+    if sl in {"true", "是", "开启", "启用", "打开", "允许", "设为默认"}:
+        return True
+    if sl in {"false", "否", "关闭", "停用", "禁用", "取消", "不启用", "不允许"}:
+        return False
+    if not stems:
+        return None
+    norm = re.sub(r"^(?:设为|改为|置为|变成|选为)\s*", "", s)
+    neg_head = re.compile(
+        r"^(?:不允许|不可|不能|不要|不得|不用|不准|不予|禁止|严禁|拒绝|取消|关闭|停用|禁用|未|免|非|别|勿|不|not\s+|no\s+|non-?)(?:启用|开启|设为|做)?\s*",
+        re.I,
+    )
+    m_neg = neg_head.match(norm)
+    if m_neg:
+        rest = norm[m_neg.end():].strip()
+        if any(rest.casefold() == st.casefold() for st in stems):
+            return False
+    pos_head = re.sub(r"^(?:允许|启用|开启|要)\s*", "", norm).strip()
+    if any(pos_head.casefold() == st.casefold() for st in stems):
+        return True
+    return None
+
+
+def _stem_pattern(stem: str) -> str:
+    esc = re.escape(stem)
+    if re.fullmatch(r"[A-Za-z0-9_-]+", stem):
+        return rf"(?<![A-Za-z0-9_]){esc}(?![A-Za-z0-9_])"
+    return esc
+
+
 def validate_single_field_provenance(
     f_spec: ConventionFieldSpec,
     raw_val: object,
@@ -957,18 +1214,14 @@ def validate_single_field_provenance(
         if raw_val is not None:
             if str(raw_val) in field_cands:
                 return
-            bool_intent = (
-                raw_val if isinstance(raw_val, bool)
-                else (
-                    True if str(raw_val).strip().lower() in {"true", "是", "开启", "启用", "打开", "允许", "设为默认"}
-                    else (
-                        False if str(raw_val).strip().lower() in {"false", "否", "关闭", "停用", "禁用", "取消", "不启用", "不允许"}
-                        else None
-                    )
-                )
-            )
+            stems = _boolean_field_stems(f_spec)
+            bool_intent = _infer_boolean_intent(raw_val, stems)
             if bool_intent is not None:
-                neg_prefix = re.compile(r"(?:不允许|不可|不能|不要|不得|不用|不准|不予|禁止|严禁|拒绝|取消|别|勿|非|不$)")
+                neg_prefix = re.compile(
+                    r"(?:不允许|不可|不能|不要|不得|不用|不准|不予|禁止|严禁|拒绝|取消|别|勿)|"
+                    r"(?:关闭|停用|禁用|未|免|非|不|\bnot|\bno|\bnon-?)\s*$",
+                    re.I,
+                )
                 pos_pat = re.compile(
                     r"(?<![A-Za-z0-9_])true(?![A-Za-z0-9_])|开启|启用|打开|允许|设为默认|"
                     r"(?:设为|改为|置为|变成|选为|[：:=]\s*)是(?=$|[\s）)])",
@@ -978,6 +1231,11 @@ def validate_single_field_provenance(
                     r"(?<![A-Za-z0-9_])false(?![A-Za-z0-9_])|关闭|停用|禁用|取消默认|取消启用|"
                     r"(?:设为|改为|置为|变成|选为|[：:=]\s*)否(?=$|[\s）)])",
                     re.I,
+                )
+                stem_pat = (
+                    re.compile("|".join(_stem_pattern(st) for st in stems), re.I)
+                    if stems
+                    else None
                 )
                 positive_bool = False
                 negative_bool = False
@@ -990,6 +1248,15 @@ def validate_single_field_provenance(
                     for m in neg_pat.finditer(clause):
                         if not neg_prefix.search(clause[:m.start()]):
                             negative_bool = True
+                    if stem_pat is not None:
+                        for m in stem_pat.finditer(clause):
+                            prefix = clause[:m.start()].rstrip()
+                            if prefix.endswith(("是否", "能否", "可否", "有无")):
+                                continue
+                            if neg_prefix.search(prefix):
+                                negative_bool = True
+                            else:
+                                positive_bool = True
                 if (bool_intent is True and positive_bool) or (bool_intent is False and negative_bool):
                     return
             raise BusinessToolRequestError(
@@ -1291,7 +1558,15 @@ class ConventionUpdateHandler:
         details.append(
             preserved_detail("其余字段保留", f"保持同账号读取的其余 {preserved_count} 个字段原值不变")
         )
-        details.extend(format_companion_details(spec.side_effects))
+        evaluated_companions = evaluate_update_companions(
+            self.port,
+            spec,
+            record_id,
+            payload,
+            before_record=record,
+            changed=encoded_updates,
+        )
+        details.extend(format_companion_details(spec.side_effects, evaluated=evaluated_companions))
         diff = ProposalDiff.from_details((target_label,), details)
         # Project ALL requested inputs from `args` so EffectProjection.require(expected) matches 1:1
         all_projected = {}
@@ -1329,7 +1604,7 @@ class ConventionUpdateHandler:
             "restricted_field_digests": restricted_digests,
             "bindings": bindings,
             "provenance": provenance_items,
-            "side_effects": serialize_companion_specs(spec.side_effects),
+            "side_effects": serialize_companion_specs(spec.side_effects, evaluated=evaluated_companions),
         }
         key = hashlib.sha256(canonical([entity, record_id, encoded_updates]).encode()).hexdigest()
         return BusinessMutationSpec(
@@ -1380,7 +1655,11 @@ class ConventionUpdateHandler:
                 allow_append=True,
                 allow_existing_candidates=True,
                 enum_tokens_fn=getattr(self.port, "enum_provenance_tokens", None),
-                reference_variants_fn=getattr(self.port, "reference_provenance_variants", None),
+                reference_variants_fn=(
+                    getattr(self.port, "reference_provenance_variants", None)
+                    if "reference_variants" in write_capabilities_of(self.port)
+                    else None
+                ),
             )
 
     def dispatch(self, args: dict, *, context=None) -> BusinessToolResult:
@@ -1418,6 +1697,42 @@ class ConventionUpdateHandler:
                     "current record changed after approval; prepare again",
                     reason="precondition_changed",
                 )
+            destructive = [
+                se
+                for se in (args.get("side_effects") or ())
+                if isinstance(se, dict) and se.get("destructive_delete") and se.get("triggered", True)
+            ]
+            if destructive:
+                if "companion_readback" not in write_capabilities_of(self.port):
+                    raise BusinessMutationRefusedError(
+                        "companion row count capability unavailable before destructive companion write",
+                        reason="precondition_changed",
+                    )
+                count_fn = getattr(self.port, "count_companion_rows", None)
+                if not callable(count_fn):
+                    raise BusinessMutationRefusedError(
+                        "companion row count reader unavailable before destructive companion write",
+                        reason="precondition_changed",
+                    )
+                for se in destructive:
+                    now_count = count_fn(
+                        spec,
+                        record_id,
+                        args["payload"],
+                        before_record=current,
+                        side_effect=se,
+                        changed=args.get("changed"),
+                    )
+                    if (
+                        now_count is None
+                        or isinstance(now_count, bool)
+                        or not isinstance(now_count, int)
+                        or now_count != se.get("expected_delete_count")
+                    ):
+                        raise BusinessMutationRefusedError(
+                            "待删除重建的子表记录数在确认后发生变化，请重新查询并确认。",
+                            reason="precondition_changed",
+                        )
             return current_snap, current
 
         def dispatch_once(actor_state, _reread_state):
@@ -1446,6 +1761,8 @@ class ConventionUpdateHandler:
                     actual_val = None
                 if f_sp is not None and f_sp.readback_projection:
                     projected_cols_ignored.add(f_sp.readback_projection[0])
+                if f_sp is not None and f_sp.derived_display_fields:
+                    projected_cols_ignored.update(f_sp.derived_display_fields)
                 matched = (
                     match_fn(spec, spec_fields[key], actual_val, expected_val)
                     if callable(match_fn) and key in spec_fields
@@ -1889,10 +2206,12 @@ __all__ = [
     "ConventionWritePort",
     "TwoStateStatusSpec",
     "ValidationRuleSpec",
+    "WRITE_PORT_OPTIONAL",
     "WriteRouteCapability",
     "collect_provenance_context",
     "convention_tool_definitions",
     "effect_value",
+    "evaluate_update_companions",
     "evaluate_validation_rules",
     "extract_projected_field_value",
     "format_companion_details",
@@ -1906,4 +2225,5 @@ __all__ = [
     "run_companion_readback",
     "serialize_companion_specs",
     "validate_single_field_provenance",
+    "write_capabilities_of",
 ]

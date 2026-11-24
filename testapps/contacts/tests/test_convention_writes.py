@@ -726,6 +726,10 @@ class ContactsConventionWriteTests(unittest.TestCase):
         fail_companion = {"flag": False}
 
         class _SecondAppPort:
+            def capabilities(self):
+                from web_operation_agent.business.convention_writes import WRITE_PORT_OPTIONAL
+                return WRITE_PORT_OPTIONAL
+
             def update_specs(self):
                 return {"contacts": spec}
 
@@ -797,6 +801,118 @@ class ContactsConventionWriteTests(unittest.TestCase):
         })
         with self.assertRaises(BusinessMutationIndeterminate):
             handler.dispatch(mut2.args)
+
+    def test_second_app_capabilities_destructive_delete_and_derived_display(self):
+        from web_operation_agent.business.convention_writes import (
+            CompanionWriteSpec,
+            ConventionFieldSpec,
+            ConventionUpdateHandler,
+            ConventionUpdateSpec,
+            WRITE_PORT_OPTIONAL,
+            write_capabilities_of,
+        )
+        from web_operation_agent.business.errors import BusinessMutationIndeterminate, BusinessToolRequestError
+
+        spec = ConventionUpdateSpec(
+            entity="contacts",
+            label="联系人",
+            fields=(
+                ConventionFieldSpec("email", "string", label="邮箱"),
+                ConventionFieldSpec(
+                    "groupId",
+                    "integer",
+                    label="分组",
+                    reference_entity="groups",
+                    derived_display_fields=("groupName",),
+                ),
+            ),
+            side_effects=(
+                CompanionWriteSpec(
+                    target="contact_memberships",
+                    action="清理伴生记录（deleteByGroup）",
+                    source_method="ContactsService.updateContact -> MembershipMapper.deleteByGroup",
+                    condition="条件成立（涉及 groupId）",
+                    readback_entity="contact-memberships",
+                    readback_query_field="contactId",
+                    destructive_delete=True,
+                    trigger_mode="on_field_change",
+                    trigger_fields=("groupId",),
+                ),
+            ),
+            name_fields=("email",),
+        )
+        row = {"id": 1, "email": "ada@example.test", "groupId": 2, "groupName": "Core"}
+
+        class _NoCapPort:
+            def update_specs(self): return {"contacts": spec}
+            def status_specs(self): return {}
+            def verify_actor(self, context): return "actor-1"
+            def resolve_target(self, entity, target, *, spec): return dict(row)
+            def read_record(self, entity, record_id): return dict(row)
+            def encode_field(self, _spec, field, raw_value, cur): return raw_value, cur.get(field.name), str(raw_value), None
+            def recheck_bindings(self, bindings, *, actor_id): pass
+            def count_companion_rows(self, *_a, **_kw): return 2
+            def dispatch_update(self, _spec, record_id, payload): row.update(payload)
+            def dispatch_status(self, _spec, record_id, status_code): pass
+            def invalidate_reads(self, entities): pass
+
+        self.assertEqual(write_capabilities_of(_NoCapPort()), frozenset())
+        with self.assertRaises(BusinessToolRequestError):
+            ConventionUpdateHandler(_NoCapPort()).prepare({
+                "entity": "contacts",
+                "target": "ada@example.test",
+                "changes": [{"field": "分组", "value": 9}],
+            })
+
+        corrupt_after = {"flag": False}
+
+        class _CapPort(_NoCapPort):
+            def capabilities(self):
+                return WRITE_PORT_OPTIONAL
+
+            def dispatch_update(self, _spec, record_id, payload):
+                row.update(payload)
+                if payload.get("groupId") == 9:
+                    row["groupName"] = "VIP"
+                if corrupt_after["flag"]:
+                    row["groupName"] = "Corrupted"
+
+            def verify_companion_readback(self, _spec, record_id, payload, *, before_record, after_record, side_effects):
+                return [
+                    {"effect": "companion_write", "target": se["target"], "verified": True, "note": "ok"}
+                    for se in side_effects
+                ]
+
+        cap_handler = ConventionUpdateHandler(_CapPort())
+        # Non-triggering change skips companion deletion count and succeeds
+        mut_safe = cap_handler.prepare({
+            "entity": "contacts",
+            "target": "ada@example.test",
+            "changes": [{"field": "邮箱", "value": "ada2@example.test"}],
+        })
+        self.assertIn("本次未触发", "\n".join(d.text for d in mut_safe.details if d.kind == "side_effect"))
+        self.assertTrue(cap_handler.dispatch(mut_safe.args).content["verified"])
+
+        # Triggering change reads live count onto card and tolerates derived groupName shift
+        mut_del = cap_handler.prepare({
+            "entity": "contacts",
+            "target": "ada2@example.test",
+            "changes": [{"field": "分组", "value": 9}],
+        })
+        self.assertIn("受影响 2 条记录", "\n".join(d.text for d in mut_del.details if d.kind == "side_effect"))
+        self.assertTrue(cap_handler.dispatch(mut_del.args).content["verified"])
+        self.assertEqual(row["groupName"], "VIP")
+
+        # Derived field without FK update still triggers indeterminate protection
+        mut_drift = cap_handler.prepare({
+            "entity": "contacts",
+            "target": "ada2@example.test",
+            "changes": [{"field": "邮箱", "value": "ada3@example.test"}],
+        })
+        corrupt_after["flag"] = True
+        with self.assertRaises(BusinessMutationIndeterminate):
+            cap_handler.dispatch(mut_drift.args)
+        corrupt_after["flag"] = False
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ title: 内置工具、能力与自检
 description: 模型可见工具目录、GoalPort 能力声明契约与 ProgramCheckSpec 回合核验规格。
 ---
 
-模型每一步可见的工具集合由服务端根据当前会话状态和权限动态投影（`execution/tools.py` `ToolSurface`）。业务适配器通过 `GoalPort.capabilities()` 声明实际支持的可选能力，每个回合结束前须通过代码级 `ProgramCheckSpec` 检查。
+模型每一步可见的工具集合由服务端根据当前会话状态和权限动态投影（`execution/tools.py` `ToolSurface`）。业务适配器通过 `GoalPort.capabilities()` 声明实际支持的可选读取与更新能力（并通过 `ConventionWritePort.capabilities()` 声明可选约定写扩展能力），每个回合结束前须通过代码级 `ProgramCheckSpec` 检查。
 
 ## 一、模型可见工具目录
 
@@ -75,6 +75,14 @@ description: 模型可见工具目录、GoalPort 能力声明契约与 ProgramCh
 | `source` | 白名单源码规则检索与只读路由候选 |
 | `values` | 发起修改提案前按当前操作员身份检索合法候选值 |
 | `updates` | 对称平铺 `ConventionWritePort`（`update_record` 与可逆 `toggle_record_status`） |
+
+### `ConventionWritePort` 可选能力（`WRITE_PORT_OPTIONAL`）
+
+- `companion_readback`：启用同账号伴生写入回读（`verify_companion_readback`）与删除重建伴生写前子表行数读取（`count_companion_rows`）。
+- `preserved_field_extraction`：启用更新前整条原值抽取钩子（`extract_preserved_field`）。
+- `reference_variants`：启用外键来源校验中的参考值变体展开（`reference_provenance_variants`）。
+
+若端口未在 `capabilities()` 中声明对应能力，核心层一律忽略相关可选方法：伴生写入按未核验披露，破坏性删除重建伴生更新按 fail-closed 拦截。
 
 ## 三、程序化回合核验（`ProgramCheckSpec`）
 

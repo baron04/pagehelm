@@ -133,6 +133,7 @@ class ModelTurnState(MutableMapping[str, Any]):
     settled_action_observation: dict[str, Any] | None = None
     form_field_outcomes: dict[str, Any] = field(default_factory=dict)
     finish_tables: dict[str, Any] = field(default_factory=dict)
+    unverified_companion_effects: list[dict[str, Any]] = field(default_factory=list)
     extras: dict[str, Any] = field(default_factory=dict)
 
     _TYPED_FIELDS = frozenset({
@@ -149,7 +150,7 @@ class ModelTurnState(MutableMapping[str, Any]):
         "form_record_baselines", "submit_targets", "unrestorable_forms", "handoff_target_key",
         "handoff_button", "handoff_mark", "submit_started", "submit_handoff_blocked",
         "restored_form_labels", "settled_action_observation", "form_field_outcomes",
-        "finish_tables",
+        "finish_tables", "unverified_companion_effects",
     })
 
     def _present(self, key: str) -> bool:

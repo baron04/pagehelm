@@ -679,6 +679,8 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
             if marked_now and marked_now != marked_before:
                 key = _handoff_key(getattr(s, "obs", None) or before, marked_now)
                 target = (turn.get("submit_targets") or {}).get(key) or {}
+                self._ensure_handoff_target_prefixes(s, turn, key)
+                target = (turn.get("submit_targets") or {}).get(key) or {}
                 if target.get("kind") == "row" or plain(marked_now) in SUBMIT_WORDS:
                     turn["handoff_button"] = marked_now
                     turn["handoff_target_key"] = key
@@ -816,12 +818,39 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
             turn["marked"] = result.marked
             if self.native_submit is not None:
                 turn["handoff_button"] = str(result.marked)
-                turn["handoff_target_key"] = _handoff_key(s.obs, str(result.marked))
+                hkey = _handoff_key(s.obs, str(result.marked))
+                turn["handoff_target_key"] = hkey
+                self._ensure_handoff_target_prefixes(s, turn, hkey)
                 mark_fn = getattr(self.native_submit, "user_write_mark", None)
                 if callable(mark_fn):
                     turn["handoff_mark"] = mark_fn()
             return result.marked
         return ""
+
+    def _ensure_handoff_target_prefixes(self, s, turn, key) -> None:
+        if self.native_submit is None or key is None:
+            return
+        targets = turn.setdefault("submit_targets", {})
+        target = targets.get(key)
+        if isinstance(target, dict) and target.get("prefixes"):
+            return
+        recent_fn = getattr(self.native_submit, "recent_reads", None)
+        prefixes_fn = getattr(self.native_submit, "prefixes", None)
+        if not callable(recent_fn) or not callable(prefixes_fn):
+            return
+        reads = recent_fn() or ()
+        if not reads:
+            return
+        record_id = str((target or {}).get("record_id") or "") if isinstance(target, dict) else ""
+        mode = "update" if record_id else "create"
+        inferred = tuple(prefixes_fn(reads, mode=mode, record_id=record_id) or ())
+        if len(inferred) != 1:
+            return
+        if not isinstance(target, dict):
+            target = {}
+            targets[key] = target
+        target["prefixes"] = inferred
+        target.setdefault("record_id", record_id)
 
     def export_table(self, ref: str) -> dict | None:
         table_ctx = self._ctx().turn_tables
