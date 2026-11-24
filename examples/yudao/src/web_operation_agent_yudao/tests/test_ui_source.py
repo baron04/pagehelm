@@ -220,6 +220,152 @@ async function getList() {
         self.assertEqual(_shown_units('<el-table-column :label="caption" prop="price" />'), ())
         self.assertEqual(_shown_units(column + column.replace("（元）", "（分）")), ())
 
+    def test_page_vocabulary_compiles_generic_vue_query_tabs_dicts_barrels_and_routes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src/utils").mkdir(parents=True)
+            (root / "src/router/modules").mkdir(parents=True)
+            (root / "src/views/demo/item/components").mkdir(parents=True)
+            (root / "src/views/demo/item/detail").mkdir(parents=True)
+            (root / "src/views/demo/inbox").mkdir(parents=True)
+
+            (root / "src/utils/dict.ts").write_text(
+                "export enum DICT_TYPE {\n"
+                "  DEMO_STATUS = 'demo_status',\n"
+                "  AUDIT_STATE = 'audit_state',\n"
+                "  MODAL_ONLY = 'modal_only',\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (root / "src/views/demo/item/constants.ts").write_text(
+                "export const TYPE_OPTIONS = [\n"
+                "  { label: '采购单', value: 1 },\n"
+                "  { label: '退货单', value: 2 },\n"
+                "]\n",
+                encoding="utf-8",
+            )
+            (root / "src/views/demo/item/item.data.ts").write_text(
+                "import { TYPE_OPTIONS } from './constants'\n"
+                "const crudSchemas = reactive([\n"
+                "  {\n"
+                "    label: '审批阶段',\n"
+                "    field: 'auditState',\n"
+                "    isSearch: true,\n"
+                "    dictType: DICT_TYPE.AUDIT_STATE,\n"
+                "    search: { component: 'Select', componentProps: { options: TYPE_OPTIONS } },\n"
+                "    form: { componentProps: { disabled: true } },\n"
+                "  },\n"
+                "  { label: '弹窗表单项', field: 'secret', isTable: false },\n"
+                "])\n"
+                "export const { allSchemas } = useCrudSchemas(crudSchemas)\n",
+                encoding="utf-8",
+            )
+            (root / "src/views/demo/item/components/ItemTableCols.vue").write_text(
+                "<template><el-table-column label=\"客户名称：\" prop=\"customerName\" /></template>\n",
+                encoding="utf-8",
+            )
+            (root / "src/views/demo/item/components/ItemForm.vue").write_text(
+                "<template><el-form :model=\"formData\"><el-form-item label=\"不该泄漏字段\" /></el-form></template>\n"
+                "<script setup lang=\"ts\">import { DICT_TYPE } from '@/utils/dict'\nconst x = DICT_TYPE.MODAL_ONLY</script>\n",
+                encoding="utf-8",
+            )
+            (root / "src/views/demo/item/components/index.ts").write_text(
+                "export { default as ItemTableCols } from './ItemTableCols.vue'\n"
+                "export { default as ItemForm } from './ItemForm.vue'\n",
+                encoding="utf-8",
+            )
+            (root / "src/views/demo/item/index.vue").write_text(
+                "<template>\n"
+                "  <el-form :model=\"queryParams\">\n"
+                "    <el-form-item label=\"状态：\">\n"
+                "      <el-select v-model=\"queryParams.status\">\n"
+                "        <el-option label=\"待审核\" value=\"0\" />\n"
+                "        <el-option v-for=\"opt in dynamicFilter\" :key=\"opt.value\" :label=\"opt.label\" :value=\"opt.value\" />\n"
+                "      </el-select>\n"
+                "    </el-form-item>\n"
+                "    <el-radio-group v-model=\"queryParams.enabled\">\n"
+                "      <el-radio label=\"1\">启用</el-radio>\n"
+                "    </el-radio-group>\n"
+                "  </el-form>\n"
+                "  <el-tabs><el-tab-pane label=\"全部记录\" /></el-tabs>\n"
+                "  <el-table><ItemTableCols /></el-table>\n"
+                "  <Dialog v-model=\"open\"><el-form :model=\"formData\"><el-form-item label=\"弹窗字段\" /></el-form></Dialog>\n"
+                "</template>\n"
+                "<script setup lang=\"ts\">\n"
+                "import { ItemTableCols, ItemForm } from './components'\n"
+                "import { allSchemas } from './item.data'\n"
+                "const dynamicFilter = [{ label: '按时间', value: 'time' }]\n"
+                "</script>\n",
+                encoding="utf-8",
+            )
+            (root / "src/views/demo/item/detail/index.vue").write_text(
+                "<template>\n"
+                "  <el-descriptions><el-descriptions-item label=\"负责人：\" /></el-descriptions>\n"
+                "  <el-tabs><el-tab-pane label=\"跟进日志\" /></el-tabs>\n"
+                "</template>\n",
+                encoding="utf-8",
+            )
+            (root / "src/views/demo/inbox/index.vue").write_text(
+                "<template><el-table-column label=\"通知类型\" prop=\"type\" /></template>\n",
+                encoding="utf-8",
+            )
+            (root / "src/router/modules/remaining.ts").write_text(
+                "import { Layout } from '@/utils/routerHelper'\n"
+                "const remainingRouter: AppRouteRecordRaw[] = [\n"
+                "  {\n"
+                "    path: '/demo',\n"
+                "    component: Layout,\n"
+                "    children: [\n"
+                "      {\n"
+                "        path: 'item/detail/:id(\\\\d+)',\n"
+                "        component: () => import('@/views/demo/item/detail/index.vue'),\n"
+                "        meta: { activeMenu: '/demo/item' },\n"
+                "      },\n"
+                "    ],\n"
+                "  },\n"
+                "  {\n"
+                "    path: '/personal-inbox',\n"
+                "    component: () => import('@/views/demo/inbox/index.vue'),\n"
+                "    meta: { hidden: true },\n"
+                "  },\n"
+                "]\n"
+                "export default remainingRouter\n",
+                encoding="utf-8",
+            )
+
+            source = UiSource.read(root)
+            vocab = source.page_vocabulary(
+                "demo/item/index",
+                route="/demo/item",
+                dict_labels={"audit_state": [("0", "审核中"), ("1", "审核完成")]},
+                dict_names={"audit_state": "审批状态"},
+            )
+            for expected in (
+                "客户名称",
+                "审批阶段",
+                "采购单",
+                "退货单",
+                "状态",
+                "待审核",
+                "按时间",
+                "启用",
+                "全部记录",
+                "负责人",
+                "跟进日志",
+                "审批状态",
+                "审核中",
+                "审核完成",
+            ):
+                self.assertIn(expected, vocab)
+            for forbidden in ("不该泄漏字段", "弹窗字段", "弹窗表单项", "1"):
+                self.assertNotIn(forbidden, vocab)
+
+            detail_vocab = source.page_vocabulary("", route="/demo/item/detail/42")
+            self.assertIn("负责人", detail_vocab)
+            self.assertIn("跟进日志", detail_vocab)
+            inbox_vocab = source.page_vocabulary("", route="/personal-inbox")
+            self.assertEqual(inbox_vocab, ("通知类型",))
+
 
 if __name__ == "__main__":
     unittest.main()

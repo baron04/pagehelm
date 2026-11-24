@@ -69,6 +69,7 @@ from .page_prompts import (
     _scroll_anchor,
     _shown,
     _unavailable_already_matches,
+    conventions_text,
     page_text,
 )
 
@@ -406,8 +407,9 @@ class YudaoProceduresBase:
     """Application knowledge and bounded page procedures for the shared loop."""
 
     def __init__(self, knowledge, goal_port, origin, *, turn_context: SlimTurnContext | None = None,
-                 publish_step=None, check_fired=None):
+                 conventions=(), publish_step=None, check_fired=None):
         self.knowledge, self.goal_port = knowledge, goal_port
+        self.conventions = tuple(conventions or ())
         self.application = SimpleNamespace(descriptor=SimpleNamespace(origin=origin))
         #: The last business-form batch this turn entered, kept for a handoff made at its end.
         self.form_fill = None
@@ -1751,14 +1753,65 @@ class YudaoProceduresBase:
     def prepare(self, prompt, context):
         bound = self._bound_reads(self.goal_port.data, context.operation, context.page.checkpoint)
         fms_note = ""
-        with self.knowledge.client.read_window(bound._check):
+        conventions_note = ""
+        obs = getattr(context, "obs", None)
+        obs_url = str(getattr(obs, "url", "") or "")
+        split_url = urlsplit(obs_url) if obs_url else None
+        active_route = ""
+        if split_url is not None:
+            active_route = split_url.path or ""
+            if active_route in {"", "/"} and split_url.fragment.startswith("/"):
+                active_route = split_url.fragment.split("?", 1)[0]
+        if active_route in {"", "/"}:
+            active_route = str(getattr(obs, "page_route", "") or active_route)
+        policy_turn = self._ctx().executor_turn
+        client = getattr(getattr(self, "knowledge", None), "client", None)
+        data_obj = getattr(getattr(self, "goal_port", None), "data", None)
+        data_client = getattr(data_obj, "_client", None)
+        with contextlib.ExitStack() as stack:
+            if client is not None and hasattr(client, "read_window"):
+                stack.enter_context(client.read_window(bound._check))
+            if data_client is not None and data_client is not client and hasattr(data_client, "read_window"):
+                stack.enter_context(data_client.read_window(bound._check))
             self.knowledge._load()
             suggested = self.knowledge.suggest(prompt)
             fms_note = self._maybe_fms_dual_month_note(
                 context,
                 f"{prompt}\n{suggested}",
-                policy_turn=self._ctx().executor_turn,
+                policy_turn=policy_turn,
             )
+            conventions = tuple(getattr(self, "conventions", ()) or ())
+            if conventions:
+                from ..conventions.resolver import resolve_turn_conventions
+
+                try:
+                    resolution = resolve_turn_conventions(
+                        conventions,
+                        prompt=prompt,
+                        goal_data=data_obj,
+                        knowledge=self.knowledge,
+                        active_route=active_route,
+                    )
+                except DataRefused:
+                    resolution = None
+                active_conventions = resolution.active if resolution is not None else conventions
+                conventions_note = conventions_text(active_conventions).strip()
+                if isinstance(policy_turn, dict):
+                    policy_turn["conventions_resolution"] = {
+                        "source": resolution.source if resolution is not None else "fallback",
+                        "target_entities": list(resolution.target_entities) if resolution is not None else [],
+                        "target_routes": list(resolution.target_routes) if resolution is not None else [],
+                        "active": [list(getattr(c, "terms", ())) for c in active_conventions],
+                        "suppressed": [
+                            {
+                                "terms": list(getattr(item.convention, "terms", ())),
+                                "matched_words": list(item.matched_words),
+                                "target_entities": list(item.target_entities),
+                                "target_routes": list(item.target_routes),
+                            }
+                            for item in (resolution.suppressed if resolution is not None else ())
+                        ],
+                    }
         dates = _precomputed_dates(prompt, self._ctx().turn_tables)
         table_ctx = self._ctx().turn_tables
         policy_turn = self._ctx().executor_turn
@@ -1787,7 +1840,7 @@ class YudaoProceduresBase:
                 source=source,
                 ui=ui,
             )
-        for extra in (dates, fms_note, domain_note):
+        for extra in (dates, fms_note, domain_note, conventions_note):
             if extra:
                 suggested = (suggested + "\n\n" + extra) if suggested else extra
         return suggested

@@ -1271,6 +1271,7 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
                  draft_steps=None, mutation_prefill=None, location_bindings=False, native_submit=None, page_reads=None,
                  enable_domain_packs: bool = True, **kwargs):
         self._date_override, self._time_zone = today, time_zone
+        self.conventions = tuple(conventions or ())
         kwargs.setdefault("model_steps", MODEL_STEPS)
         application, goal_port = kwargs["application"], kwargs["goal_port"]
         self.knowledge = knowledge
@@ -1283,6 +1284,7 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
         self.procedures = owner = procedure_type(
             knowledge, goal_port, application.descriptor.origin,
             turn_context=self.turn_context,
+            conventions=self.conventions,
             publish_step=lambda facts, tid="": self._publish_step(facts, tid),
             check_fired=self._emit_check_fired,
         )
@@ -1304,7 +1306,7 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
         has_compiled_rules = "source" in getattr(goal_port, "capabilities", lambda: frozenset())()
         profile = ModelLoopProfile(
             system_text(user=actor_name or "当前用户", date=_today(today, time_zone), tz=time_zone,
-                        conventions=conventions,
+                        conventions=(),
                         runtime_source=bool(getattr(getattr(kwargs.get("config"), "source", None),
                                                     "runtime_source", False)),
                         compiled_rules=has_compiled_rules)
