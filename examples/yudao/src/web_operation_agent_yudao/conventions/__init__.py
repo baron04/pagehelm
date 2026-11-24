@@ -6,7 +6,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .resolver import (
+    ConventionResolution,
+    SuppressedConvention,
+    label_matches_term,
+    resolve_turn_conventions,
+)
+
 #: The reference deployment's conventions.
 REFERENCE_CONVENTIONS = Path(__file__).with_name("reference.json")
 
-__all__ = ["REFERENCE_CONVENTIONS"]
+__all__ = [
+    "ConventionResolution",
+    "REFERENCE_CONVENTIONS",
+    "SuppressedConvention",
+    "label_matches_term",
+    "resolve_turn_conventions",
+]

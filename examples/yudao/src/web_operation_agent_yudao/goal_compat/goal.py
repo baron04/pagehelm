@@ -123,6 +123,8 @@ class YudaoGoalData:
         self._actor = ""
         self._menu_entries: tuple[PageEntry, ...] = ()
         self._menu_complete = False
+        self._page_components: dict[str, str] = {}
+        self._page_words_cache: dict[tuple[str, str], tuple[str, ...]] = {}
         #: line entity key -> its line table.
         self._lines: dict[str, _Lines] = {}
         #: entity key -> its endpoints, query parameters and field bookkeeping.
@@ -253,6 +255,8 @@ class YudaoGoalData:
                 self._read.clear()
                 self._shown.clear()
                 self._menu_entries, self._menu_complete = (), False
+                self._page_components.clear()
+                self._page_words_cache.clear()
                 self._read_generation = generation
                 self._schema_generation = generation
             if self._schema is not None:
@@ -328,6 +332,8 @@ class YudaoGoalData:
         except DataRefused:
             pass
         self._breadcrumbs, self._aliases = {}, {}
+        self._page_components = {}
+        self._page_words_cache = {}
         menus = info.get("menus")
         if not isinstance(menus, (list, tuple)):
             raise DataRefused("the application did not return its actor menu catalog")
@@ -367,6 +373,9 @@ class YudaoGoalData:
         for menu, path, listing, names in found:
             self._breadcrumbs[path] = " / ".join(names)
             self._aliases[path] = ()
+            comp = str(menu.get("component") or "")
+            if comp:
+                self._page_components[path] = comp
             if listing is None:
                 pages.append(PageSchema(key=path, entity="", label=str(menu["name"]),
                                         opens_records=False))
@@ -1169,6 +1178,155 @@ class YudaoGoalData:
         matches = [choice.label for choice in fields[0].choices
                    if typography(choice.label) == typography(value)]
         return matches[0] if len(matches) == 1 else value
+
+    def route_entity(self, route: str) -> str:
+        """Resolve an actor UI route (list or mapped detail/config route) to its entity key."""
+        clean = str(route or "").split("#", 1)[0].split("?", 1)[0].rstrip("/")
+        if not clean:
+            return ""
+        schema = self._known()
+        pages = [page for page in schema.pages if page.key == clean and page.entity]
+        if len(pages) == 1:
+            return pages[0].entity
+
+        def _matches_template(template: str) -> bool:
+            norm = template.rstrip("/")
+            if not norm:
+                return False
+            if "{" not in norm:
+                return norm == clean
+            pattern = re.sub(r"\\\{[A-Za-z_]\w*\\\}", r"[^/]+", re.escape(norm))
+            return bool(re.fullmatch(pattern, clean))
+
+        for list_route, template in getattr(self._ui, "records", {}).items():
+            if _matches_template(template):
+                matched = [page for page in schema.pages if page.key == list_route and page.entity]
+                if len(matched) == 1:
+                    return matched[0].entity
+
+        route_views = getattr(self._ui, "route_views", {})
+        comp = route_views.get(clean, "")
+        if not comp:
+            for template, cand_comp in route_views.items():
+                if _matches_template(template):
+                    comp = cand_comp
+                    break
+        if comp:
+            for menu_route, comps in getattr(self._ui, "active_menu_views", {}).items():
+                if comp in comps:
+                    matched = [page for page in schema.pages if page.key == menu_route and page.entity]
+                    if len(matched) == 1:
+                        return matched[0].entity
+            comp_dir = comp.rsplit("/", 1)[0]
+            with self._lock:
+                dir_matches = {
+                    key
+                    for key, spec in self._entities.items()
+                    if spec.component and comp_dir.startswith(spec.component.rsplit("/", 1)[0] + "/")
+                }
+            if len(dir_matches) == 1:
+                return next(iter(dir_matches))
+        return ""
+
+    def page_catalog(self) -> tuple[tuple[str, str, str, tuple[str, ...]], ...]:
+        """Read-only `(entity_key, route, label, aliases_and_breadcrumbs)` entries for this actor."""
+        schema = self._known()
+        with self._lock:
+            breadcrumbs = dict(self._breadcrumbs)
+            aliases = dict(self._aliases)
+            entity_labels = {
+                key: tuple(dict.fromkeys(
+                    s for s in (spec.label, spec.full_label, *(aliases.get(key) or ())) if s
+                ))
+                for key, spec in self._entities.items()
+            }
+        entries: list[tuple[str, str, str, tuple[str, ...]]] = []
+        seen_pages: set[tuple[str, str]] = set()
+        for page in schema.pages:
+            ent = schema.entity(page.entity) if page.entity else None
+            extras = [
+                *(aliases.get(page.key) or ()),
+                *(s.strip() for s in breadcrumbs.get(page.key, "").split("/") if s.strip()),
+                breadcrumbs.get(page.key, ""),
+            ]
+            if ent is not None:
+                extras.append(ent.label)
+                extras.extend(entity_labels.get(page.entity, ()))
+            label = (ent.label if ent is not None and ent.label else page.label) or page.label
+            uniq = tuple(dict.fromkeys(s for s in extras if s))
+            entries.append((page.entity, page.key, label, uniq))
+            seen_pages.add((page.entity, page.key))
+        for ent in schema.entities:
+            if any(ek == ent.key for ek, _ in seen_pages):
+                continue
+            entries.append((ent.key, "", ent.label, entity_labels.get(ent.key, ())))
+        return tuple(entries)
+
+    def page_words(self, *, entity: str = "", route: str = "") -> tuple[str, ...]:
+        """Page vocabulary (columns, filters, options, dictionaries, tabs) for entity/route."""
+        schema = self._known()
+        clean_route = str(route or "").split("#", 1)[0].split("?", 1)[0].rstrip("/")
+        resolved_entity = entity or (self.route_entity(clean_route) if clean_route else "")
+        cache_key = (resolved_entity, clean_route)
+        with self._lock:
+            cached = self._page_words_cache.get(cache_key)
+            if cached is not None:
+                return cached
+            spec = self._entities.get(resolved_entity) if resolved_entity else None
+            dicts_copy = {k: tuple(v) for k, v in self._dicts.items()}
+            dict_names_copy = dict(self._dict_names)
+            route_comp = self._page_components.get(clean_route, "") if clean_route else ""
+
+        comp = route_comp or (spec.component if spec is not None else "")
+        effective_route = clean_route
+        if not effective_route and resolved_entity:
+            matching_pages = [page.key for page in schema.pages if page.entity == resolved_entity]
+            if len(matching_pages) == 1:
+                effective_route = matching_pages[0]
+
+        ui_vocab: tuple[str, ...] = ()
+        if hasattr(self._ui, "page_vocabulary"):
+            ui_vocab = self._ui.page_vocabulary(
+                component=comp,
+                route=effective_route,
+                dict_labels=dicts_copy,
+                dict_names=dict_names_copy,
+            )
+
+        words: list[str] = []
+        seen: set[str] = set()
+
+        def _add(raw: object) -> None:
+            cleaned = " ".join(str(raw or "").split()).strip().rstrip(":：").strip()
+            if cleaned and cleaned not in seen:
+                seen.add(cleaned)
+                words.append(cleaned)
+
+        for word in ui_vocab:
+            _add(word)
+
+        ent = schema.entity(resolved_entity) if resolved_entity else None
+        if ent is not None:
+            for section in getattr(ent, "sections", ()) or ():
+                _add(section)
+            listed_keys = {f.key for f in ent.fields if f.listed}
+            include_unlisted = not ui_vocab
+            for f in ent.fields:
+                if include_unlisted or f.listed:
+                    _add(f.label)
+                    for choice in f.choices:
+                        _add(choice.label)
+            if spec is not None and spec.list_path:
+                code_map = self.code_names(spec.list_path)
+                for field_key, mapping in code_map.items():
+                    if include_unlisted or field_key in listed_keys:
+                        for lbl in mapping.values():
+                            _add(lbl)
+
+        result = tuple(words)
+        with self._lock:
+            self._page_words_cache[cache_key] = result
+        return result
 
     def query_scope(self, entity: str, parameters: dict, *, label: str, ttl_s: float = 60) -> Native:
         """Server-side query binding, not a model tool or proof of current page state.
