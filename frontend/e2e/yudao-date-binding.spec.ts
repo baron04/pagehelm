@@ -261,10 +261,16 @@ test('editing an existing range preserves the native change callbacks and endpoi
   await info.attach('existing-range-native-comparison', {body: JSON.stringify(results), contentType: 'application/json'})
   for (const entry of results) expect(entry.result.values).toEqual(['2026-10-01 00:00:00', '2026-10-31 23:59:59'])
   const changes = results.map(entry => entry.result.callbacks.filter(row => row.kind === 'change'))
-  expect(changes[0]).toHaveLength(2)
-  expect(changes[1]).toHaveLength(changes[0]!.length)
+  // Ordinary mode drives native Element Plus calendar selection without intermediate text blur,
+  // emitting a single change event on completion; binding mode preserves the untouched endpoint mid-edit.
+  expect(changes[0]).toEqual([{kind: 'change', value: ['2026-10-01 00:00:00', '2026-10-31 23:59:59']}])
+  expect(changes[1]).toEqual([
+    {kind: 'change', value: ['2026-10-01 00:00:00', '2026-12-31 23:59:59']},
+    {kind: 'change', value: ['2026-10-01 00:00:00', '2026-10-31 23:59:59']},
+  ])
   expect(changes[1]!.at(-1)).toEqual(changes[0]!.at(-1))
-  // The range panel retains the untouched endpoint's application time default;
-  // ordinary text parsing temporarily zeroes it before selecting the second end.
-  expect(changes[1]![0]!.value).toEqual(['2026-10-01 00:00:00', '2026-12-31 23:59:59'])
+  for (const entry of results) {
+    expect(entry.requests.some(q => new URLSearchParams(q).get('start') === '2026-10-01 00:00:00'
+      && new URLSearchParams(q).get('end') === '2026-10-31 23:59:59')).toBe(true)
+  }
 })

@@ -35,6 +35,101 @@ _APPLIED_QUERY_RE = re.compile(r"^页面生效的查询[^:：]*:\s*GET\s+(\S+)\s
 _VERIFIED_COND_RE = re.compile(r"^已核验的列表查询条件:\s*(.+)$", re.M)
 _UNTRACED_BLOCK_RE = re.compile(r"以下值在本轮读取中找不到|没有结束：|找不到出处")
 _FENCED_JSON_RE = re.compile(r"BEGIN_UNTRUSTED_APPLICATION_DATA\n(.*?)\nEND_UNTRUSTED_APPLICATION_DATA", re.S)
+_FIND_HEADER_RE = re.compile(r"^[^\s][^\n]*?（([A-Za-z0-9_/-]+)；页面：[^\n]*?）：(.*)$")
+_FIND_ID_RE = re.compile(r"(?:编号\s+|ID=)([^\s））；;)]+)|\(([0-9A-Za-z_-]+)\)")
+
+
+def _parse_find_record_blocks(out: str) -> dict[str, tuple[str, set[str]]]:
+    """Parse entity-scoped candidate blocks and exact bounded IDs from find_record output."""
+    m = _FENCED_JSON_RE.search(out or "")
+    body = m.group(1) if m else (out or "")
+    grouped: dict[str, list[str]] = {}
+    current_entity = ""
+    for line in body.splitlines():
+        hm = _FIND_HEADER_RE.match(line)
+        if hm:
+            current_entity = hm.group(1).strip("/")
+            grouped.setdefault(current_entity, []).append(hm.group(2))
+        elif current_entity and line.startswith((" ", "\t")):
+            grouped[current_entity].append(line)
+        else:
+            current_entity = ""
+    blocks: dict[str, tuple[str, set[str]]] = {}
+    for entity, lines in grouped.items():
+        text = "\n".join(lines)
+        ids = {g1 or g2 for g1, g2 in _FIND_ID_RE.findall(text) if (g1 or g2)}
+        blocks[entity] = (text, ids)
+    return blocks
+
+
+def _date_token_matches(sent_val: str, token: str) -> bool:
+    """Match an emitted date/datetime/month param against the requested date or YYYY-MM token."""
+    sv = str(sent_val or "").strip()
+    tok = str(token or "").strip()
+    if not sv or not tok:
+        return False
+    if sv == tok or sv.startswith(tok + " ") or sv.startswith(tok + "T"):
+        return True
+    if re.fullmatch(r"\d{4}-\d{2}", tok) and sv.startswith(tok + "-"):
+        return True
+    return False
+
+
+def _split_year_month_matches(sent_filters: dict, token: str) -> bool:
+    """Accept split year + month filter params only for pure YYYY-MM month targets."""
+    if not re.fullmatch(r"\d{4}-\d{2}", token):
+        return False
+    year_tok, month_tok = token.split("-")
+    month_num = str(int(month_tok))
+    non_empty = [(str(k), str(v).strip()) for k, v in sent_filters.items() if v is not None and str(v).strip() != ""]
+    year_keys = {k for k, v in non_empty if v == year_tok}
+    month_keys = {k for k, v in non_empty if v in {month_tok, month_num}}
+    return bool(any(yk != mk for yk in year_keys for mk in month_keys))
+
+
+def _filter_sent_matches_requested(cell: dict, bag: dict, pre_filters: dict, sent_filters: dict) -> tuple[bool, str]:
+    """Verify page-emitted GET filter parameters genuinely reflect the requested filter value."""
+    non_empty = [
+        (str(k), str(v).strip())
+        for k, v in sent_filters.items()
+        if v is not None and str(v).strip() != ""
+    ]
+    if not non_empty:
+        return False, f"page GET carried no non-empty filter params: before={pre_filters} after={sent_filters}"
+
+    changed = {
+        k: v for k, v in sent_filters.items()
+        if v is not None and str(v).strip() != "" and str(pre_filters.get(k, "")).strip() != str(v).strip()
+    }
+    used = str(bag.get("used_value") or cell.get("value") or "").strip()
+    mode = str(cell.get("value_mode") or "")
+    ctrl = str(cell.get("control_kind") or "")
+    qp = str(cell.get("query_param") or "").strip()
+
+    if " ~ " in used or ctrl in {"daterange", "datetimerange", "monthrange"}:
+        parts = [p.strip() for p in used.split(" ~ ", 1)]
+        if len(parts) != 2 or not all(parts):
+            return False, f"invalid requested date range {used!r}"
+        start_tok, end_tok = parts
+        start_hits = {i for i, (_k, v) in enumerate(non_empty) if _date_token_matches(v, start_tok)}
+        end_hits = {i for i, (_k, v) in enumerate(non_empty) if _date_token_matches(v, end_tok)}
+        if any(i != j for i in start_hits for j in end_hits):
+            return True, ""
+        return False, f"page GET missing requested date range {used!r}: sent={sent_filters}"
+
+    if mode in {"explicit_date", "relative_date"}:
+        if any(_date_token_matches(v, used) for _k, v in non_empty) or _split_year_month_matches(sent_filters, used):
+            return True, ""
+        return False, f"page GET missing requested date {used!r}: sent={sent_filters}"
+
+    if mode == "option_label":
+        if changed or (qp and any(k == qp or k.startswith(qp + "[") for k, _v in non_empty)):
+            return True, ""
+        return False, f"page GET did not emit requested option param {qp!r}: before={pre_filters} after={sent_filters}"
+
+    if any(v == used for _k, v in non_empty) and (changed or (qp and any(k == qp and v == used for k, v in non_empty))):
+        return True, ""
+    return False, f"page GET missing requested filter value {used!r}: before={pre_filters} after={sent_filters}"
 
 
 def _call(tool_name: str, args: dict) -> dict:
@@ -607,19 +702,37 @@ def evaluate_cell(
             return _fail(cell, "tool_error", "missing find_record output", elapsed_s)
         if "查找未完成" in out or "查找失败" in out:
             return _fail(cell, "api_rejected", out[:240], elapsed_s)
-        # Check whether the entity was excluded from find_record due to required parameters.
-        expected_id = str(cell.get("expected_id") or "")
-        if f"编号 {expected_id}" not in out and f"ID={expected_id}" not in out and f"({expected_id})" not in out:
-            # Verify on live oracle whether the record still exists under this actor.
-            live = oracle.fetch_all(cell["list_path"], cell.get("params") or {}, paged=True, max_rows=500)
-            if not any(str(r.get("id")) == expected_id for r in live.get("rows") or ()):
-                return _untested(cell, "record_absent_on_env", elapsed_s)
-            return _fail(cell, "candidate_missing", f"expected id {expected_id} not in find_record output: {out[:200]}", elapsed_s)
-        multi = cell.get("expected_multi_entities") or ()
+        # Check entity-scoped candidates and exact multi-entity headers.
+        target_entity = str(cell.get("entity") or "").strip("/")
+        expected_id = str(cell.get("expected_id") or "").strip()
+        blocks = _parse_find_record_blocks(out)
+        block_text, entity_ids = blocks.get(target_entity, ("", set()))
+        if expected_id:
+            if target_entity not in blocks or expected_id not in entity_ids:
+                # Verify on live oracle whether the record still exists under this actor.
+                live = oracle.fetch_all(cell["list_path"], cell.get("params") or {}, paged=True, max_rows=500)
+                if not any(str(r.get("id")) == expected_id for r in live.get("rows") or ()):
+                    return _untested(cell, "record_absent_on_env", elapsed_s)
+                return _fail(
+                    cell,
+                    "candidate_missing",
+                    f"expected id {expected_id} for {target_entity} not in find_record output: {out[:200]}",
+                    elapsed_s,
+                )
+        else:
+            query_text = str(cell.get("query_text") or "").strip()
+            if target_entity not in blocks or (query_text and query_text not in block_text):
+                return _fail(
+                    cell,
+                    "candidate_missing",
+                    f"expected entity {target_entity} match for {query_text!r} not in find_record output: {out[:200]}",
+                    elapsed_s,
+                )
+        multi = [str(e).strip("/") for e in (cell.get("expected_multi_entities") or ()) if str(e).strip("/")]
         if len(multi) >= 2:
-            shown_multi = [e for e in multi if e in out]
+            shown_multi = [e for e in multi if e in blocks]
             if len(shown_multi) < min(len(multi), 4):
-                missing_ents = [e for e in multi if e not in out]
+                missing_ents = [e for e in multi if e not in blocks]
                 return _fail(cell, "candidate_missing", f"same-name entities missing: {missing_ents}", elapsed_s)
         ok_deliv, deliv_err = _check_delivery_accepted(exe, bag)
         if not ok_deliv:
@@ -848,9 +961,9 @@ def evaluate_cell(
         last_g = post_gets[-1]
         pre_filters = {k: v for k, v in ((pre_gets[-1].get("params") if pre_gets else {}) or {}).items() if k not in {"pageNo", "pageSize"}}
         sent_filters = {k: v for k, v in (last_g.get("params") or {}).items() if k not in {"pageNo", "pageSize"}}
-        changed_filters = {k: v for k, v in sent_filters.items() if v != "" and str(pre_filters.get(k, "")) != str(v)}
-        if not sent_filters or (not changed_filters and cell.get("value_mode") not in {"relative_date", "option_label"}):
-            return _fail(cell, "filter_ineffective", f"page GET did not add/update filter param: before={pre_filters} after={sent_filters}", elapsed_s)
+        ok_filter, filter_err = _filter_sent_matches_requested(cell, bag, pre_filters, sent_filters)
+        if not ok_filter:
+            return _fail(cell, "filter_ineffective", filter_err, elapsed_s)
 
         # Independent API read using the exact filter params the page sent.
         raw_params: dict = {}

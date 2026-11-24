@@ -1619,7 +1619,7 @@ describe('native editor mode is current application state', () => {
       expect(facts.readPageQuery()).toBeUndefined()
     } finally { facts.dispose() }
   })
-  it('supports hyphenated list paths, benign keyword filters, >16 empty-param pruning, tree rows, and unpaged id-free lists', async () => {
+  it('supports hyphenated list paths, benign keyword filters, empty-param pruning, sensitive key coverage, tree rows, and unpaged id-free lists', async () => {
     const state = mountedPage('/synthetic/items', 'SyntheticItems')
     const tableProps = pageTable(state, [{id: 1, children: [{id: 2}]}])
     class Request extends EventTarget {
@@ -1639,6 +1639,17 @@ describe('native editor mode is current application state', () => {
         req.open('GET', url)
         req.send()
       }
+      // Empty params are pruned consistently even when total parameters <= 16.
+      sendReq(
+        '/admin-api/synthetic/item-page?pageNo=1&pageSize=10&name=&employeeKeyword=abc&status=',
+        {code: 0, data: {list: [{id: 1}, {id: 2}], total: 2}},
+      )
+      await vi.waitFor(() => {
+        expect(facts.readPageQuery()).toEqual({
+          path: '/admin-api/synthetic/item-page',
+          parameters: {pageNo: '1', pageSize: '10', employeeKeyword: 'abc'},
+        })
+      })
       const empties = Array.from({length: 14}, (_, i) => `f${i}=`).join('&')
       sendReq(
         `/admin-api/synthetic/item-page?pageNo=1&pageSize=10&alphaKeyword=abc&${empties}`,
@@ -1650,8 +1661,22 @@ describe('native editor mode is current application state', () => {
           parameters: {pageNo: '1', pageSize: '10', alphaKeyword: 'abc'},
         })
       })
-      sendReq('/admin-api/synthetic/item-page?apiKey=secret-key', {code: 0, data: {list: [{id: 1}, {id: 2}], total: 2}})
-      expect(facts.readPageQuery()).toBeUndefined()
+      for (const badParam of [
+        'apiKey=secret-key',
+        'clientKey=ck',
+        'pubKey=pk',
+        'keyId=1',
+        'access_key_id=ak',
+        'sshKey=ssh',
+        'secretKeyword=abc',
+        'keyKeyword=abc',
+        'keywordKey=abc',
+        'keywordId=1',
+        'clientKey=',
+      ]) {
+        sendReq(`/admin-api/synthetic/item-page?pageNo=1&pageSize=10&${badParam}`, {code: 0, data: {list: [{id: 1}, {id: 2}], total: 2}})
+        expect(facts.readPageQuery()).toBeUndefined()
+      }
       sendReq('/admin-api/synthetic/item-simple-list?pageNo=1', {code: 0, data: [{id: 1}, {id: 2}]})
       expect(facts.readPageQuery()).toBeUndefined()
 

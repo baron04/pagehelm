@@ -13,6 +13,7 @@ import {
   nativeMonthRangeStep,
   nativeRangeDateCell,
   nativeRangeDateStep,
+  rangePopupDialog,
   withLineControls,
   withTreeQueryControls,
   withUserStatusControls,
@@ -30,25 +31,29 @@ const notify = callback => { try { callback() } catch { /* Diagnostics never sto
 
 async function dispatchPointerClick(element, focusTarget, pauseMs, invoked) {
   await scrollIntoViewIfNeeded(element)
-  const frame = element.ownerDocument.defaultView?.frameElement
+  const ownerWin = element.ownerDocument.defaultView
+  const frame = ownerWin?.frameElement
   if (frame) await scrollIntoViewIfNeeded(frame)
   const rect = element.getBoundingClientRect()
   const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2
-  const hit = element.ownerDocument.elementFromPoint(x, y)
+  const hit = element.ownerDocument.elementFromPoint?.(x, y)
+  const ElementCtor = ownerWin?.HTMLElement ?? HTMLElement
+  const MouseCtor = ownerWin?.MouseEvent ?? MouseEvent
+  const PointerCtor = ownerWin?.PointerEvent ?? (typeof PointerEvent === 'function' ? PointerEvent : MouseCtor)
   const avoidInnerInput = shouldAvoidSelectInnerInput(element, hit)
-  const target = hit instanceof HTMLElement && element.contains(hit) && !avoidInnerInput ? hit : element
+  const target = hit instanceof ElementCtor && element.contains(hit) && !avoidInnerInput ? hit : element
   const pointer = {bubbles: true, cancelable: true, clientX: x, clientY: y, pointerType: 'mouse'}
   const mouse = {bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0}
   notify(invoked)
-  target.dispatchEvent(new PointerEvent('pointerover', pointer))
-  target.dispatchEvent(new PointerEvent('pointerenter', {...pointer, bubbles: false}))
-  target.dispatchEvent(new MouseEvent('mouseover', mouse))
-  target.dispatchEvent(new MouseEvent('mouseenter', {...mouse, bubbles: false}))
-  target.dispatchEvent(new PointerEvent('pointerdown', pointer))
-  target.dispatchEvent(new MouseEvent('mousedown', mouse))
+  target.dispatchEvent(new PointerCtor('pointerover', pointer))
+  target.dispatchEvent(new PointerCtor('pointerenter', {...pointer, bubbles: false}))
+  target.dispatchEvent(new MouseCtor('mouseover', mouse))
+  target.dispatchEvent(new MouseCtor('mouseenter', {...mouse, bubbles: false}))
+  target.dispatchEvent(new PointerCtor('pointerdown', pointer))
+  target.dispatchEvent(new MouseCtor('mousedown', mouse))
   focusTarget.focus({preventScroll: true})
-  target.dispatchEvent(new PointerEvent('pointerup', pointer))
-  target.dispatchEvent(new MouseEvent('mouseup', mouse))
+  target.dispatchEvent(new PointerCtor('pointerup', pointer))
+  target.dispatchEvent(new MouseCtor('mouseup', mouse))
   target.click()
   if (focusTarget !== element) focusTarget.focus({preventScroll: true})
   await pause(pauseMs)
@@ -60,10 +65,13 @@ async function dispatchPointerClick(element, focusTarget, pauseMs, invoked) {
  * The pause after the click, in which the page reacts before it is observed, is kept. */
 export async function clickElement(element, invoked = () => {}) {
   if (pressed) {
-    pressed.dispatchEvent(new PointerEvent('pointerout', {bubbles: true}))
-    pressed.dispatchEvent(new PointerEvent('pointerleave', {bubbles: false}))
-    pressed.dispatchEvent(new MouseEvent('mouseout', {bubbles: true}))
-    pressed.dispatchEvent(new MouseEvent('mouseleave', {bubbles: false}))
+    const prevWin = pressed.ownerDocument.defaultView
+    const MouseCtor = prevWin?.MouseEvent ?? MouseEvent
+    const PointerCtor = prevWin?.PointerEvent ?? (typeof PointerEvent === 'function' ? PointerEvent : MouseCtor)
+    pressed.dispatchEvent(new PointerCtor('pointerout', {bubbles: true}))
+    pressed.dispatchEvent(new PointerCtor('pointerleave', {bubbles: false}))
+    pressed.dispatchEvent(new MouseCtor('mouseout', {bubbles: true}))
+    pressed.dispatchEvent(new MouseCtor('mouseleave', {bubbles: false}))
     pressed.blur()
   }
   pressed = element
@@ -81,8 +89,10 @@ async function clickRangePopupElement(target, ownerInput, invoked = () => {}) {
 export async function inputTextElement(element, text, invoked = () => {}) {
   await clickElement(element, invoked)
   notify(invoked)
+  const ownerWin = element.ownerDocument.defaultView
+  const EventCtor = ownerWin?.Event ?? Event
   Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), 'value').set.call(element, text)
-  element.dispatchEvent(new Event('input', {bubbles: true}))
+  element.dispatchEvent(new EventCtor('input', {bubbles: true}))
   await pause(100)
 }
 
@@ -173,24 +183,27 @@ export class PageController extends GenericPageController {
       }
       await clickRangePopupElement(cell, element, () => record('ordinary'))
       if (root?.classList.contains('el-date-editor--datetimerange') && end >= 0) {
-        const popupId = element.getAttribute('aria-controls')
-        const popup = popupId && document.getElementById(popupId)
+        const popup = rangePopupDialog(element)
+        const ownerWin = element.ownerDocument.defaultView
+        const InputCtor = ownerWin?.HTMLInputElement ?? HTMLInputElement
+        const ButtonCtor = ownerWin?.HTMLButtonElement ?? HTMLButtonElement
+        const EventCtor = ownerWin?.Event ?? Event
         const timeMatch = / (\d{2}:\d{2}:\d{2})$/.exec(text || '')
         const desiredTime = timeMatch ? timeMatch[1] : (end === 1 ? '23:59:59' : '')
         if (popup && desiredTime) {
           const wraps = [...popup.querySelectorAll('.el-date-range-picker__time-header .el-date-range-picker__editors-wrap')]
           const timeInput = wraps[end]?.querySelectorAll('input')?.[1]
-          if (timeInput instanceof HTMLInputElement && !timeInput.readOnly && !timeInput.disabled) {
+          if (timeInput instanceof InputCtor && !timeInput.readOnly && !timeInput.disabled) {
             if (timeMatch || (end === 1 && timeInput.value === '00:00:00')) {
-              Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(timeInput, desiredTime)
-              timeInput.dispatchEvent(new Event('input', {bubbles: true}))
-              timeInput.dispatchEvent(new Event('change', {bubbles: true}))
+              Object.getOwnPropertyDescriptor(InputCtor.prototype, 'value').set.call(timeInput, desiredTime)
+              timeInput.dispatchEvent(new EventCtor('input', {bubbles: true}))
+              timeInput.dispatchEvent(new EventCtor('change', {bubbles: true}))
             }
           }
         }
         if (popup && end === 1) {
           const confirmBtn = popup.querySelector('.el-picker-panel__footer button.is-plain:not(.is-text)')
-          if (confirmBtn instanceof HTMLButtonElement && !confirmBtn.disabled && confirmBtn.isConnected) {
+          if (confirmBtn instanceof ButtonCtor && !confirmBtn.disabled && confirmBtn.isConnected) {
             await dispatchPointerClick(confirmBtn, confirmBtn, 250, () => record('ordinary'))
             pressed = confirmBtn
             element.blur()

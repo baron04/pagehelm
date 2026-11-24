@@ -30,19 +30,48 @@ def form(*, lifetime="live-a", instance="fields-a", query=False):
         render_state="ready", page_route="/entry")
 
 
+def date_range_dialog_form(*, scope: str = "dialog:create-act", instance: str = "dlg-inst",
+                           lifetime: str = "dlg-life", start_val: str = "", end_val: str = "",
+                           remark_val: str = "默认备注", submit_label: str = "确定",
+                           end_attrs: dict | None = None):
+    attrs = {"form_scope": scope, "form_instance": instance, "form_lifetime": lifetime}
+    range_attrs = {**attrs, "aria-haspopup": "dialog", "aria-controls": "range-pop"}
+    end_binding = {"field": "endDate", "title": "结束日期"} if end_attrs is None else end_attrs
+    elements = [
+        ElementRef("e1", "combobox", "开始日期", "input", 1,
+                   {**range_attrs, "field": "startDate", "field_label": "活动时间", "value": start_val}),
+        ElementRef("e2", "combobox", "结束日期", "input", 1,
+                   {**range_attrs, **end_binding, "value": end_val}),
+        ElementRef("e3", "textbox", "备注", "input", 1,
+                   {**attrs, "field": "remark", "field_label": "备注", "value": remark_val}),
+        ElementRef("e4", "button", submit_label, "button", 1, attrs),
+    ]
+    return PageObservation(1, 1, "https://synthetic.test/activity", "Activity", [], elements,
+        content="[1]<input />\n[2]<input />\n[3]<input />\n[4]<button " + submit_label + ">",
+        render_state="ready", page_route="/activity")
+
+
 class DraftLoop(LoopFixture, SlimTurnExecutor):
     """The real decision loop and field/readback procedures over an isolated transport."""
 
-    def __init__(self, replies, *, query=False, handoff_ok=True, reindex_handoff=False, drop_scope_after_fill=False):
+    def __init__(self, replies, *, query=False, handoff_ok=True, reindex_handoff=False,
+                 drop_scope_after_fill=False, initial_obs=None, request=None,
+                 reindex_on_uncommitted_fill=False):
         super().__init__(replies, lambda *_: None)
-        self.state.obs = form(query=query)
+        self.state.obs = initial_obs if initial_obs is not None else form(query=query)
         self.state.audit = self.state.ledger.append
         self.handoff_ok = handoff_ok
         self.reindex_handoff = reindex_handoff
         self.drop_scope_after_fill = drop_scope_after_fill
+        self.reindex_on_uncommitted_fill = reindex_on_uncommitted_fill
+        self.fill_args: list[dict] = []
+        self.settled_calls = 0
+        self.handoff_commands: list[dict] = []
+        self.dispatch_settled_counts: list[tuple[str, int]] = []
+        self.marked_results: list[str] = []
         self._tables = TurnTables(BASELINE_SESSION_HANDOFFS)
         self.turn_context = SlimTurnContext(
-            current_request="名称先填Synthetic，备注填Note，默认值不变，由我提交并标出按钮",
+            current_request=request or "名称先填Synthetic，备注填Note，默认值不变，由我提交并标出按钮",
             write_intent=WriteIntent("draft"),
             turn_tables=(self._tables, "2026-11-14", "Asia/Shanghai"),
         )
@@ -50,7 +79,11 @@ class DraftLoop(LoopFixture, SlimTurnExecutor):
         self.owner.turn_context = self.turn_context
         self.owner.goal_port = NS(data=None)
         self.owner.knowledge = None
-        self.owner._settled = lambda *_args, **_kwargs: None
+
+        def _settled(*_args, **_kwargs):
+            self.settled_calls += 1
+
+        self.owner._settled = _settled
         self.state.page = NS(checkpoint=lambda: None,
             execute=self.execute_page,
             handoff=lambda fields, submit: self.execute_page("handoff_form", {"fields": fields, "submit": submit}))
@@ -60,6 +93,11 @@ class DraftLoop(LoopFixture, SlimTurnExecutor):
         if not hasattr(self, "wire"):
             self.wire = SubmitWire(state.obs)
         issued = self.wire.command(action, args)
+        self.dispatch_settled_counts.append((action, self.settled_calls))
+        if action == "fill":
+            self.fill_args.append(dict(args))
+        elif action == "handoff_form":
+            self.handoff_commands.append(dict(args))
         receipt = self._browser(state, action, issued.command.args)
         returned = self.wire.result(issued, receipt)
         self._tool_receipts[-1] = returned
@@ -69,16 +107,21 @@ class DraftLoop(LoopFixture, SlimTurnExecutor):
         before = state.obs
         epoch = max(before.epoch, self.wire.current.page_epoch) + 1
         elements = [replace(e, epoch=epoch) for e in before.elements]
+        content = before.content
         if action in {"fill", "select"}:
             value = {"value": args["value"], **({"selected_option": args["option_label"]} if action == "select" else {})}
             elements = [replace(e, attrs={**e.attrs, **value})
                         if e.ref == args["ref"] else e for e in elements]
+            if action == "fill" and self.reindex_on_uncommitted_fill and args.get("commit") is False:
+                elements = [replace(e, ref=f"e{i}") for i, e in enumerate(elements, 11)]
+                content = "\n".join(f"[{i}]<{'input' if e.tag == 'input' else 'button'}>"
+                                    for i, e in enumerate(elements, 11))
             if self.drop_scope_after_fill:
                 elements = [replace(e, attrs={key: value for key, value in e.attrs.items()
                                              if key != "form_scope"}) for e in elements]
         if action == "handoff_form" and self.reindex_handoff:
             elements = [replace(e, ref=f"e{i}") for i, e in enumerate(elements, 11)]
-        state.obs = replace(before, epoch=epoch, elements=elements)
+        state.obs = replace(before, epoch=epoch, elements=elements, content=content)
         receipt = ActionReceipt(1, f"command-{len(self.actions)}", action, args,
             action != "handoff_form" or self.handoff_ok,
             observation=state.obs, url_before=before.url, url_after=state.obs.url,
@@ -112,6 +155,8 @@ class DraftLoop(LoopFixture, SlimTurnExecutor):
             result = LoopToolResult("grown", kind="page")
         else:
             raise AssertionError(name)
+        if result.marked:
+            self.marked_results.append(result.marked)
         return replace(result, entered=tuple(local["touched"]), trace=tuple(local["trace"]))
 
     def run(self):
@@ -290,6 +335,85 @@ class DraftCompletionTests(unittest.TestCase):
         loop = DraftLoop([fill(), finish(), finish()], drop_scope_after_fill=True)
         self.assertIn("尚未完成同一实时表单", loop.run())
         self.assertEqual(loop.state.terminal_reason, "agent_refused")
+
+    def test_create_form_date_range_prefill_commits_only_on_end_and_completes_handoff(self):
+        obs = date_range_dialog_form(scope="dialog:create-act", start_val="", end_val="",
+                                     remark_val="默认备注", submit_label="确定")
+        loop = DraftLoop([
+            reply(call("fill_fields",
+                       fields=[{"label": "活动时间", "value": "2026-10-01 ~ 2026-10-31"}],
+                       then_highlight="确定")),
+            reply(call("finish", status="done", answer="已预填活动时间，请核对后手动点击确定提交。",
+                       items=[{"item": "活动表单预填", "kind": "page", "status": "delivered", "receipts": []}])),
+        ], initial_obs=obs, request="请帮我把活动时间设为2026-10-01到2026-10-31，备注不变，由我确认提交",
+            reindex_on_uncommitted_fill=True)
+        answer = loop.run()
+        self.assertEqual(loop.state.terminal_reason, "")
+        self.assertIn("手动点击「确定」提交", answer)
+        self.assertEqual(loop.actions, ["fill", "fill", "handoff_form"])
+        self.assertEqual(loop.fill_args, [
+            {"ref": "e1", "value": "2026-10-01", "commit": False},
+            {"ref": "e12", "value": "2026-10-31", "commit": True},
+        ])
+        self.assertEqual(loop.dispatch_settled_counts, [("fill", 0), ("fill", 0), ("handoff_form", 1)])
+        self.assertEqual(loop.handoff_commands[-1]["submit"]["label"], "确定")
+        self.assertEqual(
+            {(item["field"], item["value"]) for item in loop.handoff_commands[-1]["fields"]},
+            {("startDate", "2026-10-01"), ("endDate", "2026-10-31")},
+        )
+        self.assertEqual(loop.marked_results, ["确定"])
+        self.assertIsNotNone(loop.turn.get("draft_handoff_form"))
+        self.assertEqual(loop.turn["handoff_facts"]["completed_fields"],
+                         [{"name": "活动时间", "value": "2026-10-01 ~ 2026-10-31"}])
+        self.assertEqual(loop.state.obs.elements[2].attrs["value"], "默认备注")
+
+    def test_edit_form_prepopulated_date_range_keeps_start_uncommitted_and_preserves_untouched_fields(self):
+        obs = date_range_dialog_form(scope="dialog:edit-act", start_val="2026-09-01", end_val="2026-09-30",
+                                     remark_val="保留原备注", submit_label="保存")
+        loop = DraftLoop([
+            reply(call("fill_fields",
+                       fields=[{"label": "活动时间", "value": "2026-10-01 ~ 2026-10-31"}],
+                       then_highlight="保存")),
+            reply(call("finish", status="done", answer="已修改活动时间为2026-10-01至2026-10-31，请核对后手动点击保存。",
+                       items=[{"item": "活动编辑预填", "kind": "page", "status": "delivered", "receipts": []}])),
+        ], initial_obs=obs, request="请将活动时间修改为2026-10-01到2026-10-31，备注保持原样，由我点击保存")
+        answer = loop.run()
+        self.assertEqual(loop.state.terminal_reason, "")
+        self.assertIn("手动点击「保存」提交", answer)
+        self.assertEqual(loop.actions, ["fill", "fill", "handoff_form"])
+        self.assertEqual(loop.fill_args, [
+            {"ref": "e1", "value": "2026-10-01", "commit": False},
+            {"ref": "e2", "value": "2026-10-31", "commit": True},
+        ])
+        self.assertEqual(loop.dispatch_settled_counts, [("fill", 0), ("fill", 0), ("handoff_form", 1)])
+        self.assertEqual(loop.state.obs.elements[0].attrs["value"], "2026-10-01")
+        self.assertEqual(loop.state.obs.elements[1].attrs["value"], "2026-10-31")
+        self.assertEqual(loop.state.obs.elements[2].attrs["value"], "保留原备注")
+        self.assertEqual(loop.marked_results, ["保存"])
+        self.assertIsNotNone(loop.turn.get("draft_handoff_form"))
+        self.assertTrue(loop.turn["handoff_facts"]["can_undo"])
+
+    def test_form_date_range_unlabelled_end_refuses_handoff_fail_closed(self):
+        obs = date_range_dialog_form(scope="dialog:create-act", start_val="", end_val="",
+                                     remark_val="默认备注", submit_label="确定", end_attrs={})
+        loop = DraftLoop([
+            reply(call("fill_fields",
+                       fields=[{"label": "活动时间", "value": "2026-10-01 ~ 2026-10-31"}],
+                       then_highlight="确定")),
+            reply(call("finish", status="done", answer="已填好",
+                       items=[{"item": "活动表单预填", "kind": "page", "status": "delivered", "receipts": []}])),
+            reply(call("finish", status="cannot", answer="表单最终回读未通过，尚未交接提交按钮。",
+                       items=[{"item": "活动表单预填", "kind": "page", "status": "undelivered", "receipts": []}])),
+        ], initial_obs=obs, request="请帮我把活动时间设为2026-10-01到2026-10-31，由我确认提交")
+        answer = loop.run()
+        self.assertEqual(loop.actions, ["fill", "fill"])
+        self.assertNotIn("handoff_form", loop.actions)
+        self.assertEqual(loop.marked_results, [])
+        self.assertIn("尚未交接", answer)
+        self.assertTrue(any(e == "page_handoff_refused" for e, _ in loop.events))
+        self.assertTrue(any(e == "model_delivery_rejected" and f.get("returned") is True
+                            for e, f in loop.events))
+        self.assertIn("尚未完成同一实时表单的回读与提交控件交接", str(loop.state.chat.seen))
 
 
 if __name__ == "__main__":

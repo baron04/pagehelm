@@ -17,6 +17,7 @@ import {
   nativeMonthRangeStep,
   nativeRangeDateCell,
   nativeRangeDateStep,
+  rangePopupDialog,
   readElDatePickerPrecision,
 } from '../element-plus/date-picker.js'
 import {
@@ -121,24 +122,22 @@ function creationRangeQuery(url) {
 }
 
 const BOUNDED_QUERY_KEY = /^[A-Za-z][A-Za-z0-9_]*(?:\[[0-9]{1,3}\])?$/
-const SENSITIVE_QUERY_KEY = /(?:pass(?:word)?|pwd|secret|token|credential|auth|cookie|session|(?:^|[_-])key$|(?:api|access|private|secret|app|encrypt|sign)key)/i
+const SENSITIVE_QUERY_KEY = /(?:pass(?:word)?|pwd|secret|token|credential|auth|cookie|session|key(?!words?$))/i
 const LIST_READ_PATH = /(?:\/|[a-z0-9]-)(?:page|list)(?:-[a-z0-9-]+)?$/
 const isListReadPath = pathname => LIST_READ_PATH.test(pathname) && !SIMPLE_LOOKUP_PATH.test(pathname)
 
 function boundedListQuery(url) {
   if (!isListReadPath(url.pathname)) return null
   const pairs = Array.from(url.searchParams)
-  const effectivePairs = pairs.length > 16
-    ? pairs.filter(([key, value]) => value !== '' || key === 'pageNo' || key === 'pageSize')
-    : pairs
-  if (effectivePairs.length > 24 || new Set(pairs.map(([key]) => key)).size !== pairs.length) return null
+  if (pairs.length > 64 || new Set(pairs.map(([key]) => key)).size !== pairs.length) return null
   const parameters = {}
-  for (const [key, value] of effectivePairs) {
+  for (const [key, value] of pairs) {
     if (!BOUNDED_QUERY_KEY.test(key) || key.length > 64 || SENSITIVE_QUERY_KEY.test(key)) return null
     if (typeof value !== 'string' || value.length > 128 ||
         Array.from(value).some(c => c.charCodeAt(0) <= 31 || c.charCodeAt(0) === 127)) return null
-    parameters[key] = value
+    if (value !== '' || key === 'pageNo' || key === 'pageSize') parameters[key] = value
   }
+  if (Object.keys(parameters).length > 24) return null
   return {path: url.pathname, parameters}
 }
 
@@ -1058,6 +1057,7 @@ export {
   nativeMonthRangeStep,
   nativeRangeDateCell,
   nativeRangeDateStep,
+  rangePopupDialog,
 }
 
 export function withLineControls(selectorMap, html, lines) {

@@ -1095,6 +1095,7 @@ class Phase47Step1BaseTests(unittest.TestCase):
 
     def test_goal_data_name_searchable_and_page_size_cap_rules(self):
         from web_operation_agent_yudao.goal_compat.goal import YudaoGoalData, _Entity
+        from web_operation_agent_yudao.reads.client import YudaoReadRefused
 
         calls = []
 
@@ -1106,9 +1107,13 @@ class Phase47Step1BaseTests(unittest.TestCase):
                 if path == "alpha/parent/list":
                     return [{"id": 77, "name": "唯一父组"}]
                 if path == "alpha/small-item/page":
-                    if params.get("pageSize", 0) > 200:
-                        raise DataRefused("400 每页条数最大值为 200")
+                    if params.get("pageSize", 0) > 100:
+                        raise YudaoReadRefused("bad request", code=400)
                     return {"total": 2, "list": [{"id": 1, "name": "甲项"}, {"id": 2, "name": "乙项"}]}
+                if path == "alpha/untyped-err/page":
+                    raise DataRefused("400 每页条数最大值为 50")
+                if path == "alpha/forbidden-err/page":
+                    raise YudaoReadRefused("forbidden", code=403)
                 return {"total": 0, "list": []}
 
         array_resp = {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/ArrayResp"}}}}}
@@ -1120,6 +1125,8 @@ class Phase47Step1BaseTests(unittest.TestCase):
                 "/admin-api/alpha/parent/list": {"get": {"parameters": [], "responses": array_resp}},
                 "/admin-api/alpha/child-cfg/list": {"get": {"parameters": [{"name": "parentId", "in": "query", "required": True}], "responses": array_resp}},
                 "/admin-api/alpha/small-item/page": {"get": {"parameters": [{"name": "pageNo", "in": "query"}, {"name": "pageSize", "in": "query"}]}},
+                "/admin-api/alpha/untyped-err/page": {"get": {"parameters": [{"name": "pageNo", "in": "query"}, {"name": "pageSize", "in": "query"}]}},
+                "/admin-api/alpha/forbidden-err/page": {"get": {"parameters": [{"name": "pageNo", "in": "query"}, {"name": "pageSize", "in": "query"}]}},
             },
             "components": {"schemas": {"ArrayResp": {"properties": {"data": {"type": "array", "items": {}}}}}},
         }
@@ -1171,6 +1178,22 @@ class Phase47Step1BaseTests(unittest.TestCase):
                 required=frozenset(), fixed_params={}, has_get=True, operations=frozenset({"read"}), view=None,
                 lists={}, money={},
             ),
+            "alpha/untyped-err": _Entity(
+                key="alpha/untyped-err", module="alpha", resource="untyped-err", label="未类型化错",
+                list_path="alpha/untyped-err/page", name_field="name",
+                params={"pageNo": {"type": "integer"}, "pageSize": {"type": "integer"}},
+                props={"id": {"type": "integer"}, "name": {"type": "string"}},
+                required=frozenset(), fixed_params={}, has_get=True, operations=frozenset({"read"}), view=None,
+                lists={}, money={},
+            ),
+            "alpha/forbidden-err": _Entity(
+                key="alpha/forbidden-err", module="alpha", resource="forbidden-err", label="无权限",
+                list_path="alpha/forbidden-err/page", name_field="name",
+                params={"pageNo": {"type": "integer"}, "pageSize": {"type": "integer"}},
+                props={"id": {"type": "integer"}, "name": {"type": "string"}},
+                required=frozenset(), fixed_params={}, has_get=True, operations=frozenset({"read"}), view=None,
+                lists={}, money={},
+            ),
         }
         # Identifier-free paged endpoint is skipped even with narrowing param, while unpaged stays allowed.
         self.assertFalse(data.name_searchable("alpha/id-free-paged", "DOC-1"))
@@ -1179,10 +1202,153 @@ class Phase47Step1BaseTests(unittest.TestCase):
         self.assertTrue(data.name_searchable("alpha/kw-item", "候选人甲"))
         # Sole-parent *Id resolves required parameter automatically.
         self.assertTrue(data.name_searchable("alpha/child-cfg", "配置项"))
-        # Small paged table without name filter succeeds and remembers server max_page_size=200 after 400 cap error.
+        # Small paged table steps down via typed HTTP 400 (no exception-text matching) and keeps shared spec immutable.
         self.assertTrue(data.name_searchable("alpha/small-item", "甲项"))
-        self.assertEqual(data._entities["alpha/small-item"].max_page_size, 200)
-        self.assertTrue(any(p == ("alpha/small-item/page", {"pageNo": 1, "pageSize": 200}) for p in calls))
+        small_spec = data._entities["alpha/small-item"]
+        self.assertEqual(small_spec.max_page_size, 200)
+        small_calls = [c for c in calls if c[0] == "alpha/small-item/page"]
+        self.assertEqual(small_calls, [
+            ("alpha/small-item/page", {"pageNo": 1, "pageSize": 200}),
+            ("alpha/small-item/page", {"pageNo": 1, "pageSize": 100}),
+        ])
+        calls.clear()
+        rows = data._fetch_pages("alpha/small-item", small_spec, {})
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(calls, [("alpha/small-item/page", {"pageNo": 1, "pageSize": 100})])
+        data.invalidate_reads(frozenset({"alpha/small-item"}))
+        self.assertEqual(data._page_sizes, {})
+        self.assertEqual(small_spec.max_page_size, 200)
+
+        # Untyped DataRefused text and non-400 YudaoReadRefused must never trigger page-size step-down retry.
+        calls.clear()
+        with self.assertRaises(DataRefused):
+            data._get_list_page(data._entities["alpha/untyped-err"], 1, 200, {})
+        self.assertEqual(calls, [("alpha/untyped-err/page", {"pageNo": 1, "pageSize": 200})])
+
+        calls.clear()
+        with self.assertRaises(YudaoReadRefused):
+            data._get_list_page(data._entities["alpha/forbidden-err"], 1, 200, {})
+        self.assertEqual(calls, [("alpha/forbidden-err/page", {"pageNo": 1, "pageSize": 200})])
+
+    def test_find_record_up_to_12_entities_feeds_write_target_selection_and_stays_entity_scoped(self):
+        from web_operation_agent.business.convention_writes import ConventionFieldSpec, ConventionUpdateSpec
+        from web_operation_agent.business.errors import BusinessToolRequestError
+        from web_operation_agent.execution.value_source import SourceLedger
+        from web_operation_agent_yudao.reads.bound_data_reads import turn_actor_reads
+        from web_operation_agent_yudao.writes.convention_writes import YudaoConventionWritePort, _verified_turn_id
+
+        entities = [f"mod/item-{i}" for i in range(1, 14)]
+        hits_all = tuple((ent, ((str(i * 101), "同名目标", ""),)) for i, ent in enumerate(entities, 1))
+        docs = {
+            "paths": {f"/admin-api/{ent}/get": {"get": {}} for ent in entities},
+            "components": {"schemas": {}},
+        }
+        get_calls = []
+
+        class TargetClient(Client):
+            read_generation = 1
+
+            def get(self, path, **params):
+                get_calls.append((path, dict(params)))
+                if path.endswith("/get"):
+                    ent = path.removesuffix("/get")
+                    return {"id": int(params["id"]), "name": f"{ent}-同名目标"}
+                return {}
+
+        class ManyEntitiesPort:
+            def records_named(self, text, *, context=None, entities=()):
+                if entities:
+                    return tuple(h for h in hits_all if h[0] in entities)
+                return hits_all
+
+            def index(self, *, context=None):
+                return ApplicationIndex(
+                    entities=tuple(IndexEntity(ent, f"模块{i}") for i, ent in enumerate(entities, 1)),
+                    pages=(),
+                )
+
+        def make_executor(policy_turn):
+            executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+            executor.goal_port = ManyEntitiesPort()
+            executor.knowledge = ActorKnowledge(TargetClient(), lambda: docs)
+            executor.turn_context = SlimTurnContext(current_request="修改同名目标", executor_turn=policy_turn)
+            executor._publish_step_cb = None
+            executor._check_fired_cb = None
+            executor._last_action_receipt = None
+            return executor
+
+        def check_turn_target_selection(policy_turn):
+            client = TargetClient()
+            adapter = YudaoConventionWritePort(client, NS(_documents=lambda: docs, _source=None, _ui=None, time_zone="Asia/Shanghai"))
+            with turn_actor_reads(client, turn_context=SlimTurnContext(executor_turn=policy_turn)):
+                self.assertTrue(_verified_turn_id("mod/item-6", 606))
+                self.assertTrue(_verified_turn_id("mod/item-12", 1212))
+                self.assertFalse(_verified_turn_id("mod/item-13", 1313))
+                self.assertFalse(_verified_turn_id("mod/item-5", 606))
+
+                for idx, ent in ((6, "mod/item-6"), (12, "mod/item-12")):
+                    spec = ConventionUpdateSpec(entity=ent, label=f"模块{idx}",
+                                                fields=(ConventionFieldSpec(name="name", kind="string", label="名称"),))
+                    rec = adapter.resolve_target(ent, str(idx * 101), spec=spec)
+                    self.assertEqual(rec["id"], idx * 101)
+
+                with self.assertRaises(BusinessToolRequestError):
+                    spec13 = ConventionUpdateSpec(entity="mod/item-13", label="模块13",
+                                                  fields=(ConventionFieldSpec(name="name", kind="string", label="名称"),))
+                    adapter.resolve_target("mod/item-13", "1313", spec=spec13)
+
+                with self.assertRaises(BusinessToolRequestError):
+                    spec5 = ConventionUpdateSpec(entity="mod/item-5", label="模块5",
+                                                 fields=(ConventionFieldSpec(name="name", kind="string", label="名称"),))
+                    adapter.resolve_target("mod/item-5", "606", spec=spec5)
+
+        state = NS(measure=lambda _n: contextlib.nullcontext(), operation=None, progress=lambda _f: None)
+
+        # 1. Direct _tool("find_record") (13 entities -> capped at 12, feeds write target selection)
+        direct_policy_turn = {"source_ledger": SourceLedger()}
+        direct_exec = make_executor(direct_policy_turn)
+        with patch.object(direct_exec, "_note"):
+            res_direct = direct_exec._tool(state, "find_record", {"name": "同名目标"}, {})
+        self.assertEqual(res_direct.answer_targets, ())
+        self.assertIn("mod/item-6", res_direct.feedback)
+        self.assertIn("mod/item-12", res_direct.feedback)
+        self.assertNotIn("mod/item-13", res_direct.feedback)
+        check_turn_target_selection(direct_policy_turn)
+
+        # 2. Global fallback path (kind narrowed misses, global_hits[:12] caps at 12)
+        fallback_policy_turn = {"source_ledger": SourceLedger()}
+        fallback_exec = make_executor(fallback_policy_turn)
+
+        class ScopedMissPort(ManyEntitiesPort):
+            def records_named(self, text, *, context=None, entities=()):
+                if entities:
+                    return ()
+                return hits_all
+
+            def index(self, *, context=None):
+                return ApplicationIndex(
+                    entities=(IndexEntity("other/only", "指定分类"), *(IndexEntity(ent, f"模块{i}") for i, ent in enumerate(entities, 1))),
+                    pages=(),
+                )
+
+        fallback_exec.goal_port = ScopedMissPort()
+        with patch.object(fallback_exec, "_note"):
+            res_fallback = fallback_exec._tool(state, "find_record", {"name": "同名目标", "kind": "指定分类"}, {})
+        self.assertEqual(res_fallback.answer_targets, ())
+        self.assertIn("mod/item-12", res_fallback.feedback)
+        self.assertNotIn("mod/item-13", res_fallback.feedback)
+        check_turn_target_selection(fallback_policy_turn)
+
+        # 3. Concurrent prepare_read + commit_read path
+        conc_policy_turn = {"source_ledger": SourceLedger()}
+        conc_exec = make_executor(conc_policy_turn)
+        prep = conc_exec.prepare_read("find_record", {"name": "同名目标"}, operation=None)
+        with patch.object(conc_exec, "_note"):
+            res_conc = conc_exec.commit_read("find_record", prep, {"name": "同名目标"}, state)
+        self.assertEqual(res_conc.answer_targets, ())
+        self.assertIn("mod/item-12", res_conc.feedback)
+        self.assertNotIn("mod/item-13", res_conc.feedback)
+        check_turn_target_selection(conc_policy_turn)
 
 
 if __name__ == "__main__":

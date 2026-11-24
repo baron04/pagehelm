@@ -18,7 +18,7 @@ export function isElRangePickerInput(element) {
   return isElDateOrDatetimeRangeInput(element) || isElMonthRangeInput(element)
 }
 
-function rangePopupDialog(element) {
+export function rangePopupDialog(element) {
   const id = element?.getAttribute?.('aria-controls')
   if (!id || !/^[A-Za-z][A-Za-z0-9_:.-]{0,199}$/.test(id) || element.getAttribute('aria-haspopup') !== 'dialog') return null
   const popups = element.ownerDocument.querySelectorAll(`[id="${id}"]`)

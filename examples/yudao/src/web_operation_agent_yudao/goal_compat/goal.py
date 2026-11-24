@@ -41,7 +41,7 @@ from web_operation_agent.goal.index import ApplicationIndex
 from web_operation_agent.goal.resolve.indexing import index_from_schema
 from web_operation_agent.goal.tabular import table_rows
 
-from ..reads.client import YudaoClient
+from ..reads.client import YudaoClient, YudaoReadRefused
 from ..rules.ui_source import UiSource
 
 #: Modules whose pages are offered by default.
@@ -57,6 +57,7 @@ _SECRET = re.compile(r"(?i)secret|password|passwd|private_?key|api_?key|aes_?key
 #: in, and its subordinates'.
 _SCENES = (1, 2, 3)
 _PAGE_SIZE = 200
+_PAGE_SIZE_FALLBACKS = (100, 50, 20)
 #: The most records one read filters in memory; beyond it the read is refused rather
 #: than answered from part of the records.
 _MAX_ROWS = 20000
@@ -133,6 +134,8 @@ class YudaoGoalData:
         self._shown: dict[str, tuple[float, dict]] = {}
         #: (generation, entity) -> whether unfiltered paged table fits in a single bounded page.
         self._small_table: dict[tuple[int, str], bool] = {}
+        #: (generation, entity) -> runtime-discovered safe page size without mutating shared specs.
+        self._page_sizes: dict[tuple[int, str], int] = {}
         #: (entity, pushed-down parameters) -> (when read, rows): one answer reads the same
         #: list several times (a count, its rows, a total).
         self._read: OrderedDict[tuple, tuple] = OrderedDict()
@@ -147,6 +150,7 @@ class YudaoGoalData:
             self._read.clear()
             self._shown.clear()
             self._small_table.clear()
+            self._page_sizes.clear()
 
     @property
     def _docs(self) -> dict:
@@ -256,6 +260,7 @@ class YudaoGoalData:
                 self._read.clear()
                 self._shown.clear()
                 self._small_table.clear()
+                self._page_sizes.clear()
                 self._menu_entries, self._menu_complete = (), False
                 self._read_generation = generation
                 self._schema_generation = generation
@@ -1357,7 +1362,7 @@ class YudaoGoalData:
             scenes = (_SCENES if "sceneType" in spec.params and "sceneType" not in spec.fixed_params
                       and "sceneType" not in params else (None,))
         rows: dict[str, dict] = {}
-        page_size = getattr(spec, "max_page_size", _PAGE_SIZE)
+        page_size = self._effective_page_size(spec)
         for scene in scenes:
             page = 1
             on_page = getattr(self, "_on_page_callback", None)
@@ -1392,19 +1397,42 @@ class YudaoGoalData:
                 page += 1
         return list(rows.values())
 
+    def _effective_page_size(self, spec: "_Entity") -> int:
+        generation = getattr(self._client, "read_generation", 0)
+        with self._lock:
+            cached = self._page_sizes.get((generation, spec.key))
+        if cached is not None:
+            return cached
+        return getattr(spec, "max_page_size", _PAGE_SIZE)
+
     def _get_list_page(self, spec: "_Entity", page: int, page_size: int, query: dict):
         try:
             data = self._client.get(spec.list_path, pageNo=page, pageSize=page_size, **query) or {}
             return data, page_size
-        except DataRefused as exc:
-            if not exc.permission_denied and not exc.read_failed:
-                m = re.search(r"(?:最大值为|最大不能超过|maximum|less than or equal to)\s*(\d+)", str(exc), re.I)
-                if m and 1 <= int(m.group(1)) < page_size:
-                    capped = int(m.group(1))
-                    spec.max_page_size = capped
-                    data = self._client.get(spec.list_path, pageNo=page, pageSize=capped, **query) or {}
-                    return data, capped
-            raise
+        except YudaoReadRefused as exc:
+            if (
+                page != 1
+                or exc.code != 400
+                or exc.permission_denied
+                or exc.read_failed
+                or any(name not in query for name in spec.required)
+            ):
+                raise
+            generation = getattr(self._client, "read_generation", 0)
+            for fallback in _PAGE_SIZE_FALLBACKS:
+                if fallback >= page_size:
+                    continue
+                try:
+                    data = self._client.get(spec.list_path, pageNo=page, pageSize=fallback, **query) or {}
+                except YudaoReadRefused as retry_exc:
+                    if retry_exc.code == 400 and not retry_exc.permission_denied and not retry_exc.read_failed:
+                        continue
+                    raise
+                with self._lock:
+                    if generation == getattr(self._client, "read_generation", 0):
+                        self._page_sizes[(generation, spec.key)] = fallback
+                return data, fallback
+            raise exc
 
     def _small_paged_table(self, entity: str, spec: "_Entity") -> bool:
         """Whether an entity without a name/code filter fits in one bounded page."""
@@ -1423,7 +1451,7 @@ class YudaoGoalData:
         if any(name not in params and name not in spec.fixed_params for name in spec.required):
             return False
         query = {**params, **spec.fixed_params}
-        page_size = getattr(spec, "max_page_size", _PAGE_SIZE)
+        page_size = self._effective_page_size(spec)
         try:
             data, page_size = self._get_list_page(spec, 1, page_size, query)
         except DataRefused:
