@@ -958,13 +958,18 @@ class KnowledgeTests(unittest.TestCase):
                      if line.startswith("GET ")]
         self.assertEqual(tpl_paths[0], "/admin-api/system/mail-template/page")
 
-        # Hardcoded unreviewed shorthand ("X订单" -> "X单") must not be synthesized in code.
+        # Unreviewed shorthand ("X订单" -> "X单") must not be synthesized into the search index,
+        # while legacy _score fallback prevents empty search_api results when new ranking scores 0.
+        entries, _ = know._get_search_index()
+        po_entry = next(e for e in entries if e["op"]["path"] == "/admin-api/erp/purchase-order/page")
+        self.assertNotIn("采购单", po_entry["tag_phrases"])
+        self.assertNotIn("采购单", po_entry["page_titles"])
         po_by_tag = [line.split()[1] for line in know.search_api("采购订单").splitlines()
                      if line.startswith("GET ")]
         self.assertEqual(po_by_tag[0], "/admin-api/erp/purchase-order/page")
         po_by_shorthand = [line.split()[1] for line in know.search_api("采购单").splitlines()
                            if line.startswith("GET ")]
-        self.assertEqual(po_by_shorthand, [])
+        self.assertEqual(po_by_shorthand[0], "/admin-api/erp/purchase-order/page")
 
         # Tree list endpoints also rank in top results.
         tree_paths = [line.split()[1] for line in know.search_api("查看部门架构").splitlines()
@@ -991,6 +996,67 @@ class KnowledgeTests(unittest.TestCase):
         self.assertFalse(errors)
         self.assertEqual(len(results), 6)
         self.assertTrue(all("/admin-api/crm/customer/page" in res for res in results))
+
+    def test_search_api_falls_back_to_legacy_score_when_new_scorer_returns_empty(self):
+        docs = {
+            "paths": {
+                "/admin-api/trade/after-sale/page": {
+                    "get": {"summary": "获得售后订单分页", "tags": ["管理后台 - 售后订单"], "parameters": []}
+                },
+                "/admin-api/trade/after-sale/get-detail": {
+                    "get": {"summary": "获得售后订单详情", "tags": ["管理后台 - 售后订单"], "parameters": []}
+                },
+                "/admin-api/product/comment/page": {
+                    "get": {"summary": "获得商品评价分页", "tags": ["管理后台 - 商品评价"], "parameters": []}
+                },
+                "/admin-api/product/comment/get": {
+                    "get": {"summary": "获得商品评价", "tags": ["管理后台 - 商品评价"], "parameters": []}
+                },
+                "/admin-api/erp/purchase-order/page": {
+                    "get": {"summary": "获得采购订单分页", "tags": ["管理后台 - ERP 采购订单"], "parameters": []}
+                },
+            },
+            "components": {"schemas": {}},
+        }
+        menus = [
+            {"id": 1, "name": "售后订单", "path": "/trade/after-sale", "component": "trade/afterSale/index", "visible": True},
+            {"id": 2, "name": "商品评价", "path": "/product/comment", "component": "product/comment/index", "visible": True},
+        ]
+
+        class MenuClient:
+            def get(self, path, **_kwargs):
+                if path == "system/auth/get-permission-info":
+                    return {"user": {"nickname": "u"}, "menus": menus}
+                return {}
+
+        know = ActorKnowledge(MenuClient(), lambda: docs)
+        entries, col_idf = know._get_search_index()
+        after_sale_entry = next(e for e in entries if e["op"]["path"] == "/admin-api/trade/after-sale/page")
+        comment_entry = next(e for e in entries if e["op"]["path"] == "/admin-api/product/comment/page")
+        po_entry = next(e for e in entries if e["op"]["path"] == "/admin-api/erp/purchase-order/page")
+        self.assertLessEqual(
+            know._score_api_entry(["售后单"], "售后单", {"售后", "后单"}, after_sale_entry, col_idf),
+            3.2,
+        )
+        self.assertLessEqual(
+            know._score_api_entry(["差评"], "差评", {"差评"}, comment_entry, col_idf),
+            3.2,
+        )
+        self.assertNotIn("采购单", po_entry["tag_phrases"])
+
+        after_sale_paths = [line.split()[1] for line in know.search_api("售后单").splitlines()
+                            if line.startswith("GET ")]
+        self.assertEqual(after_sale_paths[0], "/admin-api/trade/after-sale/page")
+
+        comment_paths = [line.split()[1] for line in know.search_api("差评").splitlines()
+                         if line.startswith("GET ")]
+        self.assertEqual(comment_paths[0], "/admin-api/product/comment/page")
+
+        po_paths = [line.split()[1] for line in know.search_api("采购单").splitlines()
+                    if line.startswith("GET ")]
+        self.assertEqual(po_paths[0], "/admin-api/erp/purchase-order/page")
+
+        self.assertIn("没有匹配的只读接口", know.search_api("不存在的外星菜单xyz"))
 
 
 

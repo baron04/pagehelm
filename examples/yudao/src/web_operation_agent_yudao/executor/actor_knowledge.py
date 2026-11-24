@@ -571,6 +571,13 @@ class ActorKnowledge:
                 key=lambda pair: (-pair[0], len(pair[1]["path"]), pair[1]["path"]),
             )
             lines = [self._api_line(op) for score, op in ranked[:8] if score > 3.2]
+            if not lines:
+                legacy_ranked = sorted(
+                    ((_score(keyword, (2, o["summary"]), (2, o["tag"]), (1, o["path"])), o)
+                     for o in (self._ops or ())),
+                    key=lambda pair: -pair[0],
+                )
+                lines = [self._api_line(op) for score, op in legacy_ranked[:8] if score > 2]
         if include_writes:
             from .domain_toolpacks import format_write_entry_line, search_write_directory
 
