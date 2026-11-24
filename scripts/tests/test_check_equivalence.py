@@ -102,7 +102,7 @@ class EquivalenceHarnessTests(unittest.TestCase):
         expected = {
             "yudao_table_read_single": ("finished", "agent_finished"),
             "yudao_table_read_multi_batch": ("finished", "agent_finished"),
-            "yudao_table_read_multi_early_exit": ("refused", "permission_denied"),
+            "yudao_table_read_multi_early_exit": ("declined", "permission_denied"),
             "yudao_page_navigation": ("finished", "agent_finished"),
             "yudao_skill_write_approved": ("finished", "agent_finished"),
             "yudao_skill_write_denied": ("cancelled", "approval_denied"),
@@ -111,7 +111,7 @@ class EquivalenceHarnessTests(unittest.TestCase):
             "yudao_native_submit_form_handoff": ("finished", "agent_finished"),
             "yudao_native_submit_prefill": ("finished", "agent_finished"),
             "yudao_native_submit_denied": ("cancelled", "approval_denied"),
-            "yudao_native_submit_reread_drift": ("refused", "business_mutation_refused"),
+            "yudao_native_submit_reread_drift": ("declined", "business_mutation_refused"),
             "yudao_convention_write_approved": ("finished", "agent_finished"),
             "yudao_convention_write_denied": ("cancelled", "approval_denied"),
             "yudao_convention_write_readback_timeout": ("indeterminate", "indeterminate_write"),
