@@ -193,6 +193,7 @@ class LiveConversationRunner:
                             "message": user_message,
                             "error_code": error_code,
                             "retryable": retryable,
+                            "reason_category": "fault",
                         }, turn_id=message_id)
                     except RemoteSessionClosed:
                         # The outcome is already durable to this host.  The next dequeue

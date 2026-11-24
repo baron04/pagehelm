@@ -64,6 +64,15 @@ def _validate_contract(contract: dict) -> None:
         set(contract["progress_messages"]) - {"comment"} - set(contract["progress_states"]))
     if unknown_message:
         raise ValueError(f"progress message names an unknown state: {unknown_message[0]}")
+    categories = contract.get("reason_categories")
+    required_categories = {"policy", "problem", "not_found", "permission", "fault"}
+    if not isinstance(categories, dict) or set(categories) != required_categories:
+        raise ValueError("reason_categories must define policy, problem, not_found, permission, and fault")
+    for category, spec in categories.items():
+        if (not isinstance(spec, dict)
+                or not isinstance(spec.get("label"), str) or not spec["label"].strip()
+                or spec.get("tone") not in tones):
+            raise ValueError(f"reason category {category} needs a non-empty label and valid tone")
 
 
 def progress_message(state: str) -> str:
@@ -342,6 +351,14 @@ def _terminal_extras(payload: dict, limits: dict[str, int], *, state: str = "") 
     debug_trace = _debug_trace_projection(payload)
     if debug_trace is not None:
         extras["debug_trace"] = debug_trace
+    categories = panel_contract()["reason_categories"]
+    raw_category = payload.get("reason_category")
+    if isinstance(raw_category, str) and raw_category in categories:
+        extras["reason_category"] = raw_category
+    elif state in {"refused", "failed", "task_failed", "indeterminate"}:
+        extras["reason_category"] = "fault"
+    elif state == "declined":
+        extras["reason_category"] = "problem"
     if state == "finished":
         table = _table_projection(payload)
         if table is not None:
@@ -350,7 +367,7 @@ def _terminal_extras(payload: dict, limits: dict[str, int], *, state: str = "") 
         options = _input_options_projection(payload, limits)
         if options:
             extras["input_options"] = options
-    if state in {"finished", "needs_input"}:
+    if state in {"finished", "needs_input", "declined"}:
         handoff = _handoff_projection(payload, limits)
         if handoff is not None:
             extras["handoff"] = handoff
@@ -677,7 +694,7 @@ def project_event(event: TaskEvent, *, at: int, target: dict | None = None) -> d
         text = "正在执行" if not mapping["terminal"] else "任务结束"
     node = payload.get("step")
     node = node if state == "step" and isinstance(node, dict) and node else None
-    targets = _answer_targets(payload, text) if mapping["terminal"] and state == "finished" else []
+    targets = _answer_targets(payload, text) if mapping["terminal"] and state in {"finished", "declined"} else []
     terminal_extras = _terminal_extras(payload, limits, state=state) if mapping["terminal"] else {}
     return {**base, "kind": "result" if mapping["terminal"] else "progress",
             "tone": mapping["tone"], "text": text,
@@ -716,7 +733,7 @@ def project_history_record(record: dict, *, index: int) -> dict | None:
         text = _ending_text(payload, text)
     if not text:
         return None
-    targets = _answer_targets(payload, text) if mapping["terminal"] and state == "finished" else []
+    targets = _answer_targets(payload, text) if mapping["terminal"] and state in {"finished", "declined"} else []
     terminal_extras = _terminal_extras(payload, limits, state=state) if mapping["terminal"] else {}
     return {**base, "kind": "result" if mapping["terminal"] else "progress",
             "tone": mapping["tone"], "text": text, "panel_state": mapping["panel_state"],

@@ -188,12 +188,12 @@ class RuntimeObservability:
                         outcome="incomplete", index=len(run.spans)))
                 run.spans.append(self._span(
                     run_id, "woa.turn", run.started_ns, now,
-                    outcome="ok" if outcome in {"finished", "needs_input", "refused"}
+                    outcome="ok" if outcome in {"finished", "needs_input", "declined", "refused"}
                     else outcome,
                     index=len(run.spans),
                     attributes=(_attribute("woa.status", outcome),)))
                 self._counters["turns"] += 1
-                if outcome not in {"finished", "needs_input", "refused"}:
+                if outcome not in {"finished", "needs_input", "declined", "refused"}:
                     self._counters["failed_turns"] += 1
                 export = self._payloads(run_id, run, now, outcome)
                 self._runs.pop(run_id, None)

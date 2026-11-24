@@ -25,6 +25,7 @@ class ChannelPanel:
             "notices": dict(contract["notices"]),
             "panel_states": dict(contract["panel_states"]),
             "progress_states": _copy_json(contract["progress_states"]),
+            "reason_categories": _copy_json(contract["reason_categories"]),
             "terminal_error_codes": list(contract["terminal_error_codes"]),
             "terminal_panel_state_by_code": dict(contract["terminal_panel_state_by_code"]),
             "nonterminal_error_states": dict(contract["nonterminal_error_states"]),

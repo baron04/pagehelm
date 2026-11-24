@@ -88,6 +88,15 @@
   color: var(--woa-danger);
   background: var(--woa-danger-soft);
 }
+.woa-outcome[data-kind="declined"] h3 > svg {
+  color: var(--woa-ink-muted);
+  background: var(--woa-surface-muted);
+}
+.woa-outcome__category {
+  margin: -2px 0 0;
+  font-size: var(--woa-font-size-meta);
+  color: var(--woa-ink-muted);
+}
 .woa-outcome__reconcile {
   margin: 0;
   padding: 8px 10px;

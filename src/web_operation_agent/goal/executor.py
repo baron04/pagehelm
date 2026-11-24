@@ -30,7 +30,7 @@ from ..answer.conclusion import ConclusionRefused
 from ..composition.binding import BoundApplication
 from ..execution.product import (AgentAnswerContext, AgentTurnError, AgentTurnErrorCode,
                                  AgentTurnExecution, AgentTurnMessage, AgentTurnStatus,
-                                 render_neutral_user_answer, _status_for)
+                                 render_neutral_user_answer, settle_terminal_outcome)
 from ..execution.runstate import RunResult
 from ..execution.receipt import MeasuredChat, TurnReceipt
 from ..execution.events import observed_turn
@@ -2841,7 +2841,10 @@ class GoalTurnExecutor:
                         terminal_reason=terminal, steps_used=s.step, wall_seconds=wall,
                         agent_said=text[:300], page_actions=s.page_actions,
                         operation_control=agent.operation_control or {})
-        status = _status_for(terminal)
+        status, reason_category = settle_terminal_outcome(
+            terminal,
+            detail=s.detail,
+        )
         user_answer = redact_sensitive_assignments(redact_session_handoffs(text)).strip()
         user_answer = user_answer[:self.config.max_user_answer_chars]
         fallback = False
@@ -2854,12 +2857,14 @@ class GoalTurnExecutor:
             schema_version=1, run_id=s.run_id, session_id=self.channel.session_id,
             message=s.message, entry_observation_id=current.observation_id if current is not None else None,
             entry_observation_digest=current.observation.content_digest if current is not None else None,
-            status=status, terminal_reason=terminal, user_answer=user_answer, agent=agent,
+            status=status, terminal_reason=terminal, reason_category=reason_category,
+            user_answer=user_answer, agent=agent,
             business_result=(BusinessToolResult(
                 {"outcomes": s.mutation_outcomes}, {"verified_outcomes": len(s.mutation_outcomes)})
                 if s.mutation_outcomes else None), answer_fallback_used=fallback,
             answer_targets=(tuple(target for target in s.answer_targets
-                                  if terminal == "agent_finished" and not fallback
+                                  if status in {AgentTurnStatus.FINISHED, AgentTurnStatus.DECLINED}
+                                  and not fallback
                                   and target.target.label in user_answer)),
             started_at=s.started_at, finished_at=time.time())
         self.conversation_state.record(
@@ -2870,15 +2875,19 @@ class GoalTurnExecutor:
                         retained_turns=self.conversation_state.turn_count,
                         context_digest=self.conversation_state.content_digest)
         s.ledger.append("product_turn_finished", status=status.value,
-                        terminal_reason=terminal, answer_fallback_used=fallback,
+                        terminal_reason=terminal, reason_category=reason_category,
+                        answer_fallback_used=fallback,
                         business_result_digest=execution.business_result.content_digest if execution.business_result else "")
         s.ledger.append("goal_run_receipt", budget=s.budget.projection(),
                         **s.receipt.report(self.chat, s.run_id))
+        progress_payload = {
+            "state": status.value, "terminal_reason": terminal, "message": user_answer,
+            "answer_targets": [target.to_json() for target in execution.answer_targets],
+        }
+        if reason_category:
+            progress_payload["reason_category"] = reason_category
         try:
-            self.channel.publish("progress", {
-                "state": status.value, "terminal_reason": terminal, "message": user_answer,
-                "answer_targets": [target.to_json() for target in execution.answer_targets],
-            }, turn_id=s.message.message_id)
+            self.channel.publish("progress", progress_payload, turn_id=s.message.message_id)
         except Exception as exc:
             s.ledger.append("terminal_delivery_lost", status=status.value,
                             error_type=type(exc).__name__)

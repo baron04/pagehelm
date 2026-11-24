@@ -243,13 +243,14 @@ class GoalFormsTests(unittest.TestCase):
         self.assertTrue(any(e['event']=='goal_form_handoff' and e['input_dispatched'] for e in events))
 
     def test_typed_preparation_refusals_explain_the_cause_without_exposing_exception_text(self):
-        for error_type, copy in ((BusinessToolPermissionError, "没有这项表单操作的权限"),
-                                 (BusinessToolIdentityError, "无法核验当前登录身份"),
-                                 (BusinessToolRequestError, "未通过应用校验")):
+        for error_type, copy, expected_status in (
+                (BusinessToolPermissionError, "没有这项表单操作的权限", AgentTurnStatus.DECLINED),
+                (BusinessToolIdentityError, "无法核验当前登录身份", AgentTurnStatus.REFUSED),
+                (BusinessToolRequestError, "未通过应用校验", AgentTurnStatus.REFUSED)):
             with self.subTest(error=error_type):
                 result, browser, _, _, events = self.run_goal(batch=True,
                     preparation_error=error_type("internal /private/source credential-token"))
-                self.assertEqual(result.status, AgentTurnStatus.REFUSED)
+                self.assertEqual(result.status, expected_status)
                 self.assertIn(copy, result.user_answer)
                 self.assertIn("没有填写或提交", result.user_answer)
                 self.assertNotIn("/private/source", result.user_answer)

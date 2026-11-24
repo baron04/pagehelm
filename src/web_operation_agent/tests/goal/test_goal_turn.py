@@ -490,7 +490,9 @@ class GoalTurnTests(unittest.TestCase):
                 self.assertEqual(decision["allowed"], allowed)
                 clicks = [a for a, _ in _Browser.instances[-1].actions if a == "click"]
                 self.assertEqual(len(clicks), int(allowed))
-                self.assertEqual(result.status, AgentTurnStatus.FINISHED if allowed else AgentTurnStatus.REFUSED)
+                self.assertEqual(result.status, AgentTurnStatus.FINISHED if allowed else AgentTurnStatus.DECLINED)
+                if not allowed:
+                    self.assertEqual(result.reason_category, "policy")
 
     def test_warm_declarations_save_three_calls_but_resolve_changed_business_data(self):
         scope = ("declare_scope", {"parts": [{"kind": "fact", "entity": "order"}]})

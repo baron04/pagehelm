@@ -18,7 +18,7 @@ from ..privacy import redact_sensitive_assignments, redact_session_handoffs
 
 
 _ALLOWED_STATUSES = frozenset({
-    "finished", "needs_input", "refused", "cancelled", "indeterminate", "failed",
+    "finished", "needs_input", "declined", "refused", "cancelled", "indeterminate", "failed",
 })
 
 _CLARIFICATION_KINDS = frozenset({"free_text", "single_choice"})

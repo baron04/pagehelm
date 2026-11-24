@@ -78,4 +78,18 @@ describe('the host contract is checked where it is assembled', () => {
   it('states the protocol as the contract states it, not as the generator last ran', () => {
     expect(PANEL_PROTOCOL).toBe(raw.protocol)
   })
+
+  it('separates declined and needs_input as neutral with reason categories', () => {
+    expect(DEFAULT_CONFIGURATION.panel_states.declined).toBe('neutral')
+    expect(DEFAULT_CONFIGURATION.panel_states.needs_input).toBe('neutral')
+    expect(DEFAULT_CONFIGURATION.panel_states.refused).toBe('error')
+    expect(DEFAULT_CONFIGURATION.panel_states.indeterminate).toBe('warning')
+    expect(Object.keys(DEFAULT_CONFIGURATION.reason_categories).sort()).toEqual([
+      'fault', 'not_found', 'permission', 'policy', 'problem',
+    ])
+    expect(DEFAULT_CONFIGURATION.reason_categories.fault.tone).toBe('error')
+    for (const key of ['policy', 'problem', 'not_found', 'permission'] as const) {
+      expect(DEFAULT_CONFIGURATION.reason_categories[key].tone).toBe('neutral')
+    }
+  })
 })

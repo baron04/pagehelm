@@ -58,6 +58,7 @@ class LoopFixture(ModelDrivenTurnExecutor):
                         ledger=NS(append=lambda event, **facts: self.events.append((event, facts))))
         self.turn = {"reads": [], "marked": "", "trace": [], "touched": [],
                      "done": set(), "stalled": 0, "shown": []}
+        self.state.reason_category = ""
 
     def _tools(self, turn): return []
     def _page(self, state, turn): return "epoch=" + str(state.obs.epoch)
@@ -1408,3 +1409,81 @@ class FormHandoffSettlementTests(unittest.TestCase):
         self.assertNotIn("table", payload)
         self.assertNotIn("handoff", payload)
         self.assertTrue(payload["post_handoff_readback"]["verified"])
+
+    def test_cannot_records_reason_category_and_keeps_answer_targets_for_non_fault(self):
+        from web_operation_agent.execution.model_loop_contracts import AnswerTarget
+        from web_operation_agent.execution.navigation import BoundAnswerTarget
+        from web_operation_agent.execution.product import NON_FAULT_REASON_CATEGORIES, settle_terminal_outcome
+
+        target = BoundAnswerTarget(
+            "read#1",
+            AnswerTarget(kind="page", address="/orders/1", label="订单页面", identity="order:1"),
+        )
+        for category in sorted(NON_FAULT_REASON_CATEGORIES):
+            with self.subTest(category=category):
+                fx = LoopFixture(
+                    [reply(call("finish", status="cannot", reason_category=category,
+                                answer="请到订单页面继续处理。"))],
+                    lambda *_: None,
+                )
+                fx.turn["issued_targets"] = [target]
+                answer = fx.run()
+                self.assertEqual(fx.state.terminal_reason, "agent_refused")
+                self.assertEqual(fx.state.reason_category, category)
+                self.assertEqual(fx.state.answer_targets, (target,))
+                status, settled_cat = settle_terminal_outcome(
+                    fx.state.terminal_reason, explicit_category=fx.state.reason_category
+                )
+                self.assertEqual(status.value, "declined")
+                self.assertEqual(settled_cat, category)
+
+        fx_fault = LoopFixture(
+            [reply(call("finish", status="cannot", reason_category="fault",
+                        answer="接口异常，请打开订单页面重试。"))],
+            lambda *_: None,
+        )
+        fx_fault.turn["issued_targets"] = [target]
+        fx_fault.run()
+        self.assertEqual(fx_fault.state.reason_category, "fault")
+        self.assertEqual(fx_fault.state.answer_targets, ())
+
+    def test_cannot_ignores_untrusted_prose_and_uses_typed_error_codes_or_explicit_category(self):
+        from web_operation_agent.execution.product import AgentTurnStatus, settle_terminal_outcome
+
+        # Even if model prose mentions permission/not_found/policy/502, without explicit
+        # reason_category or typed tool error codes, classification defaults to "problem".
+        fx_prose = LoopFixture(
+            [reply(call("finish", status="cannot",
+                        answer="没有权限，查无记录，接口报错 502 超时，密码按规则不能填。"))],
+            lambda *_: None,
+        )
+        fx_prose.run()
+        self.assertEqual(fx_prose.state.reason_category, "problem")
+        self.assertEqual(
+            settle_terminal_outcome(fx_prose.state.terminal_reason,
+                                    explicit_category=fx_prose.state.reason_category),
+            (AgentTurnStatus.DECLINED, "problem"),
+        )
+
+        # Typed tool error codes classify cleanly when finish omits reason_category.
+        for code, expected_cat, expected_status in (
+            ("permission_denied", "permission", AgentTurnStatus.DECLINED),
+            ("draft_only", "policy", AgentTurnStatus.DECLINED),
+            ("not_found", "not_found", AgentTurnStatus.DECLINED),
+            ("application_unavailable", "fault", AgentTurnStatus.REFUSED),
+        ):
+            with self.subTest(error_code=code):
+                fx = LoopFixture(
+                    [
+                        reply(call("probe")),
+                        reply(call("finish", status="cannot", answer="无法继续。")),
+                    ],
+                    lambda *_args: LoopToolResult("failed", state="refused", error_code=code),
+                )
+                fx.run()
+                self.assertEqual(fx.state.reason_category, expected_cat)
+                self.assertEqual(
+                    settle_terminal_outcome(fx.state.terminal_reason,
+                                            explicit_category=fx.state.reason_category),
+                    (expected_status, expected_cat),
+                )

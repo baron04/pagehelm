@@ -723,4 +723,62 @@ test.describe('the work process', () => {
     expect(style.shadow).not.toBe('none')
     expect(panel.errors).toEqual([])
   })
+
+  test('renders declined card neutrally by category, distinguishes faults, and focuses live needs_input', async ({open}) => {
+    const panel = await open(snapshot({entries: [
+      entry('e1', 'goal', '新建用户并填写初始密码'),
+      entry('e2', 'action', 'fill_form', {tone: 'active'}),
+      entry('e3', 'result', '密码字段须由你手动输入，请前往用户表单完成。', {
+        panel_state: 'declined',
+        tone: 'neutral',
+        reason_category: 'policy',
+        answer_targets: [{
+          kind: 'page',
+          address: '/system/user/edit/1',
+          label: '用户编辑页',
+          identity: 'system:user:1',
+          read_ref: 'read#1',
+        }],
+        handoff: {
+          completed_fields: [{name: '用户昵称', value: '测试'}],
+          pending_fields: [{name: '密码'}],
+          restricted_controls: [{label: '密码', kind: 'password', ref: 'pwd'}],
+          can_undo: true,
+        },
+      }),
+    ]}))
+    await panel.page.locator('.woa-launcher').click()
+
+    const declined = panel.page.locator('.woa-outcome[data-kind="declined"]')
+    await expect(declined).toHaveAttribute('data-tone', 'neutral')
+    await expect(declined).toHaveAttribute('data-category', 'policy')
+    await expect(declined.locator('> h3')).toContainText('按规则不自动执行')
+    await expect(panel.page.locator('.woa-took')).toHaveAttribute('data-declined', 'true')
+    await expect(panel.page.locator('.woa-took')).not.toHaveAttribute('data-failed', 'true')
+    await expect(declined.locator('.woa-handoff')).toBeVisible()
+    await expect(declined.getByTestId('woa-handoff-controls')).toContainText('密码')
+    await expect(declined.locator('.woa-answer-targets a')).toHaveAttribute('href', '/system/user/edit/1')
+
+    // Move focus away from the composer before a live needs_input turn arrives.
+    const closeButton = panel.page.getByRole('button', {name: labels.collapse})
+    await closeButton.focus()
+    expect((await panel.active()).id).not.toBe('woa-composer-input')
+
+    await panel.set({
+      connection: {state: 'needs_input', busy: false, stopping: false, online: true},
+      entries: [
+        entry('e1', 'goal', '新建用户并填写初始密码'),
+        entry('e3', 'result', '密码字段须由你手动输入，请前往用户表单完成。', {
+          panel_state: 'declined', tone: 'neutral', reason_category: 'policy',
+        }),
+        entry('e4', 'goal', '再查一下客户'),
+        entry('e5', 'result', '请补充具体的客户名称。', {
+          panel_state: 'needs_input', tone: 'neutral', replayed: false,
+        }),
+      ],
+    })
+    await expect(panel.page.locator('.woa-result__status')).toContainText(labels.statusNeedsInput)
+    await expect(panel.page.locator('#woa-composer-input')).toBeFocused()
+    expect(panel.errors).toEqual([])
+  })
 })

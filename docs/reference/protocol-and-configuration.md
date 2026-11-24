@@ -159,7 +159,8 @@ Valid `decision` values: `"approved"`, `"denied"`, or `"prefill"`.
 The server and Shadow DOM panel share `src/web_operation_agent/web_runtime/panel_contract.json` (`protocol: 2`) to validate all projections:
 
 - **Default copy keys (`label_keys`):** `product: "PageHelm"`, `emptyIntro: "你好，我是 PageHelm"`; DOM classes and CSS prefixes stay `woa-*`.
-- **State enums:** Non-terminal: `waiting_for_runtime`, `session_recovered`, `message_accepted`, `new_conversation`, `agent_started`, `step`, `approval_recorded`, `cancelling`. Terminal: `needs_input`, `finished`, `refused`, `cancelled`, `indeterminate`, `failed`, `task_failed`. Unregistered states are rejected.
+- **State enums:** Non-terminal: `waiting_for_runtime`, `session_recovered`, `message_accepted`, `new_conversation`, `agent_started`, `step`, `approval_recorded`, `cancelling`. Terminal: `needs_input` (neutral tone; auto-focuses the composer when newly received), `finished` (success), `declined` (neutral non-fault explanation with optional `handoff` and `answer_targets`), `cancelled` (neutral), `refused` (error), `indeterminate` (warning), `failed` (error), `task_failed` (error). Unregistered states are rejected.
+- **Reason categories (`reason_categories`):** Contract map shared with `_panel_configuration()` covering `policy`, `problem`, `not_found`, `permission` (neutral tone), and `fault` (error tone), projected on terminal timeline entries via `reason_category`.
 - **Lapse codes & terminal mappings:**
   - `lapse_codes`: `principal_expired`, `session_expired`, `browser_inactive`, `host_stopped`, `server_stopped`, `bootstrap_replaced`, `native_bootstrap_replaced`, `unknown_session`, `not_found`.
   - `terminal_panel_state_by_code`: `session_closed` / `unknown_session` / `not_found` / `principal_expired` / `session_expired` -> `"ended"`; `runtime_replaced` -> `"replaced"`; `unauthorized` / `invalid_lease` / `principal_mismatch` / `origin_refused` -> `"error"`.

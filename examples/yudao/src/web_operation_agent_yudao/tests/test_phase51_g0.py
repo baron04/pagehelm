@@ -1103,7 +1103,7 @@ class Phase51G0Tests(unittest.TestCase):
                     "text": "给合同2026框架协议登记一笔5000元实际回款。",
                     "page_url": "https://app.test/#/index",
                 })
-            self.assertEqual(guard_res.status, "refused")
+            self.assertEqual(guard_res.status, "declined")
             self.assertEqual(len(client.plans), 0)
             self.assertEqual(len(channel_guard.approvals), 0)
             self.assertIn("严禁擅自补建回款计划", json.dumps(guard_chat.calls[2][0], ensure_ascii=False))

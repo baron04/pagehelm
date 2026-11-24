@@ -30,6 +30,7 @@ export const CONFIGURATION = {
   labels: contract.label_keys as Labels,
   notices: contract.notices as Record<string, string>,
   panel_states: contract.panel_states,
+  reason_categories: contract.reason_categories,
   progress_states: contract.progress_states,
   terminal_error_codes: contract.terminal_error_codes,
   terminal_panel_state_by_code: contract.terminal_panel_state_by_code,
