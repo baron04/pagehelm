@@ -75,21 +75,9 @@ _GENERIC_COLUMN_NOISE = frozenset({
 })
 
 
-def _norm_zh(text: str) -> str:
-    return text.replace("模版", "模板")
-
-
 def _bigrams(text: str) -> set[str]:
-    compact = re.sub(r"\s+", "", _norm_zh(text).lower())
+    compact = re.sub(r"\s+", "", text.lower())
     return {compact[i:i + 2] for i in range(len(compact) - 1)}
-
-
-def _expand_order_shorthand(phrases: list[str]) -> list[str]:
-    out = list(phrases)
-    for phrase in phrases:
-        if len(phrase) >= 4 and phrase.endswith("订单"):
-            out.append(phrase[:-2] + "单")
-    return out
 
 
 def _clean_column_label(text: object) -> str:
@@ -99,7 +87,7 @@ def _clean_column_label(text: object) -> str:
     head = _COLUMN_LABEL_SPLIT_RE.split(base)[0].strip() if base else ""
     if len(head) < 2 or len(head) > 18:
         return ""
-    return _norm_zh(head)
+    return head
 
 
 def _endpoint_class_multiplier(path: str, summary: str, *, is_ui_main: bool) -> float:
@@ -427,11 +415,11 @@ class ActorKnowledge:
             for op in self._ops or ():
                 path = op["path"]
                 rel = path.removeprefix("/admin-api/")
-                summary = _norm_zh(op["summary"])
+                summary = op["summary"]
                 summary_core = _SUMMARY_SUFFIX_RE.sub("", _SUMMARY_PREFIX_RE.sub("", summary)).strip()
 
                 tag_phrases: list[str] = []
-                for part in re.split(r"[\s\-—/>]+", _norm_zh(op["tag"])):
+                for part in re.split(r"[\s\-—/>]+", op["tag"]):
                     part = part.strip()
                     if not part:
                         continue
@@ -439,13 +427,9 @@ class ActorKnowledge:
                     stemmed = self._stem(part)
                     if stemmed and stemmed != part:
                         tag_phrases.append(stemmed)
-                tag_phrases = _expand_order_shorthand(tag_phrases)
                 seen_tags = tuple(dict.fromkeys(p.lower() for p in tag_phrases if len(p) >= 2))
 
-                titles = []
-                for title in ui_titles.get(path, ()):
-                    titles.append(_norm_zh(title))
-                titles = _expand_order_shorthand(titles)
+                titles = list(ui_titles.get(path, ()))
                 seen_titles = tuple(dict.fromkeys(t.lower() for t in titles if len(t) >= 2))
 
                 col_candidates: list[str] = list(ui_cols.get(path, ()))
@@ -576,8 +560,7 @@ class ActorKnowledge:
 
     def search_api(self, keyword: str, *, include_writes: bool = False, source=None, ui=None) -> str:
         entries, col_idf = self._get_search_index(ui=ui)
-        norm_kw = _norm_zh(str(keyword or "")).lower()
-        terms = [t for t in re.split(r"[\s,，、；;：:？?！!。/]+", norm_kw) if t]
+        terms = [t for t in re.split(r"[\s,，、；;：:？?！!。/]+", str(keyword or "").lower()) if t]
         compact = "".join(terms)
         want_grams = _bigrams(compact)
         lines = []

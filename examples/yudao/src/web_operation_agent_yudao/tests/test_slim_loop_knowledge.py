@@ -894,7 +894,10 @@ class KnowledgeTests(unittest.TestCase):
                     "get": {"summary": "导出客户", "tags": ["管理后台 - CRM 客户"], "parameters": []}
                 },
                 "/admin-api/system/mail-template/page": {
-                    "get": {"summary": "获得邮件模版分页", "tags": ["管理后台 - 邮件模版"], "parameters": []}
+                    "get": {"summary": "获得邮件模板分页", "tags": ["管理后台 - 邮件模板"], "parameters": []}
+                },
+                "/admin-api/erp/purchase-order/page": {
+                    "get": {"summary": "获得采购订单分页", "tags": ["管理后台 - ERP 采购订单"], "parameters": []}
                 },
                 "/admin-api/system/mail-log/page": {
                     "get": {"summary": "获得邮件日志分页", "tags": ["管理后台 - 邮件日志"], "parameters": []}
@@ -950,10 +953,18 @@ class KnowledgeTests(unittest.TestCase):
                   if line.startswith("GET ")]
         self.assertIn("/admin-api/crm/customer/page", by_col[:3])
 
-        # Legitimate template entities stay boosted while variant "模版"/"模板" matches.
+        # Legitimate template entities stay boosted cleanly.
         tpl_paths = [line.split()[1] for line in know.search_api("邮件模板").splitlines()
                      if line.startswith("GET ")]
         self.assertEqual(tpl_paths[0], "/admin-api/system/mail-template/page")
+
+        # Hardcoded unreviewed shorthand ("X订单" -> "X单") must not be synthesized in code.
+        po_by_tag = [line.split()[1] for line in know.search_api("采购订单").splitlines()
+                     if line.startswith("GET ")]
+        self.assertEqual(po_by_tag[0], "/admin-api/erp/purchase-order/page")
+        po_by_shorthand = [line.split()[1] for line in know.search_api("采购单").splitlines()
+                           if line.startswith("GET ")]
+        self.assertEqual(po_by_shorthand, [])
 
         # Tree list endpoints also rank in top results.
         tree_paths = [line.split()[1] for line in know.search_api("查看部门架构").splitlines()
