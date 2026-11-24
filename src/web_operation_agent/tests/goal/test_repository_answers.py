@@ -292,7 +292,8 @@ class RepositoryAnswerTests(unittest.TestCase):
             ("declare_goal", {"deliverables": [{"kind": "page", "entity": "order"}]})],
             [Resolved(kind="page", page=PagePlan("/orders", "Orders"))],
             disabled=frozenset({"goto"}))
-        self.assertEqual(AgentTurnStatus.REFUSED, result.status)
+        self.assertEqual(AgentTurnStatus.DECLINED, result.status)
+        self.assertEqual("policy", result.reason_category)
         self.assertFalse(any(e["event"] == "tool_call" and e["tool"] == "goto" for e in events))
 
     def test_mixed_source_and_count_preserve_both_results(self):

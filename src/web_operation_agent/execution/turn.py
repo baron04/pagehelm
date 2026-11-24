@@ -29,7 +29,7 @@ from ..transport.protocol import RemoteProtocolError
 from .product import (
     AgentAnswerContext, AgentTurnConfig, AgentTurnError, AgentTurnErrorCode,
     AgentTurnExecution, AgentTurnMessage, AgentTurnStatus, _status_for,
-    render_neutral_user_answer,
+    render_neutral_user_answer, settle_terminal_outcome,
 )
 from .session import ServerAgentSession, TaskSpec
 from .budget import TurnBudget
@@ -459,7 +459,12 @@ class AgentTurnExecutor:
                                "budget": budget.projection()}
         ledger.append("turn_model_receipt", **agent.model_receipt)
 
-        status = _status_for(agent.terminal_reason)
+        status, reason_category = settle_terminal_outcome(
+            agent.terminal_reason,
+            stop_reason=getattr(agent, "stop_reason", ""),
+            detail=getattr(agent, "detail", ""),
+            explicit_category=getattr(agent, "reason_category", ""),
+        )
         answer_context = AgentAnswerContext(
             message=turn_message,
             agent=agent,
@@ -529,6 +534,7 @@ class AgentTurnExecutor:
                                       if current is not None else None),
             status=status,
             terminal_reason=agent.terminal_reason,
+            reason_category=reason_category,
             user_answer=user_answer,
             agent=agent,
             business_result=session.latest_business_tool_result,
@@ -553,6 +559,7 @@ class AgentTurnExecutor:
             "product_turn_finished",
             status=status.value,
             terminal_reason=agent.terminal_reason,
+            reason_category=reason_category,
             answer_fallback_used=fallback_used,
             business_result_digest=(
                 session.latest_business_tool_result.content_digest
@@ -563,9 +570,11 @@ class AgentTurnExecutor:
             "terminal_reason": agent.terminal_reason,
             "message": user_answer,
         }
+        if reason_category:
+            progress_payload["reason_category"] = reason_category
         if status is AgentTurnStatus.NEEDS_INPUT and getattr(agent, "input_options", None):
             progress_payload["input_options"] = list(agent.input_options)
-        if status in {AgentTurnStatus.FINISHED, AgentTurnStatus.NEEDS_INPUT} and getattr(agent, "handoff_payload", None):
+        if status in {AgentTurnStatus.FINISHED, AgentTurnStatus.NEEDS_INPUT, AgentTurnStatus.DECLINED} and getattr(agent, "handoff_payload", None):
             progress_payload["handoff"] = agent.handoff_payload
         try:
             self.channel.publish("progress", progress_payload, turn_id=turn_message.message_id)

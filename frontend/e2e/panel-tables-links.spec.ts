@@ -182,7 +182,7 @@ test.describe('examples and composer', () => {
       entries: [
         entry('e1', 'goal', '打开 Acme'),
         entry('e2', 'result', '请选择：\n1. Acme — 伦敦\n2. Acme — 巴黎',
-              {panel_state: 'needs_input', tone: 'warning'}),
+              {panel_state: 'needs_input', tone: 'neutral'}),
       ],
     }))
     await panel.page.locator('.woa-launcher').click()

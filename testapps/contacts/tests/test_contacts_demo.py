@@ -774,7 +774,8 @@ class TheWriteWalkthroughInARealBrowser(unittest.TestCase):
                         blocked = conversations[1].next_outcome(timeout_s=10).result
                         self.assertEqual(blocked.terminal_reason,
                                          "business_mutation_blocked")
-                        self.assertEqual(blocked.status.value, "refused")
+                        self.assertEqual(blocked.status.value, "declined")
+                        self.assertEqual(blocked.reason_category, "policy")
                         self.assertIn("Nothing was submitted again", blocked.user_answer)
                         self.assertEqual(application.post_requests, 1)
 
@@ -1108,12 +1109,12 @@ class TheApplicationsOwnAuthorityInARealBrowser(unittest.TestCase):
             events = _audit_events(directory)
 
         turn = summary["turns"][0]
-        self.assertEqual(turn["status"], "refused")
+        self.assertEqual(turn["status"], "declined")
         self.assertEqual(turn["terminal_reason"], "permission_denied")
         self.assertIn("not permitted", turn["answer"])
         self.assertIn("that operation was not carried out", turn["answer"])
         self.assertIn("not permitted", summary["panel"]["live"]["text"])
-        self.assertEqual(summary["panel"]["live"]["state"], "refused")
+        self.assertEqual(summary["panel"]["live"]["state"], "declined")
         self.assertEqual(summary["panel"]["live"]["approval_cards"], 0)
         self.assertEqual(chat.calls, 4, "nothing was asked of the model after the refusal")
 

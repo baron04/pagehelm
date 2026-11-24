@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {PanelRight, PictureInPicture2, Plus, X} from 'lucide-react'
-import {toneOf, type HandoffRestrictedControl} from '../contract/panel'
+import {DEFAULT_CONFIGURATION, toneOf, type HandoffRestrictedControl} from '../contract/panel'
 import type {HostNotice, PanelHost} from '../bridge/host'
 import {useHostSnapshot} from '../state/useHost'
 import {loadOpen, rememberOpen, useWindowGeometry, type Handle} from '../state/geometry'
@@ -38,6 +38,7 @@ export function PanelWindow({host, allowedOrigins}: {
 }): React.JSX.Element {
   const snapshot = useHostSnapshot(host)
   const {labels, limits} = host.configuration
+  const reasonCategories = host.configuration.reason_categories ?? DEFAULT_CONFIGURATION.reason_categories
   const visibility = presentation.approval_visibility
   const [open, setOpenState] = useState(loadOpen)
   const [draft, setDraft] = useState('')
@@ -154,6 +155,26 @@ export function PanelWindow({host, allowedOrigins}: {
     setSeen(latest)
   }, [open, latest, seen])
   const unread = open ? 0 : unreadAnswers(snapshot.entries, seen)
+
+  const latestOutcome = useMemo(() => {
+    for (let index = snapshot.entries.length - 1; index >= 0; index -= 1) {
+      const entry = snapshot.entries[index]!
+      if (entry.kind === 'result') return entry
+    }
+    return null
+  }, [snapshot.entries])
+  const focusedNeedsInput = useRef<string | null>(null)
+  useEffect(() => {
+    if (!latestOutcome) {
+      focusedNeedsInput.current = null
+      return
+    }
+    if (!open || closed || blocking || snapshot.connection.busy) return
+    if (latestOutcome.replayed || latestOutcome.panel_state !== 'needs_input') return
+    if (focusedNeedsInput.current === latestOutcome.id) return
+    focusedNeedsInput.current = latestOutcome.id
+    setPicked(count => count + 1)
+  }, [open, closed, blocking, snapshot.connection.busy, latestOutcome])
 
   const decidingTimer = useRef(0)
   const decide = useCallback((decision: 'approved' | 'denied' | 'prefill') => {
@@ -329,6 +350,7 @@ export function PanelWindow({host, allowedOrigins}: {
       <div className={welcome ? 'woa-body woa-empty' : 'woa-body'}>
         {welcome && <WelcomeHeading labels={labels} />}
         <Thread snapshot={snapshot} labels={labels} limits={limits}
+                reasonCategories={reasonCategories}
                 allowedOrigins={allowedOrigins}
                 localDevMode={Boolean(host.configuration.local_dev_mode)}
                 onOpenTarget={target => host.openAnswerTarget?.(target) ?? false}

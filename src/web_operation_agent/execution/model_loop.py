@@ -70,7 +70,14 @@ from .value_source import note_candidates
 from .submit_contract import scalar_text
 from .draft_handoff import unrestorable_form
 from ..transport.browser import TransportError, TurnCancelled
-from .product import AgentTurnError, AgentTurnErrorCode, AgentTurnExecution, page_observation_failure
+from .product import (
+    AgentTurnError,
+    AgentTurnErrorCode,
+    AgentTurnExecution,
+    NON_FAULT_REASON_CATEGORIES,
+    classify_cannot_reason,
+    page_observation_failure,
+)
 from ..answer.answering import render_structured_query_answer
 from .read_summary import SummaryResult, render_summary
 from . import answer_check, loop_guard
@@ -147,6 +154,11 @@ FINISH_TOOL = {"type": "function", "function": {"name": "finish", "description":
     "parameters": {"type": "object", "properties": {
         "status": {"type": "string", "enum": ["done", "need_input", "cannot"]},
         "answer": {"type": "string", "maxLength": 8000},
+        "reason_category": {
+            "type": "string",
+            "enum": ["policy", "problem", "not_found", "permission", "fault"],
+            "description": "可选：仅在 status=cannot 时说明原因类别。",
+        },
         "table_ref": {"type": "string", "minLength": 1, "maxLength": 64,
                       "description": "可选：本轮工具保存的完整表格/查询引用（如 t1、q1），由程序直出结构化表格并完整审计，无需手工抄写。"},
         "options": {
@@ -1469,6 +1481,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                     turn["forced_summary_kind"] = "read"
                     text += "\n连续四次空读，停止尝试这个数据来源；下一步只汇总已核实的事实。"
         if result.error_code:
+            turn.setdefault("tool_error_codes", []).append(str(result.error_code))
             text += f"\nstate={result.state}; dispatch={result.dispatch}; error_code={result.error_code}"
         outcomes_bucket = turn.setdefault("form_field_outcomes", {})
         for r in receipts:
@@ -2391,6 +2404,20 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             elif effective_status == "cannot":
                 s.terminal_reason = "agent_refused"
                 harness.set_stop_reason(s, "agent_refused", trace=trace)
+                if hasattr(s, "reason_category"):
+                    s.reason_category = (
+                        "fault"
+                        if turn.get("delivery_terminal_refused")
+                        else classify_cannot_reason(
+                            explicit=str(finish.get("reason_category") or ""),
+                            answer=answer,
+                            tool_error_codes=tuple(turn.get("tool_error_codes") or ()),
+                            has_restricted_handoff=bool(
+                                (getattr(s, "handoff_payload", None) or {}).get("restricted_controls")
+                            ),
+                            read_only=bool(turn.get("read_only")),
+                        )
+                    )
             elif s.mutation_outcomes:
                 # Said outright, as the goal turn's Skill path says it: settlement names
                 # the verified writes ahead of the answer of any turn it is not told
@@ -2400,10 +2427,14 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             else:
                 harness.set_stop_reason(s, "agent_finished", trace=trace)
             answer = answer or "已完成。"
+            reason_cat = getattr(s, "reason_category", "")
+            allow_targets = (
+                (effective_status == "done" and not s.terminal_reason)
+                or (effective_status == "cannot" and reason_cat in NON_FAULT_REASON_CATEGORIES)
+            )
             s.answer_targets = answer_targets_for(tuple(turn.get("issued_targets", ())),
                 answer[:getattr(getattr(self, "config", None), "max_user_answer_chars", 4000)],
-                finished=effective_status == "done" and not form_handed_over
-                and not s.mutation_outcomes and not s.terminal_reason)
+                finished=allow_targets and not form_handed_over and not s.mutation_outcomes)
             if effective_status == "done" and form_handed_over:
                 # The explicit handoff belongs to the server's verified outcome,
                 # not to whether the model remembered to mention manual submission.

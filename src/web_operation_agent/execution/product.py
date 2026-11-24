@@ -34,6 +34,7 @@ class AgentTurnStatus(str, Enum):
 
     FINISHED = "finished"
     NEEDS_INPUT = "needs_input"
+    DECLINED = "declined"
     REFUSED = "refused"
     CANCELLED = "cancelled"
     INDETERMINATE = "indeterminate"
@@ -315,6 +316,8 @@ _TERMINAL_FALLBACK = {
                                "The agent finished the turn without a user-facing answer."),
     AgentTurnStatus.NEEDS_INPUT: ("需要更多信息才能继续。",
                                   "The agent needs more information to continue."),
+    AgentTurnStatus.DECLINED: ("本次未执行，已说明原因。",
+                               "This request could not be completed as asked."),
     AgentTurnStatus.REFUSED: ("这个请求没能完成。", "The agent could not complete the request."),
     AgentTurnStatus.CANCELLED: ("已取消。", "The requested action was cancelled."),
     AgentTurnStatus.INDETERMINATE: (
@@ -484,6 +487,7 @@ class AgentTurnExecution:
     started_at: float
     finished_at: float
     answer_targets: tuple = ()
+    reason_category: str = ""
 
     def to_json(self) -> dict:
         business = self.business_result
@@ -507,6 +511,7 @@ class AgentTurnExecution:
             "entry_observation_digest": self.entry_observation_digest,
             "status": self.status.value,
             "terminal_reason": self.terminal_reason,
+            "reason_category": self.reason_category,
             "user_answer": self.user_answer,
             "agent": {
                 "terminal_reason": self.agent.terminal_reason,
@@ -531,24 +536,119 @@ class AgentTurnExecution:
         }
 
 
-def _status_for(terminal_reason: str) -> AgentTurnStatus:
+NON_FAULT_REASON_CATEGORIES = frozenset({"policy", "problem", "not_found", "permission"})
+REASON_CATEGORIES = NON_FAULT_REASON_CATEGORIES | frozenset({"fault"})
+
+_FAULT_STOP_REASONS = frozenset({
+    "answer_protocol_unresolved",
+    "failed_read_repeated",
+    "same_step_stalled",
+    "completion_review_unresolved",
+    "completion_verification_unavailable",
+    "model_steps_exhausted",
+})
+_FAULT_DETAILS = frozenset({
+    "answer protocol unresolved",
+    "a failed read was repeated unchanged",
+    "the same page step was repeated without effect",
+    "completion verification unresolved",
+    "completion verification unavailable",
+    "the turn's model steps were used up",
+})
+
+_PERMISSION_CUES = re.compile(
+    r"没有.{0,12}权限|无权|权限不足|权限限制|未授权|not permitted|permission denied|unauthorized",
+    re.IGNORECASE,
+)
+_POLICY_CUES = re.compile(
+    r"密码|口令|上传.{0,6}(?:文件|图片|附件)|支付回调|回调|只读模式|不支持自动|"
+    r"按规则|安全规则|产品政策|不代填|请(?:自行|手动).{0,10}(?:填写|输入|上传|提交|处理)|"
+    r"password|upload|read-only|policy",
+    re.IGNORECASE,
+)
+_READ_ONLY_CUES = re.compile(r"只读|不能写入|不支持修改|禁止写入|不支持写入")
+_NOT_FOUND_CUES = re.compile(
+    r"查无|未找到|找不到|不存在|没有找到|没有查到|无此|未查询到|not found|does not exist|no matching",
+    re.IGNORECASE,
+)
+_FAULT_CUES = re.compile(
+    r"超时|断线|连接失败|服务出错|服务不可用|接口报错|接口异常|系统错误|\b50[0234]\b|"
+    r"timed out|timeout|network error|service unavailable",
+    re.IGNORECASE,
+)
+
+
+def classify_cannot_reason(
+    *,
+    explicit: str = "",
+    answer: str = "",
+    tool_error_codes: tuple[str, ...] = (),
+    has_restricted_handoff: bool = False,
+    read_only: bool = False,
+) -> str:
+    """Classify a `cannot` terminal outcome into one of the five contract reason categories."""
+    codes = frozenset(str(code or "").strip() for code in tool_error_codes if code)
+    text = str(answer or "")
+    if explicit in REASON_CATEGORIES:
+        if codes & {"permission_denied", "business_permission_denied"} and explicit == "problem":
+            return "permission"
+        return explicit
+    if (codes & {"permission_denied", "business_permission_denied"}) or _PERMISSION_CUES.search(text):
+        return "permission"
+    if (
+        has_restricted_handoff
+        or (codes & {"draft_only", "read_only_question", "dangerous_unconfirmed", "capability_refused"})
+        or _POLICY_CUES.search(text)
+        or (read_only and _READ_ONLY_CUES.search(text))
+    ):
+        return "policy"
+    if "not_found" in codes or _NOT_FOUND_CUES.search(text):
+        return "not_found"
+    if _FAULT_CUES.search(text):
+        return "fault"
+    return "problem"
+
+
+def settle_terminal_outcome(
+    terminal_reason: str,
+    *,
+    stop_reason: str = "",
+    detail: str = "",
+    explicit_category: str = "",
+    answer: str = "",
+) -> tuple[AgentTurnStatus, str]:
+    """Map an execution terminal reason onto its panel status and reason category."""
+    del answer
     if terminal_reason == "agent_finished":
-        return AgentTurnStatus.FINISHED
+        return AgentTurnStatus.FINISHED, ""
     if terminal_reason in {"needs_input", "needs_clarification"}:
-        return AgentTurnStatus.NEEDS_INPUT
-    if terminal_reason == "agent_refused":
-        return AgentTurnStatus.REFUSED
-    if terminal_reason in {"business_mutation_blocked", "business_mutation_refused",
-                           "permission_denied"}:
-        return AgentTurnStatus.REFUSED
-    if terminal_reason == "no_progress":
-        return AgentTurnStatus.REFUSED
+        return AgentTurnStatus.NEEDS_INPUT, ""
     if terminal_reason in {"approval_denied", "approval_expired", "user_cancelled",
                            "operation_not_confirmed"}:
-        return AgentTurnStatus.CANCELLED
+        return AgentTurnStatus.CANCELLED, ""
     if terminal_reason == "indeterminate_write":
-        return AgentTurnStatus.INDETERMINATE
-    return AgentTurnStatus.FAILED
+        return AgentTurnStatus.INDETERMINATE, "fault"
+    if terminal_reason == "permission_denied":
+        return AgentTurnStatus.DECLINED, "permission"
+    if terminal_reason == "business_mutation_blocked":
+        return AgentTurnStatus.DECLINED, "policy"
+    if terminal_reason == "business_mutation_refused":
+        return AgentTurnStatus.DECLINED, "problem"
+    if terminal_reason == "no_progress":
+        return AgentTurnStatus.REFUSED, "fault"
+    if terminal_reason == "agent_refused":
+        if detail == "the deployment disabled this page action":
+            return AgentTurnStatus.DECLINED, "policy"
+        if stop_reason in _FAULT_STOP_REASONS or detail in _FAULT_DETAILS:
+            return AgentTurnStatus.REFUSED, "fault"
+        if explicit_category in NON_FAULT_REASON_CATEGORIES:
+            return AgentTurnStatus.DECLINED, explicit_category
+        return AgentTurnStatus.REFUSED, "fault"
+    return AgentTurnStatus.FAILED, "fault"
+
+
+def _status_for(terminal_reason: str) -> AgentTurnStatus:
+    return settle_terminal_outcome(terminal_reason)[0]
 
 
 # The product module remains the public wire-contract surface.  Turn composition lives in

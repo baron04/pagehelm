@@ -113,7 +113,7 @@ class ProductAnswerAndContinuationTests(unittest.TestCase):
 
         self.assertEqual(answer, "已存在同名或同邮箱记录，本次没有重复创建。")
         self.assertEqual(product._status_for("business_mutation_refused"),
-                         AgentTurnStatus.REFUSED)
+                         AgentTurnStatus.DECLINED)
 
     def test_permission_answer_does_not_erase_an_earlier_completed_write(self):
         context = product.AgentAnswerContext(
@@ -208,8 +208,9 @@ class ProductAnswerAndContinuationTests(unittest.TestCase):
                 execution = executor.run_once({
                     **_message(), "text": "先列出公司，再读取无权访问的详情。"})
 
-            self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
+            self.assertEqual(execution.status, AgentTurnStatus.DECLINED)
             self.assertEqual(execution.terminal_reason, "permission_denied")
+            self.assertEqual(execution.reason_category, "permission")
             self.assertIn("Acme", execution.user_answer)
             self.assertIn("已回答目前可以确认的部分", execution.user_answer)
             self.assertEqual(len(chat.messages), 4, "the refusal is returned once")
@@ -568,3 +569,77 @@ class ProductAnswerAndContinuationTests(unittest.TestCase):
                 captured[0].of_kind("product_turn_finished")[-1]["status"],
                 "finished",
             )
+
+
+class TerminalSettlementCategoryTests(unittest.TestCase):
+    def test_settle_terminal_outcome_separates_non_fault_declined_from_faults(self):
+        self.assertEqual(product.settle_terminal_outcome("agent_finished"),
+                         (AgentTurnStatus.FINISHED, ""))
+        self.assertEqual(product.settle_terminal_outcome("needs_input"),
+                         (AgentTurnStatus.NEEDS_INPUT, ""))
+        self.assertEqual(product.settle_terminal_outcome("permission_denied"),
+                         (AgentTurnStatus.DECLINED, "permission"))
+        self.assertEqual(product.settle_terminal_outcome("business_mutation_blocked"),
+                         (AgentTurnStatus.DECLINED, "policy"))
+        self.assertEqual(product.settle_terminal_outcome("business_mutation_refused"),
+                         (AgentTurnStatus.DECLINED, "problem"))
+        self.assertEqual(product.settle_terminal_outcome("indeterminate_write"),
+                         (AgentTurnStatus.INDETERMINATE, "fault"))
+        self.assertEqual(product.settle_terminal_outcome("no_progress"),
+                         (AgentTurnStatus.REFUSED, "fault"))
+        self.assertEqual(product.settle_terminal_outcome("control_plane_error"),
+                         (AgentTurnStatus.FAILED, "fault"))
+        self.assertEqual(
+            product.settle_terminal_outcome(
+                "agent_refused", detail="the deployment disabled this page action"
+            ),
+            (AgentTurnStatus.DECLINED, "policy"),
+        )
+        self.assertEqual(
+            product.settle_terminal_outcome(
+                "agent_refused", stop_reason="model_steps_exhausted"
+            ),
+            (AgentTurnStatus.REFUSED, "fault"),
+        )
+        self.assertEqual(
+            product.settle_terminal_outcome(
+                "agent_refused", explicit_category="not_found"
+            ),
+            (AgentTurnStatus.DECLINED, "not_found"),
+        )
+        self.assertEqual(
+            product.settle_terminal_outcome(
+                "agent_refused", explicit_category="fault"
+            ),
+            (AgentTurnStatus.REFUSED, "fault"),
+        )
+
+    def test_classify_cannot_reason_covers_all_categories(self):
+        self.assertEqual(
+            product.classify_cannot_reason(tool_error_codes=("permission_denied",), explicit="problem"),
+            "permission",
+        )
+        self.assertEqual(
+            product.classify_cannot_reason(has_restricted_handoff=True),
+            "policy",
+        )
+        self.assertEqual(
+            product.classify_cannot_reason(answer="只读模式不允许修改。", read_only=True),
+            "policy",
+        )
+        self.assertEqual(
+            product.classify_cannot_reason(answer="未找到匹配的供应商记录。"),
+            "not_found",
+        )
+        self.assertEqual(
+            product.classify_cannot_reason(answer="接口报错 502，服务不可用。"),
+            "fault",
+        )
+        self.assertEqual(
+            product.classify_cannot_reason(answer="缺少目标单据起始日期，无法计算。"),
+            "problem",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

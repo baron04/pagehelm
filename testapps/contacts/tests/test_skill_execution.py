@@ -393,8 +393,8 @@ class SkillExecutionTests(unittest.TestCase):
     def test_goal_write_terminal_states_keep_native_effects_and_stop(self):
         scenarios = (
             ("denied", AgentTurnStatus.CANCELLED, "approval_denied", 0),
-            ("blocked", AgentTurnStatus.REFUSED, "business_mutation_blocked", 0),
-            ("refused", AgentTurnStatus.REFUSED, "business_mutation_refused", 0),
+            ("blocked", AgentTurnStatus.DECLINED, "business_mutation_blocked", 0),
+            ("refused", AgentTurnStatus.DECLINED, "business_mutation_refused", 0),
             ("readback_lost", AgentTurnStatus.INDETERMINATE, "indeterminate_write", 1),
         )
         for scenario, status, reason, count in scenarios:

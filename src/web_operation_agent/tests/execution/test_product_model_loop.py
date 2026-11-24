@@ -58,6 +58,7 @@ class LoopFixture(ModelDrivenTurnExecutor):
                         ledger=NS(append=lambda event, **facts: self.events.append((event, facts))))
         self.turn = {"reads": [], "marked": "", "trace": [], "touched": [],
                      "done": set(), "stalled": 0, "shown": []}
+        self.state.reason_category = ""
 
     def _tools(self, turn): return []
     def _page(self, state, turn): return "epoch=" + str(state.obs.epoch)
@@ -1311,3 +1312,40 @@ class FormHandoffSettlementTests(unittest.TestCase):
                 answer = fx.run()
                 self.assertEqual(fx.state.terminal_reason, "agent_refused")
                 self.assertNotIn("手动点击「确定」提交", answer)
+
+    def test_cannot_records_reason_category_and_keeps_answer_targets_for_non_fault(self):
+        from web_operation_agent.execution.model_loop_contracts import AnswerTarget
+        from web_operation_agent.execution.navigation import BoundAnswerTarget
+        from web_operation_agent.execution.product import NON_FAULT_REASON_CATEGORIES, settle_terminal_outcome
+
+        target = BoundAnswerTarget(
+            "read#1",
+            AnswerTarget(kind="page", address="/orders/1", label="订单页面", identity="order:1"),
+        )
+        for category in sorted(NON_FAULT_REASON_CATEGORIES):
+            with self.subTest(category=category):
+                fx = LoopFixture(
+                    [reply(call("finish", status="cannot", reason_category=category,
+                                answer="请到订单页面继续处理。"))],
+                    lambda *_: None,
+                )
+                fx.turn["issued_targets"] = [target]
+                answer = fx.run()
+                self.assertEqual(fx.state.terminal_reason, "agent_refused")
+                self.assertEqual(fx.state.reason_category, category)
+                self.assertEqual(fx.state.answer_targets, (target,))
+                status, settled_cat = settle_terminal_outcome(
+                    fx.state.terminal_reason, explicit_category=fx.state.reason_category, answer=answer
+                )
+                self.assertEqual(status.value, "declined")
+                self.assertEqual(settled_cat, category)
+
+        fx_fault = LoopFixture(
+            [reply(call("finish", status="cannot", reason_category="fault",
+                        answer="接口异常，请打开订单页面重试。"))],
+            lambda *_: None,
+        )
+        fx_fault.turn["issued_targets"] = [target]
+        fx_fault.run()
+        self.assertEqual(fx_fault.state.reason_category, "fault")
+        self.assertEqual(fx_fault.state.answer_targets, ())

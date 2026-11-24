@@ -547,3 +547,173 @@ describe('Local-dev debug trace inspector (UX-07)', () => {
     expect(host.querySelector('.woa-trace')).toBeNull()
   })
 })
+
+describe('terminal states distinguish declined categories, needs_input focus, and faults', () => {
+  let host: HTMLDivElement
+  let root: ReturnType<typeof createRoot>
+
+  beforeEach(() => {
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    root = createRoot(host)
+    Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
+      configurable: true,
+      writable: true,
+      value: vi.fn(),
+    })
+  })
+
+  afterEach(() => {
+    act(() => { root.unmount() })
+    host.remove()
+    vi.restoreAllMocks()
+  })
+
+  it('renders declined outcomes neutrally by category with handoff and next-step links', () => {
+    const categories = ['policy', 'problem', 'not_found', 'permission'] as const
+    for (const category of categories) {
+      const snap = makeSnapshot({
+        entries: [
+          makeEntry('g1', 'goal', '提交客户表单'),
+          makeEntry('s1', 'action', '查询客户列表', {
+            step: {tool: 'query_customers', stage: 'done'},
+          }),
+          makeEntry('r1', 'result', '已定位表单 [客户管理](/crm/customer/1)，密码需手动输入。', {
+            panel_state: 'declined',
+            tone: 'neutral',
+            reason_category: category,
+            answer_targets: [{
+              kind: 'page',
+              address: '/crm/customer/1',
+              label: '客户管理',
+              identity: 'crm:customer:1',
+              read_ref: 'read#1',
+            }],
+            handoff: {
+              completed_fields: [{name: '客户名称', value: 'Acme'}],
+              pending_fields: [{name: '登录密码'}],
+              restricted_controls: [{label: '登录密码', kind: 'password', ref: 'pw-1'}],
+              can_undo: true,
+            },
+          }),
+        ],
+      })
+      act(() => {
+        root.render(createElement(Thread, {
+          snapshot: snap, labels, limits,
+          reasonCategories: DEFAULT_CONFIGURATION.reason_categories,
+          allowedOrigins: [],
+          onLoadOlder: () => undefined,
+          onRetry: () => undefined,
+          onUndoFormFill: async () => true,
+          onFocusHandoffControl: async () => true,
+        }))
+      })
+      const card = host.querySelector('.woa-outcome')
+      expect(card?.getAttribute('data-kind')).toBe('declined')
+      expect(card?.getAttribute('data-tone')).toBe('neutral')
+      expect(card?.getAttribute('data-category')).toBe(category)
+      expect(card?.querySelector('h3')?.textContent)
+        .toContain(DEFAULT_CONFIGURATION.reason_categories[category].label)
+      expect(host.querySelector('.woa-work__summary')?.getAttribute('data-declined')).toBe('true')
+      expect(host.querySelector('.woa-work__summary')?.getAttribute('data-failed')).toBeNull()
+      expect(host.querySelector('.woa-handoff')).not.toBeNull()
+      expect(host.querySelector('.woa-handoff__locate')?.textContent).toContain(labels.handoffLocateControl)
+      expect(host.querySelector('.woa-handoff__undo')?.textContent).toContain(labels.handoffUndoFill)
+      expect(host.querySelector('.woa-answer-targets a')?.getAttribute('href')).toBe('/crm/customer/1')
+    }
+
+    const faultSnap = makeSnapshot({
+      entries: [
+        makeEntry('g2', 'goal', '读取报表'),
+        makeEntry('r2', 'result', '服务返回 502。', {
+          panel_state: 'refused',
+          tone: 'error',
+          reason_category: 'fault',
+        }),
+      ],
+    })
+    act(() => {
+      root.render(createElement(Thread, {
+        snapshot: faultSnap, labels, limits,
+        reasonCategories: DEFAULT_CONFIGURATION.reason_categories,
+        allowedOrigins: [],
+        onLoadOlder: () => undefined,
+        onRetry: () => undefined,
+      }))
+    })
+    const refused = host.querySelector('.woa-outcome')
+    expect(refused?.getAttribute('data-kind')).toBe('refused')
+    expect(refused?.getAttribute('data-tone')).toBe('error')
+    expect(refused?.getAttribute('data-category')).toBe('fault')
+    expect(refused?.querySelector('h3')?.textContent).toContain(labels.statusRefused)
+    expect(refused?.querySelector('.woa-outcome__category')?.textContent)
+      .toContain(DEFAULT_CONFIGURATION.reason_categories.fault.label)
+  })
+
+  it('shows neutral needs_input prompt and auto-focuses composer only for live arrival', () => {
+    let current = makeSnapshot({
+      connection: {state: 'acting', busy: true, stopping: false, online: true},
+      entries: [
+        makeEntry('g1', 'goal', '打开合同'),
+        makeEntry('r-old', 'result', '历史追问', {panel_state: 'needs_input', replayed: true}),
+      ],
+    })
+    const listeners = new Set<(snap: ReturnType<typeof makeSnapshot>) => void>()
+    const liveHost = {
+      ...makeHost(current),
+      snapshot: () => current,
+      subscribe: (listener: (snap: ReturnType<typeof makeSnapshot>) => void) => {
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      },
+    }
+    const push = (next: ReturnType<typeof makeSnapshot>) => {
+      current = next
+      for (const listener of listeners) listener(current)
+    }
+
+    act(() => {
+      root.render(createElement(PanelWindow, {host: liveHost, allowedOrigins: []}))
+    })
+    const launcher = host.querySelector<HTMLButtonElement>('.woa-launcher')
+    if (launcher) act(() => { launcher.click() })
+
+    const input = host.querySelector<HTMLTextAreaElement>('#woa-composer-input')
+    expect(input).not.toBeNull()
+    const outsideButton = document.createElement('button')
+    document.body.appendChild(outsideButton)
+    outsideButton.focus()
+    expect(document.activeElement).toBe(outsideButton)
+
+    // Replayed needs_input does not steal focus while idle.
+    act(() => {
+      push(makeSnapshot({
+        connection: {state: 'needs_input', busy: false, stopping: false, online: true},
+        entries: [
+          makeEntry('g1', 'goal', '打开合同'),
+          makeEntry('r-old', 'result', '请先确认历史信息。', {
+            panel_state: 'needs_input', tone: 'neutral', replayed: true,
+          }),
+        ],
+      }))
+    })
+    expect(document.activeElement).toBe(outsideButton)
+
+    // Live needs_input shows labels.statusNeedsInput and focuses the composer.
+    act(() => {
+      push(makeSnapshot({
+        connection: {state: 'needs_input', busy: false, stopping: false, online: true},
+        entries: [
+          makeEntry('g1', 'goal', '打开合同'),
+          makeEntry('r-live', 'result', '请补充客户名称。', {
+            panel_state: 'needs_input', tone: 'neutral', replayed: false,
+          }),
+        ],
+      }))
+    })
+    expect(host.querySelector('.woa-result__status')?.textContent).toContain(labels.statusNeedsInput)
+    expect(document.activeElement).toBe(input)
+    outsideButton.remove()
+  })
+})

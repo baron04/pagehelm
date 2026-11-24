@@ -159,7 +159,8 @@ description: pagehelm.toml 与 .env 校验规则、模式展开、HTTP/SSE 端�
 服务端与 Shadow DOM 面板共用 `src/web_operation_agent/web_runtime/panel_contract.json`（`protocol: 2`）校验所有投影：
 
 - **默认文案键（`label_keys`）**：`product: "PageHelm"`、`emptyIntro: "你好，我是 PageHelm"`；DOM 类名与样式前缀维持 `woa-*`。
-- **状态枚举**：非终态为 `waiting_for_runtime`、`session_recovered`、`message_accepted`、`new_conversation`、`agent_started`、`step`、`approval_recorded`、`cancelling`；终态为 `needs_input`、`finished`、`refused`、`cancelled`、`indeterminate`、`failed`、`task_failed`。未登记状态直接拒绝。
+- **状态枚举**：非终态为 `waiting_for_runtime`、`session_recovered`、`message_accepted`、`new_conversation`、`agent_started`、`step`、`approval_recorded`、`cancelling`；终态为 `needs_input`（中性色调，收到新澄清请求时输入框自动聚焦）、`finished`（成功色调）、`declined`（中性非故障说明，可附带 `handoff` 与 `answer_targets`）、`cancelled`（中性色调）、`refused`（错误色调）、`indeterminate`（警告色调）、`failed`（错误色调）、`task_failed`（错误色调）。未登记状态直接拒绝。
+- **原因类别（`reason_categories`）**：随 `_panel_configuration()` 下发给前端，包含 `policy`、`problem`、`not_found`、`permission`（中性色调）与 `fault`（错误色调），并在终态时间线条目中通过 `reason_category` 投影。
 - **失活码与终态映射**：
   - `lapse_codes`：`principal_expired`、`session_expired`、`browser_inactive`、`host_stopped`、`server_stopped`、`bootstrap_replaced`、`native_bootstrap_replaced`、`unknown_session`、`not_found`。
   - `terminal_panel_state_by_code`：`session_closed` / `unknown_session` / `not_found` / `principal_expired` / `session_expired` -> `"ended"`；`runtime_replaced` -> `"replaced"`；`unauthorized` / `invalid_lease` / `principal_mismatch` / `origin_refused` -> `"error"`。

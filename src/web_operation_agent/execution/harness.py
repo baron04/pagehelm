@@ -38,6 +38,7 @@ from .product import (
     AgentTurnStatus,
     _status_for,
     render_neutral_user_answer,
+    settle_terminal_outcome,
 )
 from .receipt import TurnReceipt
 from .runstate import RunResult
@@ -275,6 +276,7 @@ class HarnessTurnContext:
     checks: list[dict[str, Any]] = field(default_factory=list)
     model_calls: int = 0
     # ARC-06 / UX-02 / UX-05 terminal progress payloads
+    reason_category: str = ""
     finish_table: dict[str, Any] | None = None
     input_options: list[dict[str, str]] = field(default_factory=list)
     handoff_payload: dict[str, Any] | None = None
@@ -945,7 +947,13 @@ class TurnHarness:
             page_actions=s.page_actions,
             operation_control=agent.operation_control or {},
         )
-        status = _status_for(terminal)
+        status, reason_category = settle_terminal_outcome(
+            terminal,
+            stop_reason=stop_reason,
+            detail=s.detail,
+            explicit_category=getattr(s, "reason_category", ""),
+            answer=text,
+        )
         user_answer = redact_sensitive_assignments(redact_session_handoffs(text)).strip()
         user_answer = user_answer[: self.config.max_user_answer_chars]
         fallback = False
@@ -970,6 +978,7 @@ class TurnHarness:
             ),
             status=status,
             terminal_reason=terminal,
+            reason_category=reason_category,
             user_answer=user_answer,
             agent=agent,
             business_result=(
@@ -985,7 +994,7 @@ class TurnHarness:
                 tuple(
                     target
                     for target in s.answer_targets
-                    if terminal == "agent_finished"
+                    if status in {AgentTurnStatus.FINISHED, AgentTurnStatus.DECLINED}
                     and not fallback
                     and target.target.label in user_answer
                 )
@@ -1010,6 +1019,7 @@ class TurnHarness:
             "product_turn_finished",
             status=status.value,
             terminal_reason=terminal,
+            reason_category=reason_category,
             answer_fallback_used=fallback,
             business_result_digest=(
                 execution.business_result.content_digest if execution.business_result else ""
@@ -1086,11 +1096,13 @@ class TurnHarness:
             "message": user_answer,
             "answer_targets": [target.to_json() for target in execution.answer_targets],
         }
+        if reason_category:
+            progress_payload["reason_category"] = reason_category
         if status == AgentTurnStatus.FINISHED and getattr(s, "finish_table", None):
             progress_payload["table"] = s.finish_table
         if status == AgentTurnStatus.NEEDS_INPUT and getattr(s, "input_options", None):
             progress_payload["input_options"] = list(s.input_options)
-        if status in {AgentTurnStatus.FINISHED, AgentTurnStatus.NEEDS_INPUT} and getattr(s, "handoff_payload", None):
+        if status in {AgentTurnStatus.FINISHED, AgentTurnStatus.NEEDS_INPUT, AgentTurnStatus.DECLINED} and getattr(s, "handoff_payload", None):
             progress_payload["handoff"] = s.handoff_payload
         if bool(getattr(self.channel, "local_dev_mode", False)):
             progress_payload["debug_trace"] = _build_debug_trace(

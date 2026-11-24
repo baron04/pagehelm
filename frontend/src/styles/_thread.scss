@@ -153,6 +153,18 @@
   flex-direction: column;
   gap: 10px;
 }
+.woa-result__status {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--woa-font-size-meta);
+  font-weight: 600;
+  color: var(--woa-ink-muted);
+}
+.woa-result__status > svg {
+  flex: none;
+}
 
 /* A boundary the server drew: everything above it is still readable, and no longer
    context for the model. */
@@ -374,7 +386,8 @@
 .woa-work__summary[data-failed] > svg:first-child {
   color: var(--woa-danger);
 }
-.woa-work__summary[data-stopped] > svg:first-child {
+.woa-work__summary[data-stopped] > svg:first-child,
+.woa-work__summary[data-declined] > svg:first-child {
   color: var(--woa-ink-faint);
 }
 .woa-work__chevron {
@@ -565,7 +578,8 @@ button.woa-step__line:focus-visible {
 .woa-took[data-failed] > svg:first-child {
   color: var(--woa-danger);
 }
-.woa-took[data-stopped] > svg:first-child {
+.woa-took[data-stopped] > svg:first-child,
+.woa-took[data-declined] > svg:first-child {
   color: var(--woa-ink-faint);
 }
 

@@ -360,7 +360,7 @@ class ContactsModelLoopTests(unittest.TestCase):
             result, chat, _ = self.execute(app, "ada-lovelace", [
                 ("fill_fields", {"fields": [{"label": "Name", "value": "Synthetic"}]}),
                 ("finish", {"status": "cannot", "answer": "Application form entry is unavailable."})])
-            self.assertEqual(AgentTurnStatus.REFUSED, result.status)
+            self.assertEqual(AgentTurnStatus.DECLINED, result.status)
             self.assertIn("当前应用没有提供这个工具", str(chat.messages[1]))
             self.assertEqual(0, app.write_requests)
 
@@ -369,7 +369,7 @@ class ContactsModelLoopTests(unittest.TestCase):
             result, chat, _ = self.execute(app, "ada-lovelace", [
                 ("list_contacts", {"name_contains": "Grace", "another_workspace": "south"}),
                 ("finish", {"status": "cannot", "answer": "Invalid arguments."})])
-            self.assertEqual(AgentTurnStatus.REFUSED, result.status)
+            self.assertEqual(AgentTurnStatus.DECLINED, result.status)
             self.assertIn("工具参数有误", str(chat.messages[1]))
             self.assertEqual(0, app.write_requests)
 

@@ -112,7 +112,7 @@ class PanelContractTests(unittest.TestCase):
             "message": "Which Acme?\n1. London\n2. Paris",
         }), at=0)
         self.assertEqual(entry["panel_state"], "needs_input")
-        self.assertEqual(entry["tone"], "warning")
+        self.assertEqual(entry["tone"], "neutral")
         self.assertIn("1. London", entry["text"])
 
     def test_retry_suffixes_are_stripped_and_terminal_extras_project_safely(self):
@@ -333,6 +333,8 @@ class PanelContractTests(unittest.TestCase):
         # The empty panel suggests nothing: fixed goals named records a deployment may not have.
         self.assertNotIn("suggestions", configuration)
         self.assertEqual(configuration["notices"], contract["notices"])
+        self.assertEqual(configuration["panel_states"], contract["panel_states"])
+        self.assertEqual(configuration["reason_categories"], contract["reason_categories"])
         self.assertEqual(configuration["progress_states"], contract["progress_states"])
         self.assertEqual(configuration["terminal_error_codes"],
                          contract["terminal_error_codes"])
@@ -431,6 +433,58 @@ class Wave3PanelContractProjectionTests(unittest.TestCase):
                 {"id": "c1", "label": "Acme?token=[redacted]", "prompt": "选择客户 Acme"},
                 {"id": "opt-2", "label": "Beta"},
             ])
+
+    def test_declined_and_reason_categories_project_with_next_step_payloads(self):
+        from web_operation_agent.transport.panel_view import _validate_contract
+
+        contract = panel_contract()
+        self.assertEqual(
+            set(contract["reason_categories"]),
+            {"policy", "problem", "not_found", "permission", "fault"},
+        )
+        self.assertEqual(contract["panel_states"]["declined"], "neutral")
+        self.assertEqual(contract["panel_states"]["needs_input"], "neutral")
+
+        bad_contract = json.loads(json.dumps(contract))
+        bad_contract["reason_categories"].pop("permission")
+        with self.assertRaises(ValueError):
+            _validate_contract(bad_contract)
+
+        for category in ("policy", "problem", "not_found", "permission"):
+            payload = {
+                "state": "declined",
+                "reason_category": category,
+                "message": "不能直接提交，但已经替你准备好「编辑表单」。",
+                "answer_targets": [
+                    {
+                        "kind": "page",
+                        "address": "/orders/12",
+                        "label": "编辑表单",
+                        "identity": "orders:12",
+                        "read_ref": "read#1",
+                    }
+                ],
+                "handoff": {
+                    "completed_fields": [{"name": "名称", "value": "Acme"}],
+                    "pending_fields": [{"name": "密码"}],
+                    "restricted_controls": [{"label": "登录密码", "kind": "password", "ref": "r1"}],
+                    "can_undo": True,
+                },
+            }
+            live = project_event(_event("progress", payload), at=21)
+            replayed = project_history_record({"kind": "progress", "payload": payload}, index=9)
+            for entry in (live, replayed):
+                assert entry is not None
+                self.assertEqual(entry["panel_state"], "declined")
+                self.assertEqual(entry["tone"], "neutral")
+                self.assertEqual(entry["reason_category"], category)
+                self.assertEqual(entry["answer_targets"][0]["label"], "编辑表单")
+                self.assertTrue(entry["handoff"]["can_undo"])
+                self.assertEqual(entry["handoff"]["restricted_controls"][0]["label"], "登录密码")
+
+        for fault_state in ("refused", "failed", "task_failed", "indeterminate"):
+            entry = project_event(_event("progress", {"state": fault_state, "message": "失败"}), at=22)
+            self.assertEqual(entry["reason_category"], "fault")
 
 
 if __name__ == "__main__":

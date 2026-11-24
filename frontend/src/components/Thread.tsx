@@ -1,10 +1,12 @@
 import {memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react'
 import {
   AlertTriangle, ArrowDown, ArrowUpRight, ChevronDown, CircleAlert, CircleCheck, CircleSlash, CircleX,
-  FileText, PanelTop, RefreshCw, RotateCcw,
+  FileText, Info, Lock, PanelTop, RefreshCw, RotateCcw, SearchX, ShieldAlert,
 } from 'lucide-react'
-import type {
-  AnswerTarget, HandoffRestrictedControl, Labels, PanelLimits, ReconciliationStatus, TimelineEntry,
+import {
+  DEFAULT_CONFIGURATION, isReasonCategory,
+  type AnswerTarget, type HandoffRestrictedControl, type Labels, type PanelConfiguration,
+  type PanelLimits, type ReasonCategory, type ReconciliationStatus, type TimelineEntry,
 } from '../contract/panel'
 import type {PanelSnapshot} from '../bridge/host'
 import {plainText} from '../markdown/plain'
@@ -156,8 +158,9 @@ function group(entries: TimelineEntry[], busy: boolean): Turn[] {
 type NodeStatus = 'running' | 'done' | 'failed' | 'waiting' | 'stopped'
 
 const FAILED_STATES = new Set(['refused', 'error', 'indeterminate'])
-/** A turn the person ended -- stopped, declined, or replaced. Nothing went wrong. */
+/** A turn the person ended -- stopped or replaced. Nothing went wrong. */
 const STOPPED_STATE = 'cancelled'
+const DECLINED_STATE = 'declined'
 
 function statusOf(turn: Turn, index: number): NodeStatus {
   const step = turn.steps[index]!
@@ -237,8 +240,10 @@ const WorkProcess = memo(function WorkProcess({turn, labels, stopping}: {
   // Ended by the person: a grey slashed circle -- cancelled, as a CI run marks it -- not the
   // red cross of a failure. The words for why are the answer's, directly below.
   const stopped = !turn.running && turn.outcome?.panel_state === STOPPED_STATE
+  const declined = !turn.running && turn.outcome?.panel_state === DECLINED_STATE
   const mark = failed ? <CircleX {...iconProps(14)} />
-    : stopped ? <CircleSlash {...iconProps(14)} /> : <CircleCheck {...iconProps(14)} />
+    : stopped ? <CircleSlash {...iconProps(14)} />
+      : declined ? <Info {...iconProps(14)} /> : <CircleCheck {...iconProps(14)} />
   // A turn whose only entry is the server saying it had started -- a goal turn, which
   // reports no steps, or an old session replayed from before steps were reported -- has
   // nothing a list can add, so it gets no list: how it ended and how long it took, on the
@@ -247,7 +252,8 @@ const WorkProcess = memo(function WorkProcess({turn, labels, stopping}: {
   if (!turn.running && bare) {
     return (
       <p className="woa-took" data-failed={failed ? 'true' : undefined}
-         data-stopped={stopped ? 'true' : undefined}>
+         data-stopped={stopped ? 'true' : undefined}
+         data-declined={declined ? 'true' : undefined}>
         {mark}<span>{labels.elapsedPrefix} {total}</span>
       </p>
     )
@@ -280,6 +286,7 @@ const WorkProcess = memo(function WorkProcess({turn, labels, stopping}: {
     : (
       <button type="button" className="woa-work__summary" aria-expanded={open}
               data-failed={failed ? 'true' : undefined} data-stopped={stopped ? 'true' : undefined}
+              data-declined={declined ? 'true' : undefined}
               onClick={() => setOpen(!open)}>
         {mark}
         <span>{labels.workSteps.replace('{count}', String(turn.steps.length))}
@@ -321,13 +328,78 @@ function Starting({labels}: {labels: Labels}): React.JSX.Element {
   )
 }
 
+function reasonCategoryIcon(kind: 'indeterminate' | 'refused' | 'declined', category: ReasonCategory | null) {
+  if (kind === 'indeterminate') return AlertTriangle
+  if (category === 'permission') return Lock
+  if (category === 'not_found') return SearchX
+  if (category === 'policy') return ShieldAlert
+  if (category === 'problem') return Info
+  return CircleAlert
+}
+
+function AnswerTargetsNav({
+  targets, labels, onOpenTarget,
+}: {
+  targets: readonly AnswerTarget[]
+  labels: Labels
+  onOpenTarget?: ((target: AnswerTarget) => boolean) | undefined
+}): React.JSX.Element | null {
+  if (!targets.length) return null
+  return (
+    <nav className="woa-answer-targets" aria-label={labels.relatedLinks}>
+      <span>{labels.relatedLinks}</span>
+      <ul>{targets.map(target => (
+        <li key={`${target.read_ref}:${target.identity}`}><a href={target.address}
+           target="_blank" rel="noreferrer noopener"
+           onClick={event => {
+             if (event.button === 0 && !event.metaKey && !event.ctrlKey
+                 && !event.shiftKey && !event.altKey && onOpenTarget?.(target)) {
+               event.preventDefault()
+             }
+           }}>
+          {target.kind === 'record' ? <FileText {...iconProps(14)} /> : <PanelTop {...iconProps(14)} />}
+          <span>{target.label}</span>
+          <ArrowUpRight {...iconProps(12)} />
+        </a></li>
+      ))}</ul>
+    </nav>
+  )
+}
+
+function AnswerActions({
+  entry, labels, limits,
+}: {
+  entry: TimelineEntry
+  labels: Labels
+  limits: PanelLimits
+}): React.JSX.Element | null {
+  const hasText = Boolean(entry.text)
+  if (!hasText && entry.at <= 0) return null
+  return (
+    <div className="woa-answer-actions">
+      {hasText && (
+        <CopyButton text={() => plainText(entry.text.slice(0, limits.result_max_chars))}
+                    label={labels.copyAnswer} copiedLabel={labels.copied}
+                    className="woa-icon-button" />
+      )}
+      {entry.at > 0 && (
+        <time className="woa-answer-time" dateTime={new Date(entry.at).toISOString()}
+              title={formatFullTime(entry.at, labels.locale)}>
+          {formatTime(entry.at, Date.now(), labels.locale)}
+        </time>
+      )}
+    </div>
+  )
+}
+
 function Outcome({
-  entry, labels, limits, live, allowedOrigins, optionsDisabled,
+  entry, labels, limits, reasonCategories, live, allowedOrigins, optionsDisabled,
   onOpenTarget, onReconcile, onSelectOption, onUndoFormFill, onFocusHandoffControl,
 }: {
   entry: TimelineEntry
   labels: Labels
   limits: PanelLimits
+  reasonCategories?: PanelConfiguration['reason_categories'] | undefined
   live: boolean
   allowedOrigins: readonly string[]
   optionsDisabled: boolean
@@ -348,14 +420,21 @@ function Outcome({
     if (entry.reconciliation) setLocalReconciliation(null)
   }, [entry.reconciliation])
 
-  // Only the two outcomes a person has to act on get a card of their own. Everything else
-  // is prose, because giving every ending a card flattens the two that matter.
+  // Fault/indeterminate cards and non-fault declined explanations share `.woa-outcome`;
+  // completed and clarification outcomes stay lightweight prose/controls in `.woa-result`.
   const kind = entry.panel_state === 'indeterminate' ? 'indeterminate'
-    : entry.panel_state === 'refused' ? 'refused' : 'plain'
+    : entry.panel_state === 'refused' ? 'refused'
+      : entry.panel_state === 'declined' ? 'declined' : 'plain'
+  const hasText = Boolean(entry.text)
   if (kind === 'plain') {
-    const hasText = Boolean(entry.text)
     return (
-      <div className="woa-result" data-entry-id={entry.id}>
+      <div className="woa-result" data-entry-id={entry.id} data-panel-state={entry.panel_state}>
+      {entry.panel_state === 'needs_input' && (
+        <p className="woa-result__status" role="status">
+          <Info {...iconProps(14)} />
+          <span>{labels.statusNeedsInput}</span>
+        </p>
+      )}
       {hasText && (
         <Answer text={entry.text.slice(0, limits.result_max_chars)}
                 authored={entry.authored ?? 'server'} live={live}
@@ -391,44 +470,25 @@ function Outcome({
           onFocusHandoffControl={onFocusHandoffControl}
         />
       )}
-      {entry.answer_targets?.length ? (
-        <nav className="woa-answer-targets" aria-label={labels.relatedLinks}>
-          <span>{labels.relatedLinks}</span>
-          <ul>{entry.answer_targets.map(target => (
-            <li key={`${target.read_ref}:${target.identity}`}><a href={target.address}
-               target="_blank" rel="noreferrer noopener"
-               onClick={event => {
-                 if (event.button === 0 && !event.metaKey && !event.ctrlKey
-                     && !event.shiftKey && !event.altKey && onOpenTarget?.(target)) {
-                   event.preventDefault()
-                 }
-               }}>
-              {target.kind === 'record' ? <FileText {...iconProps(14)} /> : <PanelTop {...iconProps(14)} />}
-              <span>{target.label}</span>
-              <ArrowUpRight {...iconProps(12)} />
-            </a></li>
-          ))}</ul>
-        </nav>
-      ) : null}
-      {(hasText || entry.at > 0) && (
-        <div className="woa-answer-actions">
-          {hasText && (
-            <CopyButton text={() => plainText(entry.text.slice(0, limits.result_max_chars))}
-                        label={labels.copyAnswer} copiedLabel={labels.copied}
-                        className="woa-icon-button" />
-          )}
-          {entry.at > 0 && (
-            <time className="woa-answer-time" dateTime={new Date(entry.at).toISOString()}
-                  title={formatFullTime(entry.at, labels.locale)}>
-              {formatTime(entry.at, Date.now(), labels.locale)}
-            </time>
-          )}
-        </div>
-      )}
+      <AnswerTargetsNav targets={entry.answer_targets ?? []} labels={labels} onOpenTarget={onOpenTarget} />
+      <AnswerActions entry={entry} labels={labels} limits={limits} />
       </div>
     )
   }
-  const Icon = kind === 'indeterminate' ? AlertTriangle : CircleAlert
+  const categories = reasonCategories ?? DEFAULT_CONFIGURATION.reason_categories
+  const defaultCategory: ReasonCategory | null = kind === 'declined' ? 'problem' : kind === 'refused' ? 'fault' : null
+  const category: ReasonCategory | null = isReasonCategory(entry.reason_category)
+    ? entry.reason_category
+    : defaultCategory
+  const categorySpec = category ? categories[category] : null
+  const tone = categorySpec?.tone
+    ?? (kind === 'indeterminate' ? 'warning' : kind === 'refused' ? 'error' : 'neutral')
+  const Icon = reasonCategoryIcon(kind, category)
+  const heading = kind === 'indeterminate'
+    ? labels.statusIndeterminate
+    : kind === 'refused'
+      ? labels.statusRefused
+      : (categorySpec?.label ?? labels.statusDeclined)
   const reconciliation = kind === 'indeterminate' ? (localReconciliation ?? entry.reconciliation ?? null) : null
   const statusLabel = reconciliation
     ? reconciliation.outcome === 'completed'
@@ -452,12 +512,31 @@ function Outcome({
     }
   }
   return (
-    <section className="woa-outcome" data-entry-id={entry.id} data-kind={kind}>
+    <section className="woa-outcome" data-entry-id={entry.id} data-kind={kind}
+             data-tone={tone} data-category={category ?? undefined}
+             aria-label={kind === 'declined' ? labels.statusDeclined : undefined}>
       <h3><Icon {...iconProps(14)} />
-        {kind === 'indeterminate' ? labels.statusIndeterminate : labels.statusRefused}</h3>
-      <Answer text={entry.text.slice(0, limits.result_max_chars)}
-              authored={entry.authored ?? 'server'} live={false}
-              labels={labels} allowedOrigins={allowedOrigins} />
+        <span>{heading}</span></h3>
+      {kind === 'refused' && categorySpec && (
+        <p className="woa-outcome__category">{categorySpec.label}</p>
+      )}
+      {hasText && (
+        <Answer text={entry.text.slice(0, limits.result_max_chars)}
+                authored={entry.authored ?? 'server'} live={false}
+                labels={labels} allowedOrigins={allowedOrigins} />
+      )}
+      {kind === 'declined' && entry.handoff && (
+        <HandoffCard
+          handoff={entry.handoff}
+          turnId={entry.turn_id}
+          labels={labels}
+          onUndoFormFill={onUndoFormFill}
+          onFocusHandoffControl={onFocusHandoffControl}
+        />
+      )}
+      {kind === 'declined' && (
+        <AnswerTargetsNav targets={entry.answer_targets ?? []} labels={labels} onOpenTarget={onOpenTarget} />
+      )}
       {kind === 'indeterminate' && reconciliation && statusLabel && (
         <p className="woa-outcome__reconcile" data-outcome={reconciliation.outcome} role="status">
           {reconciliation.outcome === 'completed'
@@ -480,6 +559,7 @@ function Outcome({
           </button>
         </div>
       )}
+      {kind === 'declined' && <AnswerActions entry={entry} labels={labels} limits={limits} />}
     </section>
   )
 }
@@ -488,6 +568,7 @@ export interface ThreadProps {
   snapshot: PanelSnapshot
   labels: Labels
   limits: PanelLimits
+  reasonCategories?: PanelConfiguration['reason_categories'] | undefined
   allowedOrigins: readonly string[]
   localDevMode?: boolean
   onOpenTarget?: (target: AnswerTarget) => boolean
@@ -757,6 +838,8 @@ export function Thread(props: ThreadProps): React.JSX.Element {
                 || (turn.outcome.table && turn.outcome.table.columns.length > 0)
                 || turn.outcome.input_options?.length
                 || turn.outcome.handoff
+                || turn.outcome.panel_state === DECLINED_STATE
+                || turn.outcome.panel_state === 'needs_input'
               ),
             )
             const retryableFailure = !turn.running && Boolean(turn.goal?.text) && (
@@ -781,6 +864,7 @@ export function Thread(props: ThreadProps): React.JSX.Element {
                 {/* The server supplies the outcome, including why a confirmation expired. */}
                 {hasOutcomeContent && turn.outcome && (
                   <Outcome entry={turn.outcome} labels={labels} limits={limits}
+                           reasonCategories={props.reasonCategories}
                            live={!turn.outcome.replayed && !settledAtMount.current?.has(turn.outcome.id)}
                            allowedOrigins={allowedOrigins}
                            optionsDisabled={optionsDisabled}
