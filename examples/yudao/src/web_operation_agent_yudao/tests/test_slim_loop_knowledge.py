@@ -1058,6 +1058,109 @@ class KnowledgeTests(unittest.TestCase):
 
         self.assertIn("没有匹配的只读接口", know.search_api("不存在的外星菜单xyz"))
 
+    def test_search_api_preserves_ui_main_list_with_stats_summary_and_honors_stats_queries(self):
+        from web_operation_agent_yudao.executor.actor_knowledge import _endpoint_class_multiplier
+        from web_operation_agent_yudao.rules.ui_source import ListView, UiSource
+
+        docs = {
+            "paths": {
+                "/admin-api/wms/inventory/page": {
+                    "get": {"summary": "获得库存统计分页", "tags": ["管理后台 - WMS 库存统计"], "parameters": []}
+                },
+                "/admin-api/wms/inventory-history/page": {
+                    "get": {"summary": "获得库存流水分页", "tags": ["管理后台 - WMS 库存流水"], "parameters": []}
+                },
+                "/admin-api/wms/inventory/get-count": {
+                    "get": {"summary": "获得库存数量统计", "tags": ["管理后台 - WMS 库存统计"], "parameters": []}
+                },
+                "/admin-api/product/spu/page": {
+                    "get": {"summary": "获得商品 SPU 分页", "tags": ["管理后台 - 商品 SPU"], "parameters": []}
+                },
+                "/admin-api/statistics/product/list": {
+                    "get": {"summary": "获得商品统计明细", "tags": ["管理后台 - 商品统计"], "parameters": []}
+                },
+                "/admin-api/statistics/product/rank-page": {
+                    "get": {"summary": "获得商品统计排行榜分页", "tags": ["管理后台 - 商品统计"], "parameters": []}
+                },
+                "/admin-api/statistics/product/get-import-template": {
+                    "get": {"summary": "获得商品统计导入模板", "tags": ["管理后台 - 商品统计"], "parameters": []}
+                },
+                "/admin-api/statistics/product/export-excel": {
+                    "get": {"summary": "导出商品统计", "tags": ["管理后台 - 商品统计"], "parameters": []}
+                },
+                "/admin-api/crm/sale/summary-report": {
+                    "get": {"summary": "获得销售汇总报表", "tags": ["管理后台 - 销售汇总报表"], "parameters": []}
+                },
+            },
+            "components": {"schemas": {}},
+        }
+        menus = [
+            {"id": 1, "name": "WMS 库存统计", "path": "/wms/inventory", "component": "wms/inventory/index", "visible": True},
+            {"id": 2, "name": "WMS 库存流水", "path": "/wms/inventory-history", "component": "wms/inventoryHistory/index", "visible": True},
+            {"id": 3, "name": "商品 SPU", "path": "/product/spu", "component": "product/spu/index", "visible": True},
+            {"id": 4, "name": "商品统计排行", "path": "/statistics/product", "component": "statistics/product/index", "visible": True},
+        ]
+        ui = UiSource(views={
+            "wms/inventory/index": ListView(endpoint="/admin-api/wms/inventory/page"),
+            "wms/inventoryHistory/index": ListView(endpoint="/admin-api/wms/inventory-history/page"),
+            "product/spu/index": ListView(endpoint="/admin-api/product/spu/page"),
+            "statistics/product/index": ListView(endpoint="/admin-api/statistics/product/rank-page"),
+        })
+
+        class MenuClient:
+            def get(self, path, **_kwargs):
+                if path == "system/auth/get-permission-info":
+                    return {"user": {"nickname": "u"}, "menus": menus}
+                return {}
+
+        know = ActorKnowledge(MenuClient(), lambda: docs, ui=ui)
+        entries, _ = know._get_search_index()
+        by_path = {e["path"]: e for e in entries}
+
+        # Rule 1: UI main /page,/list,/tree with stats-word summary is NOT demoted; stats path still is.
+        self.assertEqual(by_path["/admin-api/wms/inventory/page"]["multiplier"], 1.55)
+        self.assertEqual(by_path["/admin-api/wms/inventory/get-count"]["multiplier"], 0.28)
+        self.assertEqual(by_path["/admin-api/statistics/product/rank-page"]["multiplier"], 0.28)
+        self.assertEqual(by_path["/admin-api/statistics/product/get-import-template"]["stats_multiplier"], 0.22)
+        self.assertEqual(
+            _endpoint_class_multiplier(
+                "/admin-api/statistics/product/export-excel", "导出商品统计", is_ui_main=False, allow_stats=True
+            ),
+            0.22,
+        )
+
+        inv_paths = [line.split()[1] for line in know.search_api("WMS 库存").splitlines() if line.startswith("GET ")]
+        self.assertIn("/admin-api/wms/inventory/page", inv_paths[:2])
+        self.assertLess(
+            inv_paths.index("/admin-api/wms/inventory/page"),
+            inv_paths.index("/admin-api/wms/inventory/get-count"),
+        )
+
+        # Non-stats query keeps product main list ahead of statistics endpoints.
+        prod_paths = [line.split()[1] for line in know.search_api("商品").splitlines() if line.startswith("GET ")]
+        self.assertEqual(prod_paths[0], "/admin-api/product/spu/page")
+        self.assertLess(
+            prod_paths.index("/admin-api/product/spu/page"),
+            prod_paths.index("/admin-api/statistics/product/rank-page"),
+        )
+
+        # Rule 2: Queries with stats words (统计/排行/汇总/报表) lift stats demotion, while export/import stay demoted.
+        stats_paths = [line.split()[1] for line in know.search_api("商品统计").splitlines() if line.startswith("GET ")]
+        self.assertIn("/admin-api/statistics/product/list", stats_paths[:3])
+        self.assertIn("/admin-api/statistics/product/rank-page", stats_paths[:3])
+        self.assertNotIn("/admin-api/statistics/product/export-excel", stats_paths[:3])
+        self.assertNotIn("/admin-api/statistics/product/get-import-template", stats_paths[:3])
+
+        rank_paths = [line.split()[1] for line in know.search_api("商品 排行").splitlines() if line.startswith("GET ")]
+        self.assertIn("/admin-api/statistics/product/rank-page", rank_paths[:3])
+        self.assertNotIn("/admin-api/statistics/product/get-import-template", rank_paths[:3])
+
+        summary_paths = [line.split()[1] for line in know.search_api("销售汇总").splitlines() if line.startswith("GET ")]
+        self.assertEqual(summary_paths[0], "/admin-api/crm/sale/summary-report")
+
+        report_paths = [line.split()[1] for line in know.search_api("销售报表").splitlines() if line.startswith("GET ")]
+        self.assertEqual(report_paths[0], "/admin-api/crm/sale/summary-report")
+
 
 
 

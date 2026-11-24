@@ -63,6 +63,7 @@ _API_STATS_PATH_RE = re.compile(
     re.I,
 )
 _API_STATS_SUMMARY_RE = re.compile(r"统计|汇总|趋势|排行|占比|概况|看板|(?:数量|总数|个数)$")
+_QUERY_STATS_RE = re.compile(r"统计|排行|汇总|报表")
 _API_SIMPLE_LIST_RE = re.compile(r"(?:^|/|-)(?:simple-list|list-all-simple)(?:$|/|-)|-simple$", re.I)
 _SUMMARY_PREFIX_RE = re.compile(r"^(?:分页(?:获得|获取|查询|查看)|获得|获取|查询|查看)")
 _SUMMARY_SUFFIX_RE = re.compile(r"(?:列表|分页|详情|信息)$")
@@ -90,26 +91,42 @@ def _clean_column_label(text: object) -> str:
     return head
 
 
-def _endpoint_class_multiplier(path: str, summary: str, *, is_ui_main: bool) -> float:
+def _endpoint_class_multiplier(
+    path: str,
+    summary: str,
+    *,
+    is_ui_main: bool,
+    allow_stats: bool = False,
+) -> float:
     """Boost main page lists; demote export, import-template, and statistics endpoints."""
     tail = path.removeprefix("/admin-api/")
     if _API_EXPORT_RE.search(tail) or "导出" in summary:
         return 0.22
     if _API_IMPORT_TEMPLATE_RE.search(tail) or "导入模板" in summary:
         return 0.22
-    if _API_STATS_PATH_RE.search(tail) or _API_STATS_SUMMARY_RE.search(summary):
-        return 0.28
+    is_ui_main_list = is_ui_main and path.endswith(("/page", "/list", "/tree"))
     if _API_SIMPLE_LIST_RE.search(tail) or "精简列表" in summary:
-        return 0.78
-    if is_ui_main and path.endswith(("/page", "/list", "/tree")):
-        return 1.55
-    if is_ui_main:
-        return 1.35
-    if path.endswith("/page"):
-        return 1.42
-    if path.endswith(("/list", "/tree")):
-        return 1.28
-    return 0.92
+        base = 0.78
+    elif is_ui_main_list:
+        base = 1.55
+    elif is_ui_main:
+        base = 1.35
+    elif path.endswith("/page"):
+        base = 1.42
+    elif path.endswith(("/list", "/tree")):
+        base = 1.28
+    else:
+        base = 0.92
+    # Main /page, /list, /tree lists backing a UI page should not lose rank just because
+    # their OpenAPI summary uses wording like "统计"; demote stats by path or non-main summary.
+    is_stats = (
+        bool(_API_STATS_PATH_RE.search(tail))
+        if is_ui_main_list
+        else bool(_API_STATS_PATH_RE.search(tail) or _API_STATS_SUMMARY_RE.search(summary))
+    )
+    if is_stats and not allow_stats:
+        return 0.28
+    return base
 
 
 def _score(query: str, *fields) -> float:
@@ -472,7 +489,8 @@ class ActorKnowledge:
                     "page_grams": tuple((t, _bigrams(t)) for t in seen_titles if len(t) >= 3),
                     "columns": unique_cols,
                     "tail_tokens": tail_tokens,
-                    "multiplier": _endpoint_class_multiplier(path, summary, is_ui_main=is_ui_main),
+                    "multiplier": _endpoint_class_multiplier(path, summary, is_ui_main=is_ui_main, allow_stats=False),
+                    "stats_multiplier": _endpoint_class_multiplier(path, summary, is_ui_main=is_ui_main, allow_stats=True),
                 })
 
             total_ops = max(len(raw_entries), 1)
@@ -487,7 +505,8 @@ class ActorKnowledge:
 
     @staticmethod
     def _score_api_entry(terms: list[str], compact: str, want_grams: set[str],
-                         entry: dict, col_idf: dict[str, float]) -> float:
+                         entry: dict, col_idf: dict[str, float], *,
+                         allow_stats: bool = False) -> float:
         score = 0.0
         for label in entry["tag_phrases"]:
             if label == compact:
@@ -556,17 +575,19 @@ class ActorKnowledge:
                     if len(term) >= 2 and term in col:
                         col_score += 3.0 * (len(term) / len(col)) * weight * len_scale
         score += min(col_score, 12.0)
-        return score * entry["multiplier"]
+        mult = entry["stats_multiplier"] if allow_stats else entry["multiplier"]
+        return score * mult
 
     def search_api(self, keyword: str, *, include_writes: bool = False, source=None, ui=None) -> str:
         entries, col_idf = self._get_search_index(ui=ui)
         terms = [t for t in re.split(r"[\s,，、；;：:？?！!。/]+", str(keyword or "").lower()) if t]
         compact = "".join(terms)
         want_grams = _bigrams(compact)
+        allow_stats = bool(_QUERY_STATS_RE.search(compact))
         lines = []
         if compact:
             ranked = sorted(
-                ((self._score_api_entry(terms, compact, want_grams, entry, col_idf), entry["op"])
+                ((self._score_api_entry(terms, compact, want_grams, entry, col_idf, allow_stats=allow_stats), entry["op"])
                  for entry in entries),
                 key=lambda pair: (-pair[0], len(pair[1]["path"]), pair[1]["path"]),
             )
