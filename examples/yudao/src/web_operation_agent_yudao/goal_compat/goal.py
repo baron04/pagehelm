@@ -1244,14 +1244,19 @@ class YudaoGoalData:
         seen_pages: set[tuple[str, str]] = set()
         for page in schema.pages:
             ent = schema.entity(page.entity) if page.entity else None
+            spec = self._entities.get(page.entity) if page.entity else None
             extras = [
+                page.label,
                 *(aliases.get(page.key) or ()),
-                *(s.strip() for s in breadcrumbs.get(page.key, "").split("/") if s.strip()),
                 breadcrumbs.get(page.key, ""),
             ]
-            if ent is not None:
+            if ent is not None and ent.label:
                 extras.append(ent.label)
-                extras.extend(entity_labels.get(page.entity, ()))
+            if spec is not None:
+                if spec.label:
+                    extras.append(spec.label)
+                if spec.full_label:
+                    extras.append(spec.full_label)
             label = (ent.label if ent is not None and ent.label else page.label) or page.label
             uniq = tuple(dict.fromkeys(s for s in extras if s))
             entries.append((page.entity, page.key, label, uniq))

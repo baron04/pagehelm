@@ -423,17 +423,35 @@ class ConventionsPageWordsTests(unittest.TestCase):
         self.assertNotIn("客户", {c.terms[0] for c in res_contract.active})
 
     def test_rule3_unresolved_prompt_and_hub_page_keep_all_conventions_active(self):
-        # Bare convention term "客户" without non-target evidence must not resolve to erp/customer.
-        res = resolve_turn_conventions(
-            self.conventions,
+        # Truly unresolved convention prompts on a hub route must stay unresolved with all conventions active,
+        # and multi-char non-entity conventions ("待回款") must not bleed into shorter substrings ("回款").
+        convs_with_receivable = (
+            *self.conventions,
+            IndexConvention(("回款",), "crm/receivable: money received", "crm/receivable"),
+        )
+        for prompt in ("查一下我能看的记录", "查一下待回款"):
+            res = resolve_turn_conventions(
+                convs_with_receivable,
+                prompt=prompt,
+                goal_data=self.goal_data,
+                knowledge=self.knowledge,
+                active_route="/home",
+            )
+            self.assertEqual(res.source, "unresolved")
+            self.assertEqual(res.active, convs_with_receivable)
+            self.assertEqual(res.suppressed, ())
+
+        # Entity-naming convention ("客户" -> crm/customer) resolves to its own target entity, never erp/customer.
+        res_customer = resolve_turn_conventions(
+            convs_with_receivable,
             prompt="查一下客户列表",
             goal_data=self.goal_data,
             knowledge=self.knowledge,
             active_route="/home",
         )
-        self.assertEqual(res.source, "unresolved")
-        self.assertEqual(res.active, self.conventions)
-        self.assertEqual(res.suppressed, ())
+        self.assertEqual(res_customer.source, "convention_entity")
+        self.assertEqual(res_customer.target_entities, ("crm/customer",))
+        self.assertIn("客户", {c.terms[0] for c in res_customer.active})
 
     def test_prompt_entity_overrides_active_page_while_empty_prompt_falls_back(self):
         # Active page is PMS project, but prompt explicitly switches to CRM customer.
@@ -621,6 +639,211 @@ class ConventionsPageWordsTests(unittest.TestCase):
         self.assertIn("我负责的", real_ui.page_vocabulary("pms/pm/project/list/index", route="/pms/pm/project/list"))
         self.assertIn("发送人", real_ui.page_vocabulary("", route="/user/notify-message"))
         self.assertGreater(len(real_ui.page_vocabulary("", route="/crm/customer/detail/42")), 10)
+
+    def test_step1_precision_fixes_cover_real_catalog_disambiguation(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "src/utils").mkdir(parents=True)
+            (root / "src/router/modules").mkdir(parents=True)
+            (root / "src/api").mkdir(parents=True)
+            (root / "src/utils/dict.ts").write_text("export enum DICT_TYPE {}\n", encoding="utf-8")
+            (root / "src/router/modules/remaining.ts").write_text("export default []\n", encoding="utf-8")
+            (root / "src/api/mall/trade/order").mkdir(parents=True)
+            (root / "src/api/mall/trade/order/index.ts").write_text(
+                "export const getOrderPage = () => request.get({ url: '/trade/order/page' })\n",
+                encoding="utf-8",
+            )
+            pages = {
+                "crm/customer/index.vue": (
+                    "<template>"
+                    "<el-table-column label=\"客户名称\" prop=\"name\" />"
+                    "<el-table-column label=\"成交状态\" prop=\"dealStatus\" />"
+                    "</template>\n"
+                ),
+                "crm/contract/index.vue": (
+                    "<template>"
+                    "<el-table-column label=\"合同名称\" prop=\"name\" />"
+                    "<el-table-column label=\"审批状态\" prop=\"auditStatus\" />"
+                    "</template>\n"
+                ),
+                "mall/trade/order/index.vue": (
+                    "<template><el-table-column label=\"订单状态\" prop=\"status\" /></template>\n"
+                    "<script setup lang=\"ts\">\n"
+                    "import * as TradeOrderApi from '@/api/mall/trade/order'\n"
+                    "const getList = async () => {\n"
+                    "  await TradeOrderApi.getOrderPage()\n"
+                    "}\n"
+                    "</script>\n"
+                ),
+                "pay/order/index.vue": (
+                    "<template><el-table-column label=\"订单号\" prop=\"no\" /></template>\n"
+                ),
+                "erp/sale/order/index.vue": (
+                    "<template><el-table-column label=\"订单编号\" prop=\"no\" /></template>\n"
+                ),
+                "erp/purchase/order/index.vue": (
+                    "<template><el-table-column label=\"订单单号\" prop=\"no\" /></template>\n"
+                ),
+                "erp/purchase/in/index.vue": (
+                    "<template><el-table-column label=\"入库单号\" prop=\"no\" /></template>\n"
+                ),
+                "mes/wm/itemreceipt/index.vue": (
+                    "<template><el-table-column label=\"未付款\" prop=\"unpaid\" /></template>\n"
+                ),
+            }
+            for rel, content in pages.items():
+                p = root / "src/views" / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(content, encoding="utf-8")
+
+            def _op(summary: str, tag: str, vo: str) -> dict:
+                return {
+                    "get": {
+                        "summary": summary,
+                        "tags": [f"管理后台 - {tag}"],
+                        "parameters": [
+                            {"name": "pageNo", "in": "query", "required": True, "schema": {"type": "integer"}},
+                            {"name": "pageSize", "in": "query", "required": True, "schema": {"type": "integer"}},
+                        ],
+                        "responses": {
+                            "200": {"content": {"*/*": {"schema": {"$ref": f"#/components/schemas/CommonResult_{vo}"}}}}
+                        },
+                    }
+                }
+
+            vo_defs = {
+                "CrmCustomerVO": {"id": {"type": "integer"}, "name": {"type": "string", "description": "客户名称"}, "dealStatus": {"type": "boolean", "description": "成交状态"}},
+                "ContractVO": {"id": {"type": "integer"}, "name": {"type": "string", "description": "合同名称"}, "auditStatus": {"type": "integer", "description": "审批状态"}},
+                "TradeOrderVO": {"id": {"type": "integer"}, "status": {"type": "integer", "description": "订单状态"}},
+                "PayOrderVO": {"id": {"type": "integer"}, "no": {"type": "string", "description": "订单号"}},
+                "SaleOrderVO": {"id": {"type": "integer"}, "no": {"type": "string", "description": "订单编号"}},
+                "PurchaseOrderVO": {"id": {"type": "integer"}, "no": {"type": "string", "description": "订单单号"}},
+                "PurchaseInVO": {"id": {"type": "integer"}, "no": {"type": "string", "description": "入库单号"}},
+                "ItemReceiptVO": {"id": {"type": "integer"}, "unpaid": {"type": "integer", "description": "未付款"}},
+            }
+            schemas = {}
+            for vo, props in vo_defs.items():
+                schemas[vo] = {"properties": props}
+                schemas[f"PageResult_{vo}"] = {"properties": {"list": {"type": "array", "items": {"$ref": f"#/components/schemas/{vo}"}}}}
+                schemas[f"CommonResult_{vo}"] = {"properties": {"data": {"$ref": f"#/components/schemas/PageResult_{vo}"}}}
+            docs = {
+                "paths": {
+                    "/admin-api/crm/customer/page": _op("CRM客户分页", "CRM 客户", "CrmCustomerVO"),
+                    "/admin-api/crm/contract/page": _op("CRM合同分页", "CRM 合同", "ContractVO"),
+                    "/admin-api/trade/order/page": _op("交易订单分页", "商城 交易订单", "TradeOrderVO"),
+                    "/admin-api/pay/order/page": _op("支付订单分页", "支付 订单", "PayOrderVO"),
+                    "/admin-api/erp/sale-order/page": _op("销售订单分页", "ERP 销售订单", "SaleOrderVO"),
+                    "/admin-api/erp/purchase-order/page": _op("采购订单分页", "ERP 采购订单", "PurchaseOrderVO"),
+                    "/admin-api/erp/purchase-in/page": _op("采购入库分页", "ERP 采购入库", "PurchaseInVO"),
+                    "/admin-api/mes/wm/item-receipt/page": _op("采购入库单分页", "MES 采购入库单", "ItemReceiptVO"),
+                },
+                "components": {"schemas": schemas},
+            }
+
+            class _PrecisionClient:
+                tenant = "1"
+                read_generation = 0
+                menus = [
+                    {"name": "CRM 系统", "path": "/crm", "component": "Layout", "children": [
+                        {"name": "客户管理", "path": "customer", "component": "crm/customer/index"},
+                        {"name": "合同管理", "path": "contract", "component": "crm/contract/index"},
+                    ]},
+                    {"name": "MALL 商城系统", "path": "/mall", "component": "Layout", "children": [
+                        {"name": "订单列表", "path": "trade/order", "component": "mall/trade/order/index"},
+                    ]},
+                    {"name": "支付系统", "path": "/pay", "component": "Layout", "children": [
+                        {"name": "支付订单", "path": "order", "component": "pay/order/index"},
+                    ]},
+                    {"name": "ERP 系统", "path": "/erp", "component": "Layout", "children": [
+                        {"name": "销售订单", "path": "sale/order", "component": "erp/sale/order/index"},
+                        {"name": "采购订单", "path": "purchase/order", "component": "erp/purchase/order/index"},
+                        {"name": "采购入库", "path": "purchase/in", "component": "erp/purchase/in/index"},
+                    ]},
+                    {"name": "MES 仓库", "path": "/mes", "component": "Layout", "children": [
+                        {"name": "采购入库单", "path": "wm/item-receipt", "component": "mes/wm/itemreceipt/index"},
+                    ]},
+                ]
+
+                @staticmethod
+                def read_window(_check):
+                    return contextlib.nullcontext()
+
+                def get(self, path, **params):
+                    if path == "system/auth/get-permission-info":
+                        return {
+                            "user": {"id": 9, "deptId": 7, "nickname": "测试员"},
+                            "permissions": [
+                                "crm:customer:query", "crm:contract:query", "trade:order:query",
+                                "pay:order:query", "erp:sale-order:query", "erp:purchase-order:query",
+                                "erp:purchase-in:query", "mes:wm:item-receipt:query",
+                            ],
+                            "menus": self.menus,
+                        }
+                    if path in ("system/dict-data/simple-list", "system/dict-type/simple-list"):
+                        return []
+                    raise AssertionError(f"unexpected GET {path} {params}")
+
+            convs = (
+                IndexConvention(("客户",), "crm/customer (CRM 客户)", "crm/customer"),
+                IndexConvention(
+                    ("成交", "已成交", "成交的合同"),
+                    "crm/contract with 审批状态 = 审核通过",
+                    "crm/contract",
+                    (("审批状态", ("审核通过",)),),
+                ),
+                IndexConvention(("订单", "销售订单", "销售单"), "erp/sale-order", "erp/sale-order"),
+                IndexConvention(("采购订单", "采购单"), "erp/purchase-order", "erp/purchase-order"),
+                IndexConvention(
+                    ("未付款", "没付款", "还没付款"),
+                    "trade/order where 订单状态 = 待支付",
+                    "trade/order",
+                    (("订单状态", ("待支付",)),),
+                ),
+            )
+            client = _PrecisionClient()
+            app = YudaoApplication(
+                "https://synthetic.test",
+                None,
+                docs,
+                client=client,
+                ui=UiSource.read(root),
+                conventions=None,
+            )
+            app.goal_data.attach_conventions(convs)
+            kn = ActorKnowledge(client, docs)
+            kn._load()
+
+            # 1) Entity-naming fallback ("客户" -> crm/customer) suppresses "成交" via 成交状态,
+            # while "成交的合同" resolves crm/contract and keeps "成交" active via Rule 1.
+            res_deal_cust = resolve_turn_conventions(convs, prompt="已成交的客户有哪些", goal_data=app.goal_data, knowledge=kn)
+            self.assertEqual(res_deal_cust.source, "convention_entity")
+            self.assertEqual(res_deal_cust.target_entities, ("crm/customer",))
+            self.assertNotIn("成交", {c.terms[0] for c in res_deal_cust.active})
+
+            res_deal_contract = resolve_turn_conventions(convs, prompt="查一下成交的合同", goal_data=app.goal_data, knowledge=kn)
+            self.assertEqual(res_deal_contract.source, "prompt")
+            self.assertEqual(res_deal_contract.target_entities, ("crm/contract",))
+            self.assertIn("成交", {c.terms[0] for c in res_deal_contract.active})
+
+            # 2) Mixed module token ("MALL 商城系统" -> "商城") resolves trade/order and suppresses "订单".
+            res_mall = resolve_turn_conventions(convs, prompt="商城的拼团订单", goal_data=app.goal_data, knowledge=kn)
+            self.assertEqual(res_mall.target_entities, ("trade/order",))
+            self.assertNotIn("订单", {c.terms[0] for c in res_mall.active})
+
+            # 3) Tier 2 <pref><suf> decomposition ("支付订单" -> "支付成功订单") resolves pay/order.
+            res_pay = resolve_turn_conventions(convs, prompt="昨天支付成功订单有哪些", goal_data=app.goal_data, knowledge=kn)
+            self.assertEqual(res_pay.target_entities, ("pay/order",))
+            self.assertNotIn("订单", {c.terms[0] for c in res_pay.active})
+
+            # 4) <X> / <X>单 co-resolution resolves both erp/purchase-in & mes/wm/item-receipt and suppresses "未付款".
+            res_in = resolve_turn_conventions(convs, prompt="查一下未付款的采购入库单", goal_data=app.goal_data, knowledge=kn)
+            self.assertEqual(set(res_in.target_entities), {"erp/purchase-in", "mes/wm/item-receipt"})
+            self.assertNotIn("未付款", {c.terms[0] for c in res_in.active})
+
+            # 5) Tier 3 core_len priority picks "采购订单" over generic "订单列表".
+            res_po = resolve_turn_conventions(convs, prompt="还没入库的采购订单列表", goal_data=app.goal_data, knowledge=kn)
+            self.assertEqual(res_po.target_entities, ("erp/purchase-order",))
+            self.assertIn("采购订单", {c.terms[0] for c in res_po.active})
 
 
 if __name__ == "__main__":

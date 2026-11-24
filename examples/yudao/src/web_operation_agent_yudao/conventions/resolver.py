@@ -213,6 +213,7 @@ def _prompt_targets(
     residual_prompt: str,
     catalog: Sequence[tuple[str, str, str, tuple[str, ...]]],
     convention_terms: frozenset[str],
+    conventions: Sequence[object] = (),
 ) -> list[tuple[str, str]]:
     if not prompt or not catalog:
         return []
@@ -220,39 +221,75 @@ def _prompt_targets(
     res_c = _compact(residual_prompt)
 
     stem_owners: dict[str, set[str]] = {}
-    entry_candidates: list[tuple[str, str, list[str], list[str], list[str]]] = []
+    full_name_owners: dict[str, set[str]] = {}
+    exact_name_owners: dict[str, set[str]] = {}
+    entity_primary_names: set[str] = set()
+    entry_candidates: list[tuple[str, str, list[str], list[str], list[str], list[str]]] = []
+
+    def _split_breadcrumb_prefixes(segment: str) -> list[str]:
+        out: list[str] = []
+        for tok in re.findall(r"[A-Za-z0-9]+|[\u4e00-\u9fff]+", segment or ""):
+            if tok.isascii():
+                cand = tok.lower()
+            else:
+                cand = _MODULE_SUFFIX.sub("", tok) or tok
+            if len(cand) >= 2 and cand not in out:
+                out.append(cand)
+        return out
 
     for ent, route, label, extras in catalog:
         names = [s for s in dict.fromkeys((label, *(x for x in extras if "/" not in x))) if s]
         prefixes: list[str] = []
         stems: list[str] = []
-        for raw_name in names:
-            parts = [p for p in re.split(r"[\s/>]+", raw_name.strip()) if p]
-            if len(parts) >= 2:
-                head = _compact(_MODULE_SUFFIX.sub("", parts[0]) or parts[0])
-                if len(head) >= 2:
-                    prefixes.append(head)
-                tail_stem = _compact(_UI_SUFFIX.sub("", parts[-1]) or parts[-1])
-                if len(tail_stem) >= 2:
-                    stems.append(tail_stem)
-            base_stem = _compact(_UI_SUFFIX.sub("", raw_name) or raw_name)
-            if len(base_stem) >= 2:
-                stems.append(base_stem)
-                if ent or route:
-                    stem_owners.setdefault(base_stem, set()).add(ent or f"route:{route}")
+        tier2_only_stems: list[str] = []
+        owner_id = ent or (f"route:{route}" if route else "")
+        if ent and label:
+            entity_primary_names.add(_compact(label))
         for raw_ext in extras:
             if "/" in raw_ext:
                 segs = [p.strip() for p in raw_ext.split("/") if p.strip()]
-                if len(segs) >= 2:
-                    head = _compact(_MODULE_SUFFIX.sub("", segs[0]) or segs[0])
-                    if len(head) >= 2:
-                        prefixes.append(head)
-        entry_candidates.append((ent, route, names, list(dict.fromkeys(prefixes)), list(dict.fromkeys(stems))))
+                for ancestor in segs[:-1]:
+                    prefixes.extend(_split_breadcrumb_prefixes(ancestor))
+        for raw_name in names:
+            cn = _compact(raw_name)
+            if owner_id and len(cn) >= 2 and cn not in _GENERIC_STEMS:
+                exact_name_owners.setdefault(cn, set()).add(owner_id)
+                if cn not in convention_terms:
+                    full_name_owners.setdefault(cn, set()).add(owner_id)
+            parts = [p for p in re.split(r"[\s/>]+", raw_name.strip()) if p]
+            if len(parts) >= 2:
+                prefixes.extend(_split_breadcrumb_prefixes(parts[0]))
+                tail_stem = _compact(_UI_SUFFIX.sub("", parts[-1]) or parts[-1])
+                if len(tail_stem) >= 3 or (len(tail_stem) == 2 and tail_stem in entity_primary_names):
+                    stems.append(tail_stem)
+                elif len(tail_stem) == 2:
+                    tier2_only_stems.append(tail_stem)
+            base_stem = _compact(_UI_SUFFIX.sub("", raw_name) or raw_name)
+            if len(base_stem) >= 3 or (len(base_stem) == 2 and (base_stem == cn or base_stem in entity_primary_names)):
+                stems.append(base_stem)
+                if owner_id:
+                    stem_owners.setdefault(base_stem, set()).add(owner_id)
+            elif len(base_stem) == 2:
+                tier2_only_stems.append(base_stem)
+        # Decompose prefixed compound names (`支付订单` under `支付管理`) for Tier 2 only.
+        uniq_prefixes = list(dict.fromkeys(prefixes))
+        for raw_name in names:
+            cn = _compact(raw_name)
+            for pref in uniq_prefixes:
+                if cn.startswith(pref) and len(cn) - len(pref) >= 2:
+                    suf = cn[len(pref):]
+                    if suf not in _GENERIC_STEMS:
+                        tier2_only_stems.append(suf)
+        entry_candidates.append((
+            ent, route, names, uniq_prefixes, list(dict.fromkeys(stems)),
+            list(dict.fromkeys((*stems, *tier2_only_stems))),
+        ))
 
     chosen: list[tuple[str, str]] = []
     seen_targets: set[tuple[str, str]] = set()
     used_full = [False] * len(full_c)
     used_res = [False] * len(res_c)
+    matched_tier3: list[tuple[tuple[int, int], str]] = []
 
     def _add_hit(ent: str, route: str, full_span: tuple[int, int] | None = None,
                  res_span: tuple[int, int] | None = None) -> None:
@@ -277,30 +314,58 @@ def _prompt_targets(
         return None
 
     # Tier 4: exact route string in prompt (longest first)
-    for ent, route, _names, _prefixes, _stems in sorted(entry_candidates, key=lambda x: -len(x[1])):
+    for ent, route, _names, _prefixes, _stems, _t2stems in sorted(entry_candidates, key=lambda x: -len(x[1])):
         if route and len(route) > 1:
             m_route = re.search(re.escape(route) + r"(?=$|[^A-Za-z0-9_/-])", prompt)
             if m_route:
                 cr = _compact(route)
                 _add_hit(ent, route, _find_unused(full_c, used_full, cr), _find_unused(res_c, used_res, cr))
 
-    # Tier 3: full entity/page name in prompt with unused residual evidence (longest first)
-    tier3_cands: list[tuple[int, str, str, str, str]] = []
-    for ent, route, names, _prefixes, _stems in entry_candidates:
+    # Tier 3: full entity/page name in prompt (prioritize semantic core length over trailing UI suffixes)
+    tier3_cands: list[tuple[int, int, str, str, str, str]] = []
+    for ent, route, names, _prefixes, _stems, _t2stems in entry_candidates:
         for name in names:
             cn = _compact(name)
             if len(cn) < 2 or cn in _GENERIC_STEMS:
                 continue
-            tier3_cands.append((len(cn), cn, name, ent, route))
-    for _ln, cn, raw_name, ent, route in sorted(tier3_cands, key=lambda x: -x[0]):
+            core_cn = _compact(_UI_SUFFIX.sub("", raw_name := name) or raw_name)
+            tier3_cands.append((len(core_cn), len(cn), cn, raw_name, ent, route))
+    for _cln, _ln, cn, raw_name, ent, route in sorted(tier3_cands, key=lambda x: (-x[0], -x[1])):
         full_span = _find_unused(full_c, used_full, cn)
-        if full_span is None:
+        co_resolved_span: tuple[int, int] | None = None
+        if full_span is None and len(cn) >= 4:
+            for prev_span, prev_cn in matched_tier3:
+                if prev_cn == cn + "单" and full_c.startswith(cn, prev_span[0]):
+                    co_resolved_span = (prev_span[0], prev_span[0] + len(cn))
+                    break
+        span_for_match = full_span if full_span is not None else co_resolved_span
+        if span_for_match is None:
             continue
         if cn not in convention_terms:
             res_span = _find_unused(res_c, used_res, cn)
-            if res_span is not None:
-                _add_hit(ent, route, full_span, res_span)
+            if res_span is not None or (co_resolved_span is not None and cn in res_c):
+                _add_hit(ent, route, span_for_match, res_span)
+                matched_tier3.append((span_for_match, cn))
                 continue
+            # Exact unique non-convention entity primary name inside a longer phrase
+            # (e.g. "合同" inside convention phrase "成交的合同").
+            if len(exact_name_owners.get(cn, ())) == 1 and cn in entity_primary_names:
+                _add_hit(ent, route, span_for_match, None)
+                matched_tier3.append((span_for_match, cn))
+                continue
+        elif len(cn) >= 3 and len(exact_name_owners.get(cn, ())) == 1:
+            # Unambiguous multi-char catalog name (`销售订单`, `采购订单`, `回款计划`, `我的流程`).
+            _add_hit(ent, route, span_for_match, None)
+            matched_tier3.append((span_for_match, cn))
+            continue
+        if len(full_name_owners.get(cn, ())) == 1:
+            non_conv = _compact(_prompt_residual(raw_name, conventions))
+            if non_conv and len(non_conv) >= 2:
+                tok_span = _find_unused(res_c, used_res, non_conv)
+                if tok_span is not None:
+                    _add_hit(ent, route, span_for_match, tok_span)
+                    matched_tier3.append((span_for_match, cn))
+                    continue
         if " " in raw_name.strip():
             tokens = [_compact(tok) for tok in raw_name.split() if tok.strip()]
             for tok in tokens:
@@ -308,14 +373,15 @@ def _prompt_targets(
                     continue
                 tok_span = _find_unused(res_c, used_res, tok)
                 if tok_span is not None:
-                    _add_hit(ent, route, full_span, tok_span)
+                    _add_hit(ent, route, span_for_match, tok_span)
+                    matched_tier3.append((span_for_match, cn))
                     break
 
-    # Tier 2: adjacent module prefix (unused in residual) + entity core noun in prompt
+    # Tier 2: adjacent module/breadcrumb prefix (unused in residual) + entity core noun in prompt
     tier2_cands: list[tuple[int, str, str, str, str]] = []
-    for ent, route, _names, prefixes, stems in entry_candidates:
+    for ent, route, _names, prefixes, _stems, t2_stems in entry_candidates:
         for pref in prefixes:
-            for stem in stems:
+            for stem in t2_stems:
                 if stem in _GENERIC_STEMS or stem == pref:
                     continue
                 tier2_cands.append((len(pref) + len(stem), pref, stem, ent, route))
@@ -324,16 +390,15 @@ def _prompt_targets(
         if pref_span is None:
             continue
         m_adj = re.search(
-            re.escape(pref) + r"(?:里面的|里的|中的|的|里|中|内|下){0,1}" + re.escape(stem),
+            re.escape(pref) + r"[^\s，,。；;！？!]{0,4}" + re.escape(stem),
             full_c,
         )
         if m_adj is not None and not any(used_full[m_adj.start():m_adj.end()]):
             _add_hit(ent, route, m_adj.span(), pref_span)
 
-    # Tier 1: only when no stronger Tier >= 2 entity/page matched in the prompt (or for additional
-    # unambiguous stems outside already-matched spans).
+    # Tier 1: unambiguous stripped stems outside already-matched spans
     tier1_cands: list[tuple[int, str, str, str]] = []
-    for ent, route, _names, _prefixes, stems in entry_candidates:
+    for ent, route, _names, _prefixes, stems, _t2stems in entry_candidates:
         for stem in stems:
             if stem in _GENERIC_STEMS or stem in convention_terms:
                 continue
@@ -346,6 +411,47 @@ def _prompt_targets(
             _add_hit(ent, route, full_span, res_span)
 
     return chosen
+
+
+def _entity_convention_targets(
+    prompt: str,
+    conventions: Sequence[object],
+    catalog: Sequence[tuple[str, str, str, tuple[str, ...]]],
+) -> list[tuple[str, str]]:
+    """Fallback for entity-naming conventions (`conditions == ()` and explicit `entity`)."""
+    text = str(prompt or "")
+    if not text or not conventions:
+        return []
+    entity_routes: dict[str, list[str]] = {}
+    for ent, route, _label, _extras in catalog:
+        if ent and route:
+            entity_routes.setdefault(ent, []).append(route)
+
+    candidates: list[tuple[str, object, int]] = []
+    for conv_idx, conv in enumerate(conventions):
+        for term in getattr(conv, "terms", ()) or ():
+            clean = _strip_units(_clean_label(term))
+            if clean:
+                candidates.append((clean, conv, conv_idx))
+    candidates.sort(key=lambda item: (-len(item[0]), item[2]))
+
+    used = [False] * len(text)
+    targets: list[tuple[str, str]] = []
+    seen_entities: set[str] = set()
+    for term, conv, _idx in candidates:
+        pos = text.find(term)
+        while pos != -1:
+            end = pos + len(term)
+            if not any(used[pos:end]) and _is_valid_boundary(text, term, pos, end, text):
+                for i in range(pos, end):
+                    used[i] = True
+                ent = str(getattr(conv, "entity", "") or "").strip()
+                if ent and not getattr(conv, "conditions", ()) and ent not in seen_entities:
+                    seen_entities.add(ent)
+                    routes = entity_routes.get(ent, ())
+                    targets.append((ent, routes[0] if len(routes) == 1 else ""))
+            pos = text.find(term, pos + 1)
+    return targets
 
 
 def resolve_turn_conventions(
@@ -384,18 +490,23 @@ def resolve_turn_conventions(
         if _clean_label(t)
     )
     residual = _prompt_residual(prompt, conv_tuple)
-    targets = _prompt_targets(prompt, residual, catalog, convention_terms)
+    targets = _prompt_targets(prompt, residual, catalog, convention_terms, conv_tuple)
     source = "prompt" if targets else "active_page"
 
     if not targets:
         clean_active = _normalize_route(active_route)
-        if clean_active in _HUB_ROUTES:
-            return ConventionResolution(active=conv_tuple, suppressed=(), source="unresolved")
-        try:
-            active_ent = goal_data.route_entity(clean_active) if hasattr(goal_data, "route_entity") else ""
-        except DataRefused:
-            return ConventionResolution(active=conv_tuple, suppressed=(), source="unresolved")
-        targets = [(active_ent, clean_active)]
+        if clean_active not in _HUB_ROUTES:
+            try:
+                active_ent = goal_data.route_entity(clean_active) if hasattr(goal_data, "route_entity") else ""
+            except DataRefused:
+                return ConventionResolution(active=conv_tuple, suppressed=(), source="unresolved")
+            targets = [(active_ent, clean_active)]
+        else:
+            conv_targets = _entity_convention_targets(prompt, conv_tuple, catalog)
+            if not conv_targets:
+                return ConventionResolution(active=conv_tuple, suppressed=(), source="unresolved")
+            targets = conv_targets
+            source = "convention_entity"
 
     target_vocabs: list[tuple[str, str, tuple[str, ...]]] = []
     for ent, route in targets:
