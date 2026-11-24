@@ -870,6 +870,117 @@ class KnowledgeTests(unittest.TestCase):
     def test_the_application_s_refusal_is_told_to_the_model(self):
         self.assertIn("客户不存在", self.know.call_api("orders/page", {"customerId": "0", "pageNo": 1}))
 
+    def test_search_api_boosts_main_lists_and_demotes_export_template_and_stats(self):
+        from web_operation_agent_yudao.rules.ui_source import ListView, UiSource
+
+        docs = {
+            "paths": {
+                "/admin-api/crm/customer/get-import-template": {
+                    "get": {"summary": "获得导入客户模板", "tags": ["管理后台 - CRM 客户"], "parameters": []}
+                },
+                "/admin-api/crm/customer/statistics": {
+                    "get": {"summary": "获得客户数量统计", "tags": ["管理后台 - CRM 客户"], "parameters": []}
+                },
+                "/admin-api/crm/customer/simple-list": {
+                    "get": {"summary": "获得客户精简列表", "tags": ["管理后台 - CRM 客户"], "parameters": []}
+                },
+                "/admin-api/crm/customer/get": {
+                    "get": {"summary": "获得客户详情", "tags": ["管理后台 - CRM 客户"], "parameters": []}
+                },
+                "/admin-api/crm/customer/page": {
+                    "get": {"summary": "获得客户分页", "tags": ["管理后台 - CRM 客户"], "parameters": []}
+                },
+                "/admin-api/crm/customer/export-data": {
+                    "get": {"summary": "导出客户", "tags": ["管理后台 - CRM 客户"], "parameters": []}
+                },
+                "/admin-api/system/mail-template/page": {
+                    "get": {"summary": "获得邮件模版分页", "tags": ["管理后台 - 邮件模版"], "parameters": []}
+                },
+                "/admin-api/system/mail-log/page": {
+                    "get": {"summary": "获得邮件日志分页", "tags": ["管理后台 - 邮件日志"], "parameters": []}
+                },
+                "/admin-api/system/dept/tree": {
+                    "get": {"summary": "获得部门树", "tags": ["管理后台 - 部门"], "parameters": []}
+                },
+            },
+            "components": {"schemas": {}},
+        }
+        menus = [
+            {"id": 1, "name": "CRM", "path": "/crm", "children": [
+                {"id": 2, "name": "客户档案", "path": "customer",
+                 "component": "crm/customer/index", "visible": True},
+            ]},
+            {"id": 3, "name": "系统", "path": "/system", "children": [
+                {"id": 4, "name": "邮件模板", "path": "mail-template",
+                 "component": "system/mail-template/index", "visible": True},
+            ]},
+        ]
+        ui = UiSource(views={
+            "crm/customer/index": ListView(
+                endpoint="/admin-api/crm/customer/page",
+                column_labels=(("followUpProgress", "线索跟进进度"), ("name", "名称")),
+            ),
+            "system/mail-template/index": ListView(endpoint="/admin-api/system/mail-template/page"),
+        })
+
+        class MenuClient:
+            def get(self, path, **_kwargs):
+                if path == "system/auth/get-permission-info":
+                    return {"user": {"nickname": "u"}, "menus": menus}
+                return {}
+
+        know = ActorKnowledge(MenuClient(), lambda: docs, ui=ui)
+        cust_lines = [line for line in know.search_api("客户").splitlines() if line.startswith("GET ")]
+        cust_paths = [line.split()[1] for line in cust_lines]
+        self.assertEqual(cust_paths[0], "/admin-api/crm/customer/page")
+        self.assertIn("/admin-api/crm/customer/simple-list", cust_paths)
+        self.assertLess(cust_paths.index("/admin-api/crm/customer/page"),
+                        cust_paths.index("/admin-api/crm/customer/simple-list"))
+        if "/admin-api/crm/customer/statistics" in cust_paths:
+            self.assertLess(cust_paths.index("/admin-api/crm/customer/simple-list"),
+                            cust_paths.index("/admin-api/crm/customer/statistics"))
+        self.assertNotIn("/admin-api/crm/customer/get-import-template", cust_paths[:3])
+        self.assertNotIn("/admin-api/crm/customer/export-data", cust_paths[:3])
+
+        # Page title ("客户档案") and UI column label ("线索跟进进度") drive natural-language ranking.
+        by_title = [line.split()[1] for line in know.search_api("打开客户档案看看最近记录").splitlines()
+                    if line.startswith("GET ")]
+        self.assertEqual(by_title[0], "/admin-api/crm/customer/page")
+        by_col = [line.split()[1] for line in know.search_api("哪条记录有线索跟进进度这一栏").splitlines()
+                  if line.startswith("GET ")]
+        self.assertIn("/admin-api/crm/customer/page", by_col[:3])
+
+        # Legitimate template entities stay boosted while variant "模版"/"模板" matches.
+        tpl_paths = [line.split()[1] for line in know.search_api("邮件模板").splitlines()
+                     if line.startswith("GET ")]
+        self.assertEqual(tpl_paths[0], "/admin-api/system/mail-template/page")
+
+        # Tree list endpoints also rank in top results.
+        tree_paths = [line.split()[1] for line in know.search_api("查看部门架构").splitlines()
+                      if line.startswith("GET ")]
+        self.assertIn("/admin-api/system/dept/tree", tree_paths[:3])
+
+        # Unrelated query keeps the fallback copy and concurrent calls stay thread-safe.
+        self.assertIn("没有匹配的只读接口", know.search_api("不存在的外星菜单xyz"))
+
+        results: list[str] = []
+        errors: list[BaseException] = []
+
+        def worker():
+            try:
+                results.append(know.search_api("帮我看一下客户档案列表", include_writes=True))
+            except BaseException as exc:  # pragma: no cover
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertFalse(errors)
+        self.assertEqual(len(results), 6)
+        self.assertTrue(all("/admin-api/crm/customer/page" in res for res in results))
+
 
 
 

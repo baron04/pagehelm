@@ -56,6 +56,74 @@ def _grams(text: str) -> set[str]:
     return {text[i:i + 2] for i in range(len(text) - 1)} | set(text)
 
 
+_API_EXPORT_RE = re.compile(r"(?:^|/|-)(?:export)(?:$|/|-)", re.I)
+_API_IMPORT_TEMPLATE_RE = re.compile(r"(?:^|/|-)(?:import-template|get-import-template)(?:$|/|-)", re.I)
+_API_STATS_PATH_RE = re.compile(
+    r"(?:^|/|-)(?:statistics|stat|summary|count|counts|chart|trend|analysis|rank|dashboard|overview)(?:$|/|-)",
+    re.I,
+)
+_API_STATS_SUMMARY_RE = re.compile(r"统计|汇总|趋势|排行|占比|概况|看板|(?:数量|总数|个数)$")
+_API_SIMPLE_LIST_RE = re.compile(r"(?:^|/|-)(?:simple-list|list-all-simple)(?:$|/|-)|-simple$", re.I)
+_SUMMARY_PREFIX_RE = re.compile(r"^(?:分页(?:获得|获取|查询|查看)|获得|获取|查询|查看)")
+_SUMMARY_SUFFIX_RE = re.compile(r"(?:列表|分页|详情|信息)$")
+_COLUMN_LABEL_SPLIT_RE = re.compile(r"[\s,，;；:：、]+")
+_GENERIC_COLUMN_NOISE = frozenset({
+    "id", "编号", "名称", "状态", "备注", "创建时间", "更新时间", "删除时间",
+    "创建者", "更新者", "操作", "排序", "是否", "类型", "描述",
+    "公司", "时间", "日期", "金额", "数量", "原因", "说明", "方式", "结果",
+    "人员", "部门", "用户",
+})
+
+
+def _norm_zh(text: str) -> str:
+    return text.replace("模版", "模板")
+
+
+def _bigrams(text: str) -> set[str]:
+    compact = re.sub(r"\s+", "", _norm_zh(text).lower())
+    return {compact[i:i + 2] for i in range(len(compact) - 1)}
+
+
+def _expand_order_shorthand(phrases: list[str]) -> list[str]:
+    out = list(phrases)
+    for phrase in phrases:
+        if len(phrase) >= 4 and phrase.endswith("订单"):
+            out.append(phrase[:-2] + "单")
+    return out
+
+
+def _clean_column_label(text: object) -> str:
+    if not isinstance(text, str):
+        return ""
+    base = re.sub(r"[（(][^（）()]*[）)]", "", text).strip()
+    head = _COLUMN_LABEL_SPLIT_RE.split(base)[0].strip() if base else ""
+    if len(head) < 2 or len(head) > 18:
+        return ""
+    return _norm_zh(head)
+
+
+def _endpoint_class_multiplier(path: str, summary: str, *, is_ui_main: bool) -> float:
+    """Boost main page lists; demote export, import-template, and statistics endpoints."""
+    tail = path.removeprefix("/admin-api/")
+    if _API_EXPORT_RE.search(tail) or "导出" in summary:
+        return 0.22
+    if _API_IMPORT_TEMPLATE_RE.search(tail) or "导入模板" in summary:
+        return 0.22
+    if _API_STATS_PATH_RE.search(tail) or _API_STATS_SUMMARY_RE.search(summary):
+        return 0.28
+    if _API_SIMPLE_LIST_RE.search(tail) or "精简列表" in summary:
+        return 0.78
+    if is_ui_main and path.endswith(("/page", "/list", "/tree")):
+        return 1.55
+    if is_ui_main:
+        return 1.35
+    if path.endswith("/page"):
+        return 1.42
+    if path.endswith(("/list", "/tree")):
+        return 1.28
+    return 0.92
+
+
 def _score(query: str, *fields) -> float:
     terms = [t for t in re.split(r"[\s,，、/]+", query.lower()) if t]
     score = 0.0
@@ -152,7 +220,7 @@ class ActorKnowledge:
 
     def __init__(self, client, api_docs, writing_gets=frozenset(), time_zone: str = "Asia/Shanghai",
                  codes=None, money_review=None, filter_semantics=None, columns=None, query_choices=None,
-                 derived_columns=None):
+                 derived_columns=None, ui=None):
         self.client, self._docs, self.writing_gets = client, api_docs, frozenset(writing_gets)
         #: `codes(list_path)`: the names of a list's coded values by field, when the
         #: application names them ({"bizType": {"50": "销售出库"}}).
@@ -165,8 +233,10 @@ class ActorKnowledge:
         #: deployed release's source. Direct identity bindings may also be reapplied
         #: in summaries; comparison labels alone are not executable bindings.
         self.filter_semantics = filter_semantics
+        self._ui = ui
         self._zone = ZoneInfo(time_zone)
         self._menu = self._ops = self._by_path = self._schemas = self._s3_index = self._loaded_docs = None
+        self._search_index = self._search_index_ui_id = None
         #: The host may load this ahead of the first turn, or concurrent read threads may race _load().
         self._loading = threading.RLock()
         self.user_name = ""
@@ -287,7 +357,13 @@ class ActorKnowledge:
             if children:
                 self._walk(children, trail, full)
             elif node.get("visible", True) and node.get("component"):
-                self._menu.append({"name": " > ".join(trail), "path": full, "leaf": trail[-1]})
+                component = str(node.get("component") or "").strip().lstrip("/").removesuffix(".vue")
+                self._menu.append({
+                    "name": " > ".join(trail),
+                    "path": full,
+                    "leaf": trail[-1],
+                    "component": component,
+                })
 
     def has_page(self, path: str) -> bool:
         self._load()
@@ -305,18 +381,221 @@ class ActorKnowledge:
             return "没有匹配的菜单页面。换一个更短的业务词再试。"
         return "\n".join(f"{m['path']}  {m['name']}" for m in hits)
 
-    def search_api(self, keyword: str, *, include_writes: bool = False, source=None, ui=None) -> str:
+    def _get_search_index(self, ui=None):
         self._load()
-        ranked = sorted(((_score(keyword, (2, o["summary"]), (2, o["tag"]), (1, o["path"])), o)
-                         for o in self._ops), key=lambda pair: -pair[0])
-        lines = [self._api_line(op) for score, op in ranked[:8] if score > 2]
+        effective_ui = ui if ui is not None else self._ui
+        ui_key = id(effective_ui) if effective_ui is not None else None
+        with self._loading:
+            if self._search_index is not None and self._search_index_ui_id == ui_key:
+                return self._search_index
+            menu_by_component: dict[str, list[dict]] = {}
+            for m in self._menu or ():
+                comp = m.get("component") or ""
+                if comp:
+                    menu_by_component.setdefault(comp, []).append(m)
+
+            ui_titles: dict[str, list[str]] = {}
+            ui_cols: dict[str, list[str]] = {}
+            ui_main_paths: set[str] = set()
+            views = getattr(effective_ui, "views", None) if effective_ui is not None else None
+            if isinstance(views, dict):
+                for comp, view in views.items():
+                    ep = str(getattr(view, "endpoint", "") or "").strip()
+                    if not ep:
+                        continue
+                    norm_ep = ep if ep.startswith("/admin-api/") else "/admin-api/" + ep.lstrip("/")
+                    matched_menus = menu_by_component.get(comp, ())
+                    if matched_menus or not self._menu:
+                        ui_main_paths.add(norm_ep)
+                    for m in matched_menus:
+                        titles = ui_titles.setdefault(norm_ep, [])
+                        titles.append(m["leaf"])
+                        stem_leaf = self._stem(m["leaf"])
+                        if stem_leaf and stem_leaf != m["leaf"]:
+                            titles.append(stem_leaf)
+                        for part in m["name"].split(">"):
+                            cleaned_part = part.strip()
+                            if cleaned_part:
+                                titles.append(cleaned_part)
+                    for _prop, col_label in getattr(view, "column_labels", ()) or ():
+                        cleaned_col = _clean_column_label(col_label)
+                        if cleaned_col:
+                            ui_cols.setdefault(norm_ep, []).append(cleaned_col)
+
+            raw_entries = []
+            col_doc_freq: dict[str, int] = {}
+            for op in self._ops or ():
+                path = op["path"]
+                rel = path.removeprefix("/admin-api/")
+                summary = _norm_zh(op["summary"])
+                summary_core = _SUMMARY_SUFFIX_RE.sub("", _SUMMARY_PREFIX_RE.sub("", summary)).strip()
+
+                tag_phrases: list[str] = []
+                for part in re.split(r"[\s\-—/>]+", _norm_zh(op["tag"])):
+                    part = part.strip()
+                    if not part:
+                        continue
+                    tag_phrases.append(part)
+                    stemmed = self._stem(part)
+                    if stemmed and stemmed != part:
+                        tag_phrases.append(stemmed)
+                tag_phrases = _expand_order_shorthand(tag_phrases)
+                seen_tags = tuple(dict.fromkeys(p.lower() for p in tag_phrases if len(p) >= 2))
+
+                titles = []
+                for title in ui_titles.get(path, ()):
+                    titles.append(_norm_zh(title))
+                titles = _expand_order_shorthand(titles)
+                seen_titles = tuple(dict.fromkeys(t.lower() for t in titles if len(t) >= 2))
+
+                col_candidates: list[str] = list(ui_cols.get(path, ()))
+                if self._columns is not None:
+                    try:
+                        col_map = self._columns(rel) or {}
+                    except (DataRefused, LookupError, ValueError, TypeError, AttributeError):
+                        col_map = {}
+                    if isinstance(col_map, dict):
+                        for label in col_map.values():
+                            cleaned_col = _clean_column_label(label)
+                            if cleaned_col:
+                                col_candidates.append(cleaned_col)
+                props = self._row_schema(path)
+                if isinstance(props, dict):
+                    for prop_spec in props.values():
+                        if isinstance(prop_spec, dict):
+                            cleaned_col = _clean_column_label(prop_spec.get("description"))
+                            if cleaned_col:
+                                col_candidates.append(cleaned_col)
+                unique_cols = tuple(dict.fromkeys(c.lower() for c in col_candidates))
+                for col in unique_cols:
+                    col_doc_freq[col] = col_doc_freq.get(col, 0) + 1
+
+                tail_tokens = tuple(
+                    tok for tok in re.split(r"[/\-_]+", rel.lower())
+                    if len(tok) >= 2 and tok not in {"page", "list", "tree", "get", "simple", "all"}
+                )
+                is_ui_main = path in ui_main_paths
+                raw_entries.append({
+                    "op": op,
+                    "path": path,
+                    "path_low": path.lower(),
+                    "summary_low": summary.lower(),
+                    "summary_core_low": summary_core.lower(),
+                    "summary_core_grams": _bigrams(summary_core) if len(summary_core) >= 2 else set(),
+                    "tag_phrases": seen_tags,
+                    "tag_grams": tuple((p, _bigrams(p)) for p in seen_tags if len(p) >= 3),
+                    "page_titles": seen_titles,
+                    "page_grams": tuple((t, _bigrams(t)) for t in seen_titles if len(t) >= 3),
+                    "columns": unique_cols,
+                    "tail_tokens": tail_tokens,
+                    "multiplier": _endpoint_class_multiplier(path, summary, is_ui_main=is_ui_main),
+                })
+
+            total_ops = max(len(raw_entries), 1)
+            col_idf = {
+                col: (0.12 if col in _GENERIC_COLUMN_NOISE else min(3.0, max(0.25, math.log((total_ops + 1) / (df + 1)))))
+                for col, df in col_doc_freq.items()
+            }
+            built = (tuple(raw_entries), col_idf)
+            self._search_index = built
+            self._search_index_ui_id = ui_key
+            return built
+
+    @staticmethod
+    def _score_api_entry(terms: list[str], compact: str, want_grams: set[str],
+                         entry: dict, col_idf: dict[str, float]) -> float:
+        score = 0.0
+        for label in entry["tag_phrases"]:
+            if label == compact:
+                score += 22.0
+            elif len(label) >= 2 and label in compact:
+                score += 4.5 + 3.2 * min(len(label), 6)
+            else:
+                for term in terms:
+                    if term in label:
+                        score += 12.0 * (len(term) / len(label)) * (1.0 + len(term) / 8.0)
+        for _label, label_grams in entry["tag_grams"]:
+            if label_grams and want_grams:
+                overlap = len(label_grams & want_grams)
+                if overlap:
+                    recall = overlap / len(label_grams)
+                    if recall >= 0.5:
+                        score += 6.0 * (recall ** 1.4)
+
+        for title in entry["page_titles"]:
+            if title == compact:
+                score += 18.0
+            elif len(title) >= 2 and title in compact:
+                score += 4.0 + 2.8 * min(len(title), 6)
+            else:
+                for term in terms:
+                    if term in title:
+                        score += 10.0 * (len(term) / len(title)) * (1.0 + len(term) / 8.0)
+        for _title, title_grams in entry["page_grams"]:
+            if title_grams and want_grams:
+                overlap = len(title_grams & want_grams)
+                if overlap:
+                    recall = overlap / len(title_grams)
+                    if recall >= 0.5:
+                        score += 5.0 * (recall ** 1.4)
+
+        summary_low = entry["summary_low"]
+        summary_core = entry["summary_core_low"]
+        if summary_core and summary_core == compact:
+            score += 12.0
+        elif len(summary_core) >= 2 and summary_core in compact:
+            score += 3.5 + 2.5 * min(len(summary_core), 6)
+        elif entry["summary_core_grams"] and want_grams:
+            sc_grams = entry["summary_core_grams"]
+            overlap = len(sc_grams & want_grams)
+            if overlap and (overlap / len(sc_grams)) >= 0.5:
+                score += 4.5 * ((overlap / len(sc_grams)) ** 1.4)
+        for term in terms:
+            if term in summary_low:
+                score += 7.0 * (1.0 + len(term) / 8.0)
+            if term in entry["path_low"]:
+                score += 5.0 * (1.0 + len(term) / 8.0)
+        for tok in entry["tail_tokens"]:
+            if len(tok) >= 3 and tok in compact:
+                score += 4.5
+
+        col_score = 0.0
+        for col in entry["columns"]:
+            weight = col_idf.get(col, 0.5)
+            len_scale = 0.55 if len(col) == 2 else 1.0
+            if col == compact:
+                col_score += 5.5 * weight
+            elif len(col) >= 2 and col in compact:
+                col_score += (1.2 + 0.45 * min(len(col), 8)) * weight * len_scale
+            else:
+                for term in terms:
+                    if len(term) >= 2 and term in col:
+                        col_score += 3.0 * (len(term) / len(col)) * weight * len_scale
+        score += min(col_score, 12.0)
+        return score * entry["multiplier"]
+
+    def search_api(self, keyword: str, *, include_writes: bool = False, source=None, ui=None) -> str:
+        entries, col_idf = self._get_search_index(ui=ui)
+        norm_kw = _norm_zh(str(keyword or "")).lower()
+        terms = [t for t in re.split(r"[\s,，、；;：:？?！!。/]+", norm_kw) if t]
+        compact = "".join(terms)
+        want_grams = _bigrams(compact)
+        lines = []
+        if compact:
+            ranked = sorted(
+                ((self._score_api_entry(terms, compact, want_grams, entry, col_idf), entry["op"])
+                 for entry in entries),
+                key=lambda pair: (-pair[0], len(pair[1]["path"]), pair[1]["path"]),
+            )
+            lines = [self._api_line(op) for score, op in ranked[:8] if score > 3.2]
         if include_writes:
             from .domain_toolpacks import format_write_entry_line, search_write_directory
 
             docs = self._loaded_docs if isinstance(self._loaded_docs, dict) else (
                 self._docs if isinstance(self._docs, dict) else None
             )
-            write_hits = search_write_directory(keyword, docs=docs, source=source, ui=ui, limit=6)
+            effective_ui = ui if ui is not None else self._ui
+            write_hits = search_write_directory(keyword, docs=docs, source=source, ui=effective_ui, limit=6)
             lines.extend(format_write_entry_line(entry) for entry in write_hits)
         return "\n".join(lines) or "没有匹配的只读接口。换一个业务词再试。"
 
