@@ -952,7 +952,6 @@ class TurnHarness:
             stop_reason=stop_reason,
             detail=s.detail,
             explicit_category=getattr(s, "reason_category", ""),
-            answer=text,
         )
         user_answer = redact_sensitive_assignments(redact_session_handoffs(text)).strip()
         user_answer = user_answer[: self.config.max_user_answer_chars]

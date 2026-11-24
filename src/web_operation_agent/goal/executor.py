@@ -2844,7 +2844,6 @@ class GoalTurnExecutor:
         status, reason_category = settle_terminal_outcome(
             terminal,
             detail=s.detail,
-            answer=text,
         )
         user_answer = redact_sensitive_assignments(redact_session_handoffs(text)).strip()
         user_answer = user_answer[:self.config.max_user_answer_chars]

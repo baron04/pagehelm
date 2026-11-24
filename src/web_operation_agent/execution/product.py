@@ -556,55 +556,69 @@ _FAULT_DETAILS = frozenset({
     "the turn's model steps were used up",
 })
 
-_PERMISSION_CUES = re.compile(
-    r"没有.{0,12}权限|无权|权限不足|权限限制|未授权|not permitted|permission denied|unauthorized",
-    re.IGNORECASE,
-)
-_POLICY_CUES = re.compile(
-    r"密码|口令|上传.{0,6}(?:文件|图片|附件)|支付回调|回调|只读模式|不支持自动|"
-    r"按规则|安全规则|产品政策|不代填|请(?:自行|手动).{0,10}(?:填写|输入|上传|提交|处理)|"
-    r"password|upload|read-only|policy",
-    re.IGNORECASE,
-)
-_READ_ONLY_CUES = re.compile(r"只读|不能写入|不支持修改|禁止写入|不支持写入")
-_NOT_FOUND_CUES = re.compile(
-    r"查无|未找到|找不到|不存在|没有找到|没有查到|无此|未查询到|not found|does not exist|no matching",
-    re.IGNORECASE,
-)
-_FAULT_CUES = re.compile(
-    r"超时|断线|连接失败|服务出错|服务不可用|接口报错|接口异常|系统错误|\b50[0234]\b|"
-    r"timed out|timeout|network error|service unavailable",
-    re.IGNORECASE,
-)
+_PERMISSION_ERROR_CODES = frozenset({
+    "permission_denied",
+    "business_permission_denied",
+})
+_POLICY_ERROR_CODES = frozenset({
+    "draft_only",
+    "read_only_question",
+    "dangerous_unconfirmed",
+    "capability_refused",
+    "business_write_not_requested",
+    "business_mutation_blocked",
+})
+_NOT_FOUND_ERROR_CODES = frozenset({
+    "not_found",
+    "form_entry_not_found",
+})
+_FAULT_ERROR_CODES = frozenset({
+    "application_unavailable",
+    "business_unavailable",
+    "business_dispatch_unknown",
+    "business_contract",
+    "observation_unavailable",
+    "runtime_unavailable",
+    "source_reader_unavailable",
+    "source_history_unavailable",
+    "provider_deadline",
+    "provider_response",
+    "provider_usage",
+    "unexpected_error",
+    "interrupted",
+})
 
 
 def classify_cannot_reason(
     *,
     explicit: str = "",
-    answer: str = "",
     tool_error_codes: tuple[str, ...] = (),
+    terminal_reason: str = "",
+    stop_reason: str = "",
+    detail: str = "",
     has_restricted_handoff: bool = False,
-    read_only: bool = False,
 ) -> str:
-    """Classify a `cannot` terminal outcome into one of the five contract reason categories."""
+    """Classify a `cannot` terminal outcome strictly from typed signals."""
     codes = frozenset(str(code or "").strip() for code in tool_error_codes if code)
-    text = str(answer or "")
-    if explicit in REASON_CATEGORIES:
-        if codes & {"permission_denied", "business_permission_denied"} and explicit == "problem":
-            return "permission"
-        return explicit
-    if (codes & {"permission_denied", "business_permission_denied"}) or _PERMISSION_CUES.search(text):
-        return "permission"
     if (
-        has_restricted_handoff
-        or (codes & {"draft_only", "read_only_question", "dangerous_unconfirmed", "capability_refused"})
-        or _POLICY_CUES.search(text)
-        or (read_only and _READ_ONLY_CUES.search(text))
+        stop_reason in _FAULT_STOP_REASONS
+        or detail in _FAULT_DETAILS
+        or terminal_reason in {"indeterminate_write", "no_progress", "control_plane_error"}
     ):
+        return "fault"
+    if terminal_reason == "permission_denied" or (codes & _PERMISSION_ERROR_CODES):
+        if explicit in REASON_CATEGORIES and explicit != "problem":
+            return explicit
+        return "permission"
+    if terminal_reason == "business_mutation_blocked" or detail == "the deployment disabled this page action":
         return "policy"
-    if "not_found" in codes or _NOT_FOUND_CUES.search(text):
+    if explicit in REASON_CATEGORIES:
+        return explicit
+    if has_restricted_handoff or (codes & _POLICY_ERROR_CODES):
+        return "policy"
+    if codes & _NOT_FOUND_ERROR_CODES:
         return "not_found"
-    if _FAULT_CUES.search(text):
+    if codes & _FAULT_ERROR_CODES:
         return "fault"
     return "problem"
 
@@ -615,10 +629,8 @@ def settle_terminal_outcome(
     stop_reason: str = "",
     detail: str = "",
     explicit_category: str = "",
-    answer: str = "",
 ) -> tuple[AgentTurnStatus, str]:
     """Map an execution terminal reason onto its panel status and reason category."""
-    del answer
     if terminal_reason == "agent_finished":
         return AgentTurnStatus.FINISHED, ""
     if terminal_reason in {"needs_input", "needs_clarification"}:

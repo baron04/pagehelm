@@ -2410,12 +2410,13 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                         if turn.get("delivery_terminal_refused")
                         else classify_cannot_reason(
                             explicit=str(finish.get("reason_category") or ""),
-                            answer=answer,
                             tool_error_codes=tuple(turn.get("tool_error_codes") or ()),
+                            terminal_reason=s.terminal_reason,
+                            stop_reason=getattr(s, "stop_reason", ""),
+                            detail=getattr(s, "detail", ""),
                             has_restricted_handoff=bool(
                                 (getattr(s, "handoff_payload", None) or {}).get("restricted_controls")
                             ),
-                            read_only=bool(turn.get("read_only")),
                         )
                     )
             elif s.mutation_outcomes:

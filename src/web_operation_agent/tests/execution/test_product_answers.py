@@ -620,23 +620,41 @@ class TerminalSettlementCategoryTests(unittest.TestCase):
             "permission",
         )
         self.assertEqual(
+            product.classify_cannot_reason(tool_error_codes=("business_permission_denied",)),
+            "permission",
+        )
+        self.assertEqual(
+            product.classify_cannot_reason(terminal_reason="permission_denied"),
+            "permission",
+        )
+        self.assertEqual(
             product.classify_cannot_reason(has_restricted_handoff=True),
             "policy",
         )
+        for code in ("draft_only", "read_only_question", "dangerous_unconfirmed", "capability_refused"):
+            self.assertEqual(product.classify_cannot_reason(tool_error_codes=(code,)), "policy")
         self.assertEqual(
-            product.classify_cannot_reason(answer="只读模式不允许修改。", read_only=True),
+            product.classify_cannot_reason(terminal_reason="business_mutation_blocked"),
             "policy",
         )
         self.assertEqual(
-            product.classify_cannot_reason(answer="未找到匹配的供应商记录。"),
-            "not_found",
+            product.classify_cannot_reason(detail="the deployment disabled this page action"),
+            "policy",
         )
+        for code in ("not_found", "form_entry_not_found"):
+            self.assertEqual(product.classify_cannot_reason(tool_error_codes=(code,)), "not_found")
+        for code in ("application_unavailable", "runtime_unavailable", "provider_deadline"):
+            self.assertEqual(product.classify_cannot_reason(tool_error_codes=(code,)), "fault")
         self.assertEqual(
-            product.classify_cannot_reason(answer="接口报错 502，服务不可用。"),
+            product.classify_cannot_reason(stop_reason="model_steps_exhausted"),
             "fault",
         )
         self.assertEqual(
-            product.classify_cannot_reason(answer="缺少目标单据起始日期，无法计算。"),
+            product.classify_cannot_reason(explicit="not_found"),
+            "not_found",
+        )
+        self.assertEqual(
+            product.classify_cannot_reason(),
             "problem",
         )
 
