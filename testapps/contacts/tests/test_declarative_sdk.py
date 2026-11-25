@@ -244,7 +244,7 @@ class _WarehouseServer:
 
         self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.origin = f"http://127.0.0.1:{self._httpd.server_port}"
-        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        self._thread = threading.Thread(target=self._httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
 
     def __enter__(self):
         self._thread.start()

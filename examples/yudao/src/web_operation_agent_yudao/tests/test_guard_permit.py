@@ -53,7 +53,7 @@ class PermitProxyTests(unittest.TestCase):
             do_GET = do_POST = do_PUT = handle_api
 
         self.app = ThreadingHTTPServer(("127.0.0.1", 0), Application)
-        threading.Thread(target=self.app.serve_forever, daemon=True).start()
+        threading.Thread(target=self.app.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
         self.guard = NativePageGuard(frozenset(), writing_gets=frozenset())
         self.origin = "http://fixture.test"
         self.proxy = NativeGuardProxy(

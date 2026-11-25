@@ -1,69 +1,24 @@
-import {execFileSync} from 'node:child_process'
-import {dirname, resolve} from 'node:path'
-import {fileURLToPath} from 'node:url'
-import {afterEach, beforeAll, describe, expect, it, vi} from 'vitest'
+import {afterEach, describe, expect, it, vi} from 'vitest'
 
-interface ControllerInstance {
-  selectorMap: Map<number, {ref: HTMLElement}>
-  elementTextMap: Map<number, string>
-  inputText(index: number, text: string): Promise<{success: boolean; message: string}>
-  dispose(): void
-}
+vi.mock('@page-agent/page-controller', () => ({
+  PageController: class PageController extends EventTarget {
+    selectorMap = new Map()
+    elementTextMap = new Map()
+    simplifiedHTML = ''
+    dispose() {}
+    async updateTree() { return '' }
+    async inputText() { return {success: true, message: 'generic'} }
+  },
+  getElementByIndex(selectorMap: Map<number, {ref: HTMLElement}>, index: number) {
+    return selectorMap.get(index)?.ref
+  },
+  async scrollIntoViewIfNeeded() {},
+}))
 
-let PageControllerCtor: new (options?: {enableMask?: boolean}) => ControllerInstance
+// @ts-expect-error Application module is served separately from the generic Runtime.
+import {PageController as PageControllerCtor} from '../src/integrations/yudao/yudao-page-controller.js'
+
 const cleanups: Array<() => void> = []
-
-beforeAll(async () => {
-  const here = dirname(fileURLToPath(import.meta.url))
-  const entry = resolve(here, '../src/integrations/yudao/yudao-page-controller.js')
-  const buildScript = `
-    import {build} from 'esbuild';
-    const [entry] = process.argv.slice(1);
-    const stub = \`
-      export class PageController extends EventTarget {
-        selectorMap = new Map();
-        elementTextMap = new Map();
-        simplifiedHTML = '';
-        dispose() {}
-        async updateTree() { return ''; }
-        async inputText() { return {success: true, message: 'generic'}; }
-      }
-      export function getElementByIndex(selectorMap, index) {
-        return selectorMap.get(index)?.ref;
-      }
-      export async function scrollIntoViewIfNeeded() {}
-    \`;
-    const out = await build({
-      entryPoints: [entry],
-      bundle: true,
-      write: false,
-      format: 'esm',
-      platform: 'browser',
-      target: 'es2022',
-      plugins: [{
-        name: 'stub-generic-page-controller',
-        setup(pluginBuild) {
-          pluginBuild.onResolve({filter: /^\\.\\/page-controller\\.js$/}, () => ({
-            path: 'page-controller.js',
-            namespace: 'stub-pc',
-          }));
-          pluginBuild.onLoad({filter: /.*/, namespace: 'stub-pc'}, () => ({
-            contents: stub,
-            loader: 'js',
-          }));
-        },
-      }],
-    });
-    process.stdout.write(out.outputFiles[0].text);
-  `
-  const code = execFileSync(process.execPath, ['--input-type=module', '-e', buildScript, entry], {
-    cwd: resolve(here, '..'),
-    encoding: 'utf8',
-  })
-  const url = `data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}`
-  const mod = await import(/* @vite-ignore */ url) as {PageController: typeof PageControllerCtor}
-  PageControllerCtor = mod.PageController
-})
 
 function rect(width = 100, height = 24): DOMRect {
   return {width, height, top: 10, bottom: 10 + height, left: 0, right: width, x: 0, y: 10, toJSON: () => ({})} as DOMRect

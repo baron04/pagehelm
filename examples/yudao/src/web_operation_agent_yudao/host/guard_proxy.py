@@ -77,7 +77,7 @@ class NativeGuardProxy:
         return f"http://{self.http.server_address[0]}:{self.http.server_port}"
 
     def start(self):
-        self._thread = threading.Thread(target=self.http.serve_forever, daemon=True)
+        self._thread = threading.Thread(target=self.http.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         self._thread.start()
         return self
 

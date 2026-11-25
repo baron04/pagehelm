@@ -187,27 +187,50 @@ class ActivationTests(unittest.TestCase):
         source = (CLOUD / "activate.sh").read_text().replace("/opt/yudao", str(self.host))
         self.script = self.root / "activate.sh"
         self.script.write_text(source)
-        program = '''import hashlib,json,os,pathlib,sys
-root=pathlib.Path(os.environ['FAKE_HOST']); args=sys.argv[1:]; tool=pathlib.Path(sys.argv[0]).name
-current=(root/'current').resolve().name
-mode=os.environ.get('FAKE_FAILURE','')
-with (root/'calls').open('a') as f:f.write(json.dumps([tool,current,args])+'\\n')
-if tool=='flock' or tool=='sleep':sys.exit(0)
-if tool=='mv':os.replace(args[-2],args[-1])
-elif tool=='date':
-    p=root/'clock'; now=int(p.read_text())+240 if p.exists() else 0;p.write_text(str(now));print(now)
-elif tool=='sha256sum':print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest()+'  -')
-elif tool=='docker':
-    building_new=any('releases/new/compose.yaml' in a for a in args)
-    if (mode=='build' and 'build' in args and building_new) or (mode=='up' and 'up' in args and current=='new'):sys.exit(1)
-elif tool=='curl':
-    url=args[-1]
-    if current=='new' and ((mode=='assistant' and '/readyz' in url) or (mode=='public' and url.startswith('https://'))):sys.exit(22)
-    if '-o' not in args:sys.stdout.write('wrong' if current=='new' and mode=='hash' else current)
-'''
-        for name in ("flock", "sleep", "date", "sha256sum", "docker", "curl", "mv"):
+        preamble = (
+            "#!/bin/sh\n"
+            "tool=${0##*/}\n"
+            'current=$(basename "$(readlink "$FAKE_HOST/current")")\n'
+            'tab=$(printf "\\t")\n'
+            'line="$tool$tab$current"\n'
+            'for a in "$@"; do line="$line$tab$a"; done\n'
+            'printf "%s\\n" "$line" >> "$FAKE_HOST/calls"\n'
+        )
+        scripts = {
+            "flock": preamble + "exit 0\n",
+            "sleep": preamble + "exit 0\n",
+            "mv": preamble + 'prev=""; last=""; for a in "$@"; do prev="$last"; last="$a"; done\nrm -f "$last" && /bin/mv "$prev" "$last"\n',
+            "date": preamble + (
+                'if [ -f "$FAKE_HOST/clock" ]; then read now < "$FAKE_HOST/clock"; now=$((now + 240)); '
+                'else now=0; fi\n'
+                'printf "%s\\n" "$now" > "$FAKE_HOST/clock"\n'
+                'printf "%s\\n" "$now"\n'
+            ),
+            "docker": preamble + (
+                'b=0; hb=0; hu=0\n'
+                'for a in "$@"; do case "$a" in *releases/new/compose.yaml*) b=1;; build) hb=1;; up) hu=1;; esac; done\n'
+                'if [ "$FAKE_FAILURE" = "build" ] && [ "$hb" = "1" ] && [ "$b" = "1" ]; then exit 1; fi\n'
+                'if [ "$FAKE_FAILURE" = "up" ] && [ "$hu" = "1" ] && [ "$current" = "new" ]; then exit 1; fi\n'
+            ),
+            "curl": preamble + (
+                'last=""; ho=0\n'
+                'for a in "$@"; do last="$a"; [ "$a" = "-o" ] && ho=1; done\n'
+                'if [ "$current" = "new" ]; then\n'
+                '  case "$last" in */readyz*) [ "$FAKE_FAILURE" = "assistant" ] && exit 22 ;; esac\n'
+                '  case "$last" in https://*) [ "$FAKE_FAILURE" = "public" ] && exit 22 ;; esac\n'
+                'fi\n'
+                'if [ "$ho" = "0" ]; then\n'
+                '  if [ "$current" = "new" ] && [ "$FAKE_FAILURE" = "hash" ]; then printf "wrong"; else printf "%s" "$current"; fi\n'
+                'fi\n'
+            ),
+            "sha256sum": preamble + (
+                'if [ -x /usr/bin/sha256sum ]; then exec /usr/bin/sha256sum; '
+                'else /usr/bin/shasum -a 256 | awk \'{print $1"  -"}\'; fi\n'
+            ),
+        }
+        for name, body in scripts.items():
             file = self.bin / name
-            file.write_text(f"#!{sys.executable}\n" + program)
+            file.write_text(body)
             file.chmod(0o755)
 
     def activate(self, failure=""):
@@ -215,7 +238,9 @@ elif tool=='curl':
                    FAKE_HOST=str(self.host), FAKE_FAILURE=failure)
         result = subprocess.run(["sh", str(self.script), "new", "https://demo.example"], env=env,
                                 capture_output=True, text=True, timeout=20)
-        calls = [json.loads(line) for line in (self.host / "calls").read_text().splitlines()]
+        calls = [[parts[0], parts[1], parts[2:]]
+                 for line in (self.host / "calls").read_text().splitlines()
+                 for parts in [line.split("\t")]]
         return result, calls
 
     def test_success_checks_internal_and_public_asset_without_restarting_unchanged_server(self):

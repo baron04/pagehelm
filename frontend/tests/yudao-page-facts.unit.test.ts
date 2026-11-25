@@ -1428,29 +1428,35 @@ describe('native editor mode is current application state', () => {
     const native = {...state.instance, type: {name: 'ElForm'}, props: {model},
       subTree: {type: 'form', el: form}, vnode: {ctx: state.instance}, exposed: {validate}}
     state.instance.subTree.children = [{component: native}] as unknown as NativeVNode[]
-    const wire = (expected: unknown, values = {accountId: 3}) => JSON.parse(execFileSync(
+    const payloads = [
+      {kind: 'restore', ref: 'e1', expected: model, values: {accountId: 3}},
+      ...[{...model, accountId: '3'}, {...model, lines: [1, 2]},
+        {id: 42, accountId: 3, lines: [2, 1]}, {...model, extra: null}]
+        .map(expected => ({kind: 'restore', ref: 'e1', expected, values: {accountId: 3}})),
+      {kind: 'restore', ref: 'e1', expected: model, values: {accountId: 7}},
+      {kind: 'restore', ref: 'e1', expected: model, values: {accountId: 7}},
+    ]
+    const [request, ...rest] = JSON.parse(execFileSync(
       resolve(process.cwd(), '../.venv/bin/python'), ['-m', 'web_operation_agent.tests.transport.submit_wire'],
-      {cwd: resolve(process.cwd(), '..'), input: JSON.stringify({kind: 'restore', ref: 'e1', expected, values}),
+      {cwd: resolve(process.cwd(), '..'), input: JSON.stringify(payloads),
         env: {...process.env, PYTHONPATH: 'src:examples/yudao/src'}, encoding: 'utf8'}))
-    const request = wire(model)
+    const mismatches = rest.slice(0, 4)
+    const [failInvalid, failValidateChange] = rest.slice(4)
     expect(Object.keys(request.expected)).not.toEqual(Object.keys(model))
     expect(await restoreElementFormModel(input, request)).toBe(true)
     expect(model.accountId).toBe(3)
-    for (const expected of [{...model, accountId: '3'}, {...model, lines: [1, 2]},
-      {id: 42, accountId: 3, lines: [2, 1]}, {...model, extra: null}]) {
-      expect(await restoreElementFormModel(input, wire(expected))).toBe(false)
+    for (const mismatch of mismatches) {
+      expect(await restoreElementFormModel(input, mismatch)).toBe(false)
     }
     const before = structuredClone(model)
     validate.mockImplementationOnce(async () => { model.z.one = 99; throw new Error('invalid') })
-    expect(await restoreElementFormModel(input, wire(model, {accountId: 7}))).toBe(false)
+    expect(await restoreElementFormModel(input, failInvalid)).toBe(false)
     expect(model).toEqual(before)
     validate.mockImplementationOnce(async () => { model.accountId = 12; return true })
-    expect(await restoreElementFormModel(input, wire(model, {accountId: 7}))).toBe(false)
+    expect(await restoreElementFormModel(input, failValidateChange)).toBe(false)
     expect(model).toEqual(before)
     expect(sameFormStructure({a: null}, {})).toBe(false)
-  // Seven interpreter spawns per run: under a loaded machine each cold start alone
-  // eats the default timeout, so this case gets its own.
-  }, 30_000)
+  })
 
   it('supports allowInvalid + unset + clearValidate for empty create-form undo even with a password sibling', async () => {
     const state = mountedPage('/synthetic/create-user', 'CreateUser')

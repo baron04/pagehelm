@@ -1085,7 +1085,7 @@ class NativeCliTests(unittest.TestCase):
 
         host = Mock()
         httpd = native.ThreadingHTTPServer(("127.0.0.1", 0), native._handler(host))
-        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         thread.start()
         self.addCleanup(httpd.server_close)
         self.addCleanup(httpd.shutdown)

@@ -54,7 +54,7 @@ class GuardProxyTests(unittest.TestCase):
                 self.end_headers(); self.wfile.write(payload)
             do_GET = do_POST = handle_api
         self.app = ThreadingHTTPServer(("127.0.0.1", 0), Application)
-        self.worker = threading.Thread(target=self.app.serve_forever, daemon=True)
+        self.worker = threading.Thread(target=self.app.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         self.worker.start()
         self.origin = "http://fixture.test"
         self.guard = NativePageGuard(frozenset({READ}))

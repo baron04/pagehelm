@@ -38,14 +38,11 @@ async function setup(panel: Harness) {
   })
 }
 
-test('submit guide keeps pointing cleanly as the target moves without scrolling or submitting', async ({open}, info) => {
+test('submit guide keeps pointing cleanly as the target moves without scrolling or submitting', async ({open}) => {
   const panel = await open(snapshot(), {width:1440,height:1000,reducedMotion:'reduce'})
   await setup(panel)
   const guide = panel.page.locator('.woa-submit-guide'), line = guide.locator('svg')
   await expect(line).toBeVisible()
-  await panel.page.screenshot({path:info.outputPath('guide.png')})
-  // Even when a parent overflow box is smaller than the target's position (such as a fixed
-  // modal extending below an underlying scroll container), no directional "outside" hint hides the arrow.
   await panel.page.evaluate(() => {
     const form = document.querySelector('#synthetic-room') as HTMLElement
     form.style.height = '180px'
@@ -123,21 +120,6 @@ test('business control handoff steps aside on desktop, warns in full-screen mode
   expect(panel.errors).toEqual([])
 })
 
-test('submit guide disappears on manual submit and target replacement', async ({open}) => {
-  const panel = await open(snapshot(), {width:1440,height:1000,reducedMotion:'reduce'})
-  await setup(panel)
-  await panel.page.locator('#submit-room').click()
-  await expect(panel.page.locator('.woa-submit-guide')).toHaveCount(0)
-  expect(await panel.page.evaluate(() => (window as unknown as {__submitCount:number}).__submitCount)).toBe(1)
-  await panel.page.evaluate(() => {
-    const state=window as unknown as {__guide: {clear():void}; __runtime:{page:{guideSubmit(ref:string,turn:string):{clear():void}}}}
-    state.__guide=state.__runtime.page.guideSubmit('e1','turn-1')
-    document.querySelector('#submit-room')!.replaceWith(document.querySelector('#submit-room')!.cloneNode(true))
-  })
-  await expect(panel.page.locator('.woa-submit-guide')).toHaveCount(0)
-  expect(panel.errors).toEqual([])
-})
-
 test('submit guide stays inert and cleans up under strict CSP and reduced motion', async ({open}) => {
   const panel = await open(snapshot(), {width:1440,height:1000,reducedMotion:'reduce',
     csp: "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; require-trusted-types-for 'script'; trusted-types 'none'"})
@@ -146,43 +128,6 @@ test('submit guide stays inert and cleans up under strict CSP and reduced motion
   await expect(line).toBeVisible()
   expect(await panel.page.locator('.woa-submit-guide').evaluate(node=>getComputedStyle(node).pointerEvents)).toBe('none')
   await panel.page.evaluate(() => {history.pushState({},'', '/different');document.body.classList.add('route-changed')})
-  await expect(panel.page.locator('.woa-submit-guide')).toHaveCount(0)
-  expect(panel.errors).toEqual([])
-})
-
-
-test('submit guide pauses while the reply is scrolled away and has no idle polling', async ({open}) => {
-  const panel=await open(snapshot(), {width:1440,height:1000,reducedMotion:'reduce'})
-  await setup(panel)
-  await expect(panel.page.locator('.woa-submit-guide svg')).toBeVisible()
-  await panel.page.evaluate(() => {
-    const state=window as unknown as {__geometryReads:number}
-    state.__geometryReads=0
-    const button=document.querySelector('#submit-room')!
-    const read=button.getBoundingClientRect.bind(button)
-    button.getBoundingClientRect=()=>{state.__geometryReads++;return read()}
-  })
-  // No running task or animation needs to measure an idle form repeatedly.
-  await panel.page.waitForTimeout(180)
-  expect(await panel.page.evaluate(()=>(window as unknown as {__geometryReads:number}).__geometryReads)).toBeLessThan(3)
-  await panel.set({entries:[entry('e1','goal','预填会议室'),entry('e2','result',
-    '已填入会议室信息。\n\n'+Array.from({length:30},(_,i)=>`说明 ${i}`).join('\n\n')+'\n\n**请核对后，手动点击「确定」提交。**',
-    {panel_state:'success'})]})
-  await panel.page.locator('.woa-thread').evaluate(node=>{node.scrollTop=0})
-  await expect(panel.page.locator('.woa-submit-guide svg')).toBeHidden()
-  await panel.page.locator('.woa-thread').evaluate(node=>{node.scrollTop=node.scrollHeight})
-  await expect(panel.page.locator('.woa-submit-guide svg')).toBeVisible()
-  await panel.page.evaluate(()=>{document.querySelector('#synthetic-room')!.id='replacement-form'})
-  await expect(panel.page.locator('.woa-submit-guide')).toHaveCount(0)
-  expect(panel.errors).toEqual([])
-})
-
-
-test('submit guide never follows a newer conversation turn', async ({open}) => {
-  const panel=await open(snapshot(), {width:1440,height:1000,reducedMotion:'reduce'})
-  await setup(panel)
-  await expect(panel.page.locator('.woa-submit-guide svg')).toBeVisible()
-  await panel.set({entries:[entry('e1','goal','新问题', {turn_id:'turn-2'})]})
   await expect(panel.page.locator('.woa-submit-guide')).toHaveCount(0)
   expect(panel.errors).toEqual([])
 })

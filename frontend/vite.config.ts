@@ -12,7 +12,19 @@ const contract = fileURLToPath(new URL('../src/web_operation_agent/web_runtime',
  */
 export default defineConfig({
   resolve: {alias: {'@contract': contract}},
-  plugins: [react(), aiMotionAntialiasFix()],
+  plugins: [
+    react(),
+    aiMotionAntialiasFix(),
+    {
+      name: 'yudao-page-controller-resolve',
+      resolveId(source, importer) {
+        if (source === './page-controller.js' && importer?.includes('yudao-page-controller')) {
+          return this.resolve('@page-agent/page-controller', importer, {skipSelf: true})
+        }
+        return null
+      },
+    },
+  ],
   optimizeDeps: {exclude: ['ai-motion']},
   test: {environment: 'jsdom', include: ['tests/**/*.unit.test.ts?(x)',
                                          'tests/**/*.unit.test.js'], globals: true},

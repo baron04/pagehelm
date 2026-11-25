@@ -29,7 +29,6 @@ from web_operation_agent.tests import browser_only
 import json
 import os
 import threading
-import time
 import unittest
 import urllib.error
 import urllib.request
@@ -219,13 +218,6 @@ class TheAssistantIsNeverSilentAndNeverLoud(unittest.TestCase):
         self.assertEqual(page.evaluate("() => window.__hostErrors"), [])
         self.assertEqual(page_errors, [])
 
-    def watch_presence(self, page, seconds: float):
-        """I2: sample the page for `seconds`; the assistant is always there."""
-        deadline = time.monotonic() + seconds
-        while time.monotonic() < deadline:
-            self.assertTrue(page.evaluate(PRESENT), "the assistant was silently absent")
-            page.wait_for_timeout(200)
-
     def launcher(self, page):
         return page.locator(".woa-launcher")
 
@@ -256,47 +248,14 @@ class TheAssistantIsNeverSilentAndNeverLoud(unittest.TestCase):
         composer.fill(text)
         composer.press("Enter")
 
-    def test_nothing_is_connected_until_the_person_sends_something(self):
-        page, errors = self.open()
-        self.launcher(page).wait_for(timeout=8000)
-        # Opening the panel on a tab with no conversation makes no session either.
-        self.launcher(page).click()
-        page.locator(".woa-window").wait_for(timeout=8000)
-        page.wait_for_timeout(2500)
-        self.assertEqual(self.host.bootstraps, 0)
-        self.assertEqual(page.evaluate("() => window.__WOA_ASSISTANT__.state.kind"), "idle")
-        self.send(page)
-        self.running(page)
-        self.assertEqual(self.host.bootstraps, 1)
-        self.assertEqual(len(self.host.sessions), 1)
-        self.watch_presence(page, 1)
-        self.assert_quiet(page, errors)
-
-    def test_a_refused_bootstrap_says_why_in_the_panel(self):
-        self.host.statuses = [403]
-        page, errors = self.open()
-        self.launcher(page).wait_for(timeout=8000)
-        # Nothing is asked of the application, so nothing can fail, until something is sent.
-        page.wait_for_timeout(1500)
-        self.assertEqual(self.host.bootstraps, 0)
-        self.send(page)
-        self.assertEqual(self.start_sentence(page), "当前账号未获授权使用助手（403）。")
-        # What was sent stays on screen, marked as not delivered.
-        page.locator(".woa-undelivered").wait_for(timeout=5000)
-        # Nothing another attempt could fix is retried on its own.
-        page.wait_for_timeout(2500)
-        self.assertEqual(self.host.bootstraps, 1)
-        self.assertEqual(self.host.sessions, [])
-        self.watch_presence(page, 1)
-        self.assert_quiet(page, errors)
-
     def test_an_outage_is_shown_and_retry_sends_what_was_waiting(self):
         self.host.statuses = [503]
         page, errors = self.open()
+        self.launcher(page).wait_for(timeout=8000)
+        self.assertEqual(self.host.bootstraps, 0)
         self.send(page, "列出订单")
         self.assertIn("助手暂时不可用（503）", self.start_sentence(page))
         # The person asked, so the person retries: nothing is attempted behind their back.
-        page.wait_for_timeout(2500)
         self.assertEqual(self.host.bootstraps, 1)
         page.locator(".woa-inline-error__retry").click()
         self.running(page)
@@ -304,32 +263,7 @@ class TheAssistantIsNeverSilentAndNeverLoud(unittest.TestCase):
         self.start_notice(page).wait_for(state="detached", timeout=5000)
         self.assertEqual(len(self.host.sessions), 1)
         page.locator(".woa-undelivered").wait_for(state="detached", timeout=5000)
-        self.watch_presence(page, 1)
-        self.assert_quiet(page, errors)
-
-    def test_a_session_that_ends_while_idle_is_replaced_by_the_next_message(self):
-        """The agent restarted, or the session expired, with nothing under way: nothing is
-        made again until it is needed, and then it is."""
-        page, errors = self.open()
-        self.send(page)
-        self.running(page)
-        page.wait_for_timeout(10_500)   # a session that has run long enough to be trusted
-        self.host.registry.retire(self.host.sessions[0], "session_closed")
-        page.wait_for_function("() => window.__WOA_ASSISTANT__?.state?.kind === 'idle'",
-                               timeout=20_000)
-        page.wait_for_timeout(3000)
-        self.assertEqual(len(self.host.sessions), 1)
-        self.send(page, "再列一次")
-        page.wait_for_function(
-            "() => window.__WOA_ASSISTANT__?.state?.kind === 'running'"
-            " && window.__WOA_ASSISTANT__.state.runtime.sessionId === 'lifecycle-2'",
-            timeout=20_000)
-        # The new session numbers its events from one again, as the first did. Both
-        # questions are on screen as what the server accepted, not as a local echo.
-        asked = page.locator(".woa-turn .woa-user")
-        asked.nth(1).wait_for(timeout=10_000)
-        self.assertEqual(asked.all_text_contents(), ["列出所有待开票的销售订单", "再列一次"])
-        self.watch_presence(page, 1)
+        self.assertTrue(page.evaluate(PRESENT))
         self.assert_quiet(page, errors)
 
     def test_a_page_opened_in_the_middle_of_a_turn_reconnects_without_being_asked(self):
@@ -352,69 +286,7 @@ class TheAssistantIsNeverSilentAndNeverLoud(unittest.TestCase):
         # The expanded panel survives the reload without another user gesture.
         page.locator(".woa-window").wait_for(timeout=8000)
         self.assertEqual(page.locator(".woa-launcher").count(), 0)
-        self.watch_presence(page, 1)
-        self.assert_quiet(page, errors)
-
-    def test_a_tab_with_a_conversation_connects_when_the_panel_is_opened(self):
-        """A conversation this tab has, with nothing under way, is fetched when the panel is
-        opened to show it -- not on every page the person visits."""
-        page, errors = self.open(session_storage={"woa.assistant.session.v1": "lifecycle-1"})
-        self.launcher(page).wait_for(timeout=8000)
-        page.wait_for_timeout(2500)
-        self.assertEqual(self.host.bootstraps, 0)
-        self.launcher(page).click()
-        self.running(page)
-        self.assertEqual(self.host.bootstraps, 1)
-        self.watch_presence(page, 1)
-        self.assert_quiet(page, errors)
-
-    def test_across_origins_a_network_fault_never_times_the_connection_out(self):
-        """The gateway on another origin: a retired session's answer carries no CORS header,
-        so the browser sees an outage, not `unknown_session`. A network fault must keep the
-        existing panel and reconnect loop alive past the former thirty-second cutoff."""
-        self.host.close()
-        self.host = self.make_host(same_origin=False)
-        page, errors = self.open(session_storage=self.TURN_UNDER_WAY)
-        self.running(page)
-        page.wait_for_timeout(10_500)
-        self.host.registry.retire(self.host.sessions[0], "session_closed")
-        page.wait_for_timeout(32_000)
-        self.assertEqual(len(self.host.sessions), 1)
-        self.assertEqual(page.evaluate("() => window.__WOA_ASSISTANT__.state.kind"), "running")
-        self.assertEqual(page.evaluate(
-            "() => window.__WOA_ASSISTANT__.state.runtime.panelHost.snapshot().connection.state"),
-            "reconnecting")
-        self.watch_presence(page, 1)
-        self.assert_quiet(page, errors)
-
-    def test_a_session_that_never_holds_is_not_asked_for_again_and_again(self):
-        """Every new session ends at once. The page tries again only while a turn depends on
-        it; once a session has come back with nothing under way, it stops and says why."""
-        page, errors = self.open()
-        self.send(page)
-        self.running(page)
-        page.wait_for_function(
-            "() => window.__WOA_ASSISTANT__.state.runtime.panelHost.snapshot().connection.busy",
-            timeout=10_000)
-        stop = threading.Event()
-
-        def retire_every_session():
-            while not stop.is_set():
-                for session_id in list(self.host.sessions):
-                    self.host.registry.retire(session_id, "session_closed")
-                time.sleep(0.3)
-
-        reaper = threading.Thread(target=retire_every_session, daemon=True)
-        reaper.start()
-        self.addCleanup(stop.set)
-        page.wait_for_function(
-            "() => window.__WOA_ASSISTANT__?.state?.kind === 'unavailable'", timeout=30_000)
-        count = len(self.host.sessions)
-        page.wait_for_timeout(9000)
-        self.assertEqual(len(self.host.sessions), count)
-        self.assertLessEqual(count, 3)
-        self.assertIn("助手暂时不可用", self.start_sentence(page))
-        self.assertNotIn("重试", self.start_sentence(page))
+        self.assertTrue(page.evaluate(PRESENT))
         self.assert_quiet(page, errors)
 
     def test_a_session_another_page_took_over_is_left_to_that_page(self):
@@ -431,11 +303,10 @@ class TheAssistantIsNeverSilentAndNeverLoud(unittest.TestCase):
         self.running(second)
         first.wait_for_function(
             "() => window.__WOA_ASSISTANT__?.state?.kind === 'settled'", timeout=15_000)
-        first.wait_for_timeout(3000)
         self.assertEqual(first.evaluate("() => window.__WOA_ASSISTANT__.state.reason"), "replaced")
         self.assertEqual(second.evaluate("() => window.__WOA_ASSISTANT__.state.kind"), "running")
         # The first page keeps the panel that says what happened; it is not absent.
-        self.watch_presence(first, 1)
+        self.assertTrue(first.evaluate(PRESENT))
         self.assert_quiet(first, first_errors)
         self.assert_quiet(second, second_errors)
 

@@ -1286,7 +1286,7 @@ def main(argv=None) -> int:
     http = ThreadingHTTPServer((host.config.bootstrap_host, host.config.bootstrap_port), _handler(host))
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: (host.begin_drain(), stop.set()))
-    threading.Thread(target=http.serve_forever, daemon=True).start()
+    threading.Thread(target=http.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     print(f"yudao assistant: gateway {host.server.base_url}, bootstrap :{host.config.bootstrap_port}",
           flush=True)
     try:

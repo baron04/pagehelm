@@ -89,6 +89,17 @@ class SelectionTests(unittest.TestCase):
         command = next(c['argv'] for c in plan['checks'] if c['name'] == 'panel Chromium')
         self.assertNotIn('e2e/storybook.spec.ts', command)
 
+    def test_local_frontend_change_scopes_lint_and_vitest_in_dev(self):
+        names, plan = self.names(['frontend/src/components/Thread.tsx'], 'dev')
+        lint = next(c['argv'] for c in plan['checks'] if c['name'] == 'frontend lint')
+        unit = next(c['argv'] for c in plan['checks'] if c['name'] == 'frontend unit tests')
+        self.assertEqual(lint, ['npx', 'eslint', 'src/components/Thread.tsx'])
+        self.assertEqual(unit, ['npx', 'vitest', 'related', 'src/components/Thread.tsx', '--run', '--passWithNoTests'])
+        self.assertNotIn('panel Chromium', names)
+        _, ci_plan = self.names(['frontend/src/components/Thread.tsx'], 'ci')
+        self.assertEqual(next(c['argv'] for c in ci_plan['checks'] if c['name'] == 'frontend lint'), ['npm', 'run', 'lint'])
+        self.assertEqual(next(c['argv'] for c in ci_plan['checks'] if c['name'] == 'frontend unit tests'), ['npm', 'test'])
+
     def test_browser_runtime_auth_changes_select_cross_boundary_tests(self):
         names, _ = self.names(['frontend/src/runtime/boot.ts'])
         self.assertIn('runtime Chromium', names)
@@ -192,9 +203,16 @@ class SelectionTests(unittest.TestCase):
         self.assertIn('web_operation_agent_yudao.tests.test_special_writes', modules)
         self.assertNotIn('web_operation_agent_yudao.tests.test_deploy_commands', modules)
 
+    def test_local_yudao_deploy_change_runs_only_deploy_tests(self):
+        _, plan = self.names(['examples/yudao/deploy/local/configuration.py'], 'dev')
+        command = next(c['argv'] for c in plan['checks'] if c['name'] == 'Yudao contracts')
+        modules = [command[i + 1] for i, value in enumerate(command) if value == '--module']
+        self.assertEqual(modules, ['web_operation_agent_yudao.tests.test_deploy_commands',
+                                   'web_operation_agent_yudao.tests.test_local_deployment'])
+
     def test_yudao_selection_falls_back_to_all_tests(self):
         for paths, profile in [([check.YUDAO_SRC + 'web_operation_agent_yudao/writes/write_special.py'], 'ci'),
-                               (['examples/yudao/deploy/local/configuration.py'], 'dev'),
+                               (['examples/yudao/deploy/local/configuration.py'], 'ci'),
                                ([check.YUDAO_SRC + 'web_operation_agent_yudao/skills/query/SKILL.md'], 'dev'),
                                ([check.YUDAO_SRC + 'web_operation_agent_yudao/deleted.py'], 'dev')]:
             _, plan = self.names(paths, profile)

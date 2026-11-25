@@ -476,7 +476,7 @@ class FrontTests(unittest.TestCase):
                 self.wfile.write(body)
 
         upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
-        threading.Thread(target=upstream.serve_forever, daemon=True).start()
+        threading.Thread(target=upstream.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
         self.addCleanup(upstream.server_close)
         self.addCleanup(upstream.shutdown)
         patch.object(cfg, "PORTS", (0, upstream.server_port, upstream.server_port, upstream.server_port)).start()
@@ -491,7 +491,7 @@ class FrontTests(unittest.TestCase):
             upstream=f"http://127.0.0.1:{upstream.server_port}",
             ports=(0, upstream.server_port, upstream.server_port, upstream.server_port))
         self.front = serve.Front(settings)
-        threading.Thread(target=self.front.serve_forever, daemon=True).start()
+        threading.Thread(target=self.front.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
         self.addCleanup(self.front.server_close)
         self.addCleanup(self.front.shutdown)
         self.addCleanup(finished.set)

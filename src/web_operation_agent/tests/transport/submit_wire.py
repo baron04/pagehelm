@@ -59,8 +59,13 @@ class SubmitWire:
 
 def main():
     from web_operation_agent.tests.execution.test_native_submit import observation
-    wire = SubmitWire(observation())
-    issued = wire.command("form_model", json.load(sys.stdin))
+    obs = observation()
+    payload = json.load(sys.stdin)
+    if isinstance(payload, list):
+        out = [SubmitWire(obs).command("form_model", item).command.args for item in payload]
+        print(json.dumps(out, ensure_ascii=False))
+        return
+    issued = SubmitWire(obs).command("form_model", payload)
     # Return the command after publication; the browser uses exactly these decoded args.
     print(json.dumps(issued.command.args, ensure_ascii=False))
 

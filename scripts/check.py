@@ -44,6 +44,9 @@ YUDAO_TESTS = YUDAO_SRC + 'web_operation_agent_yudao/tests/'
 
 def yudao_modules(paths: list[str]) -> list[str] | None:
     """Yudao test modules importing a changed module, directly or transitively; None means all."""
+    if paths and all(f.startswith('examples/yudao/deploy/') for f in paths):
+        return ['web_operation_agent_yudao.tests.test_deploy_commands',
+                'web_operation_agent_yudao.tests.test_local_deployment']
     package = ROOT / YUDAO_SRC / 'web_operation_agent_yudao'
     if not package.is_dir() or any(not (f.startswith(YUDAO_SRC + 'web_operation_agent_yudao/') and f.endswith('.py')
                                          and (ROOT / f).is_file()) for f in paths):
@@ -202,8 +205,22 @@ def make_plan(paths: list[str], profile: str = 'dev', reason: str = 'explicit pa
                         command += ['--module', f.removeprefix('src/').removesuffix('.py').replace('/', '.')]
         add('core regression', command, needs_python_packages=True)
     if frontend:
-        add('frontend lint', ['npm', 'run', 'lint'], cwd='frontend', needs_frontend=True)
-        add('frontend unit tests', ['npm', 'test'], cwd='frontend')
+        frontend_config = any(
+            Path(f).name.startswith(('eslint.config.', 'vite.', 'tsconfig'))
+            or f in {'frontend/src/styles/design_tokens.json', 'frontend/scripts/build-tokens.mjs', 'frontend/src/presentation.json'}
+            for f in p
+        )
+        rel_frontend = sorted(f.removeprefix('frontend/') for f in frontend_paths
+                              if f not in story_paths and (ROOT / f).is_file())
+        if profile == 'dev' and not (broad or builders or frontend_dependencies or frontend_config) and rel_frontend:
+            lint_files = [f for f in rel_frontend if Path(f).suffix.lower() in {'.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'}]
+            if lint_files:
+                add('frontend lint', ['npx', 'eslint', *lint_files], cwd='frontend', needs_frontend=True)
+            add('frontend unit tests', ['npx', 'vitest', 'related', *rel_frontend, '--run', '--passWithNoTests'],
+                cwd='frontend', needs_frontend=True)
+        else:
+            add('frontend lint', ['npm', 'run', 'lint'], cwd='frontend', needs_frontend=True)
+            add('frontend unit tests', ['npm', 'test'], cwd='frontend')
         assets()
         if profile == 'ci':
             files = sorted(str(f.relative_to(ROOT / 'frontend')) for f in (ROOT / 'frontend/e2e').glob('*.spec.ts'))
