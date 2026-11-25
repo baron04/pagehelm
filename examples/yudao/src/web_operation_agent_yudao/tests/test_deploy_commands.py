@@ -501,5 +501,24 @@ class DeployUploadTests(unittest.TestCase):
             self.assertEqual(b"assistant-v2\n", z2.read("web_operation_agent/web_runtime/assistant.js"))
 
 
+class NginxWoaCacheHeaderTests(unittest.TestCase):
+    def test_woa_location_forces_revalidation_without_dropping_server_headers(self):
+        repo = Path(__file__).resolve().parents[5]
+        for rel in ("examples/yudao/deploy/cloud/nginx.site.conf", "examples/yudao/deploy/nginx.conf"):
+            text = (repo / rel).read_text(encoding="utf-8")
+            match = re.search(r"location\s+/woa/\s*\{(?P<body>[^}]*)\}", text)
+            self.assertIsNotNone(match, f"missing location /woa/ block in {rel}")
+            directives = [
+                line.split("#", 1)[0].strip()
+                for line in match.group("body").splitlines()
+            ]
+            directives = [line for line in directives if line]
+            self.assertIn("expires -1;", directives, f"{rel} must disable heuristic browser caching for /woa/")
+            self.assertFalse(
+                any(line.startswith("add_header") for line in directives),
+                f"{rel} /woa/ should preserve server-level add_header inheritance",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
