@@ -16,6 +16,8 @@ from web_operation_agent.execution.list_order import (
     check_answer_list_order,
     enforce_sql_default_order,
     extract_delivered_list_from_answer,
+    extract_delivered_list_from_observation,
+    extract_delivered_list_from_text,
     extract_prefix_limit,
     has_explicit_sort_request,
     parse_ordinal_reference,
@@ -65,12 +67,20 @@ class SortIntentAndPrefixTests(unittest.TestCase):
             "销量最高的 3 个品是什么",
             "查最近 5 条单据",
             "把列表按编号从小到大排",
+            "把列表按总数量从少到多列出来",
+            "按可用数量从多到少展示",
+            "把条目按单价从高到低排一下",
+            "按分数从低到高列出前 3 项",
+            "由少到多排列当前条目",
+            "按指标由多到少列出来",
+            "按数值从少至多列出",
         ):
             with self.subTest(ask=ask):
                 self.assertTrue(has_explicit_sort_request(ask))
 
         for ask in (
             "列出当前所有记录",
+            "把列表列出来",
             "给我看前 3 个",
             "前 5 条是什么",
             "前 3 名名单发我",
@@ -305,6 +315,104 @@ class OrdinalBindingAndDeliveryOrderTests(unittest.TestCase):
                 context=ctx,
                 spec_decorator=mismatch_decorator,
             )
+
+    def test_extract_delivered_list_from_observation_deduplicates_rows_in_dom_order(self):
+        from types import SimpleNamespace as NS
+
+        obs = NS(
+            url="https://synthetic.test/demo/items",
+            page_route="/demo/items",
+            title="演示条目列表",
+            page_read={"path": "/demo/items/page", "total": 12},
+            elements=[
+                NS(ref="e1", role="button", name="查询", attrs={"page_control": "query"}),
+                NS(
+                    ref="e10",
+                    role="button",
+                    name="编辑",
+                    attrs={
+                        "record_table": "main-table",
+                        "record_id": "19",
+                        "record_values": json.dumps([["编码", "DEMO-19"], ["名称", "首行甲项"], ["创建时间", "2026-10-20"]]),
+                    },
+                ),
+                NS(
+                    ref="e11",
+                    role="button",
+                    name="删除",
+                    attrs={
+                        "record_table": "main-table",
+                        "record_id": "19",
+                        "record_values": json.dumps([["编码", "DEMO-19"], ["名称", "首行甲项"]]),
+                    },
+                ),
+                NS(
+                    ref="e12",
+                    role="button",
+                    name="编辑",
+                    attrs={
+                        "record_table": "main-table",
+                        "record_id": "11",
+                        "record_values": json.dumps([["编码", "DEMO-11"], ["名称", "次行乙项"], ["状态", "启用"]]),
+                    },
+                ),
+            ],
+        )
+        delivered = extract_delivered_list_from_observation(obs, ordered_by_user=False)
+        self.assertIsNotNone(delivered)
+        self.assertEqual(delivered.entity, "demo/items")
+        self.assertEqual(delivered.total_rows, 12)
+        self.assertEqual([it.record_id for it in delivered.items], ["19", "11"])
+        self.assertEqual([it.display for it in delivered.items], ["DEMO-19", "DEMO-11"])
+        self.assertIn("次行乙项", delivered.items[1].aliases)
+        self.assertIsNone(extract_delivered_list_from_observation(NS(elements=[])))
+
+    def test_extract_delivered_list_from_text_supports_tabular_numbered_and_slash_lists(self):
+        # Markdown table
+        md = (
+            "| 编号 | 名称 | 状态 |\n"
+            "| --- | --- | --- |\n"
+            "| 101 | 甲号记录 | 启用 |\n"
+            "| 102 | 乙号记录 | 停用 |"
+        )
+        d_md = extract_delivered_list_from_text(md, entity="demo/items")
+        self.assertIsNotNone(d_md)
+        self.assertEqual([it.record_id for it in d_md.items], ["101", "102"])
+        self.assertEqual([it.display for it in d_md.items], ["甲号记录", "乙号记录"])
+
+        # Stacked header + TSV data rows (innerText style)
+        tsv = (
+            "单号\n\t\n对方\n\t\n金额\n\n"
+            "NO-001\t甲公司\t300.00\n"
+            "NO-002\t乙公司\t180.00\n"
+            "NO-003\t丙公司\t120.00\n"
+        )
+        d_tsv = extract_delivered_list_from_text(tsv)
+        self.assertIsNotNone(d_tsv)
+        self.assertEqual([it.display for it in d_tsv.items], ["NO-001", "NO-002", "NO-003"])
+        self.assertIn("丙公司", d_tsv.items[2].aliases)
+
+        # Slash-separated list rows
+        slash_txt = (
+            "当前列表如下：\n\n"
+            "申请甲标题 / 重要 / 发起人 / 2026-10-23 08:12:08 / 审批中\n"
+            "申请乙标题 / 正常 / 发起人 / 2026-10-22 20:06:00 / 未提交"
+        )
+        d_slash = extract_delivered_list_from_text(slash_txt)
+        self.assertIsNotNone(d_slash)
+        self.assertEqual([it.display for it in d_slash.items], ["申请甲标题", "申请乙标题"])
+
+        # Numbered list
+        num_txt = "1. 条目甲（ID=21）\n2. 条目乙（ID=18）"
+        d_num = extract_delivered_list_from_text(num_txt)
+        self.assertIsNotNone(d_num)
+        self.assertEqual([(it.record_id, it.display) for it in d_num.items], [("21", "条目甲"), ("18", "条目乙")])
+
+        # Single-record key-value summary bullet list or 2-column 字段/值 table must NOT be treated as a list
+        detail_bullets = "- 名称：甲号记录\n- 状态：启用\n- 创建时间：2026-10-20"
+        self.assertIsNone(extract_delivered_list_from_text(detail_bullets))
+        kv_table = "| 字段 | 值 |\n| --- | --- |\n| 名称 | 甲号记录 |\n| 状态 | 启用 |"
+        self.assertIsNone(extract_delivered_list_from_text(kv_table))
 
 
 if __name__ == "__main__":

@@ -196,8 +196,8 @@ class YudaoListOrderTests(unittest.TestCase):
         finally:
             tables.close()
 
-        # Group B: user EXPLICITLY asks to sort by ID ascending -> preserved
-        procs_b, client_b, _know_b, tables_b, _ctx_b = _make_procedures("按编号从小到大排序列出前 2 个")
+        # Group B: user EXPLICITLY asks to sort ("按总数量从少到多") -> preserved
+        procs_b, client_b, _know_b, tables_b, _ctx_b = _make_procedures("按总数量从少到多列出前 2 个")
         try:
             s_b = State()
             turn_b = {"reads": [], "marked": "", "trace": [], "touched": []}
@@ -296,13 +296,13 @@ class YudaoListOrderTests(unittest.TestCase):
         def make_exec(conv_state):
             ex = YudaoTurnExecutor.__new__(YudaoTurnExecutor)
             ex.turn_context = SlimTurnContext()
-            ex.knowledge = NS(client=NS(), handoffs=BASELINE_SESSION_HANDOFFS, turn_targets={}, probed_s3_edges=set())
+            ex.knowledge = NS(client=NS(read_generation=0), handoffs=BASELINE_SESSION_HANDOFFS, turn_targets={}, probed_s3_edges=set())
             ex.conversation_state = conv_state
             ex.procedures = NS(form_fill=None, turn_context=None)
             ex.chat = _NeverCallChat()
             return ex
 
-        # Missing list
+        # Missing list: write turn clarifies with zero model calls, read turn proceeds normally
         conv1 = ConversationState()
         ex1 = make_exec(conv1)
         s1 = NS(
@@ -317,6 +317,22 @@ class YudaoListOrderTests(unittest.TestCase):
         q1 = YudaoTurnExecutor._run(ex1, s1)
         self.assertEqual(s1.terminal_reason, "needs_clarification")
         self.assertIn("第 2 个", q1)
+
+        s_read = NS(
+            message=NS(text="查看第 2 个的详情"),
+            run_id="run-read-missing",
+            ledger=Ledger(),
+            approvals=NS(mutations_enabled=True),
+            terminal_reason="",
+            stop_reason="",
+            clarification=None,
+        )
+        with patch.object(ModelDrivenTurnExecutor, "_run", return_value="已继续执行读取") as mocked_super:
+            res_read = YudaoTurnExecutor._run(ex1, s_read)
+        self.assertEqual(res_read, "已继续执行读取")
+        mocked_super.assert_called_once()
+        self.assertEqual(s_read.terminal_reason, "")
+        self.assertTrue(any(ev == "list_ordinal_missing" for ev, _ in s_read.ledger.events))
 
         # Out of range (3 items delivered, asking for 9th and 0th)
         conv2 = ConversationState()
@@ -556,6 +572,92 @@ class YudaoListOrderTests(unittest.TestCase):
         self.assertEqual(res_bad.state, "refused")
         self.assertIn("不一致", res_bad.feedback)
         self.assertIn("list_ordinal_mismatch_refused", [ev for ev, _ in ledger.events])
+
+    def test_closing_records_delivered_list_from_page_table_and_text_list(self):
+        executor = YudaoTurnExecutor.__new__(YudaoTurnExecutor)
+        tables = TurnTables(BASELINE_SESSION_HANDOFFS)
+        self.addCleanup(tables.close)
+        executor.turn_context = SlimTurnContext(
+            current_request="列出当前条目",
+            explicit_sort=False,
+            turn_tables=(tables, "2026-10-19", "Asia/Shanghai"),
+        )
+        executor.knowledge = NS(handoffs=BASELINE_SESSION_HANDOFFS)
+        executor.procedures = NS(form_fill=None)
+        executor.config = NS(disabled_actions=frozenset(), max_user_answer_chars=4000)
+
+        # 1. Native page observation with record_table + record_id bindings
+        obs_page = NS(
+            url="https://synthetic.test/demo/items",
+            page_route="/demo/items",
+            record_route="",
+            title="条目列表",
+            page_read={"path": "/admin-api/demo/items/page", "total": 6},
+            elements=(
+                NS(
+                    ref="e5",
+                    role="button",
+                    name="编辑",
+                    attrs={
+                        "record_table": "tbl",
+                        "record_id": "55",
+                        "record_values": json.dumps([["名称", "甲项"]]),
+                    },
+                ),
+                NS(
+                    ref="e6",
+                    role="button",
+                    name="编辑",
+                    attrs={
+                        "record_table": "tbl",
+                        "record_id": "44",
+                        "record_values": json.dumps([["名称", "乙项"]]),
+                    },
+                ),
+            ),
+        )
+        s_page = NS(obs=obs_page, ledger=Ledger(), delivered_list=None, mutation_outcomes=[])
+        turn_page = {"reads": [], "written": [], "trace": [], "touched": []}
+        args_done = {"status": "done", "answer": "已打开列表页。", "items": []}
+        with patch.object(ModelDrivenTurnExecutor, "_closing", side_effect=lambda _s, _t, a: a):
+            YudaoTurnExecutor._closing(executor, s_page, turn_page, args_done)
+        self.assertIsNotNone(s_page.delivered_list)
+        self.assertEqual([it["record_id"] for it in s_page.delivered_list["items"]], ["55", "44"])
+        self.assertTrue(any(ev == "delivered_list_recorded" and data.get("source") == "page_table" for ev, data in s_page.ledger.events))
+
+        # 2. Fallback to text list when native page has no row bindings
+        obs_text = NS(url="https://synthetic.test/demo/items", page_route="/demo/items", record_route="", title="条目列表", page_read=None, elements=())
+        s_text = NS(obs=obs_text, ledger=Ledger(), delivered_list=None, mutation_outcomes=[])
+        args_text = {
+            "status": "done",
+            "answer": "第 1 页如下：\n条目甲 / 重要 / 发起人 / 2026-10-20 / 审批中\n条目乙 / 正常 / 发起人 / 2026-10-19 / 未提交",
+            "items": [],
+        }
+        with patch.object(ModelDrivenTurnExecutor, "_closing", side_effect=lambda _s, _t, a: a):
+            YudaoTurnExecutor._closing(executor, s_text, turn_page, args_text)
+        self.assertIsNotNone(s_text.delivered_list)
+        self.assertEqual([it["display"] for it in s_text.delivered_list["items"]], ["条目甲", "条目乙"])
+        self.assertTrue(any(ev == "delivered_list_recorded" and data.get("source") == "text_list" for ev, data in s_text.ledger.events))
+
+    def test_propose_blocks_missing_list_when_ordinal_write_reaches_propose(self):
+        schema = {"type": "object", "properties": {"target": {"type": "string"}, "remark": {"type": "string"}}}
+        definition = NS(name="update_record", input_json=json.dumps(schema), reference_inputs=("target",))
+        writes = NS(owner_for_operation=lambda op: ("demo", definition) if op == "update_record" else None)
+        executor = YudaoTurnExecutor.__new__(YudaoTurnExecutor)
+        executor._earlier_words = ["查看列表"]
+        executor.turn_context = SlimTurnContext(
+            current_request="把第 2 个改一下",
+            ordinal_binding=resolve_ordinal_binding(parse_ordinal_reference("把第 2 个改一下"), None),
+        )
+        s = NS(
+            message=NS(text="把第 2 个改一下"),
+            step=1,
+            ledger=Ledger(),
+        )
+        res = YudaoTurnExecutor._propose(executor, s, writes, "update_record", {"target": "第 2 个", "remark": "新"}, {})
+        self.assertEqual(res.state, "needs_input")
+        self.assertEqual(res.error_code, "list_ordinal_missing")
+        self.assertIn("list_ordinal_missing_write_blocked", [ev for ev, _ in s.ledger.events])
 
 
 if __name__ == "__main__":

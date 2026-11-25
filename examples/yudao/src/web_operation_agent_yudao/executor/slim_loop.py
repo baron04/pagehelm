@@ -49,6 +49,8 @@ from web_operation_agent.execution.list_order import (
     build_delivered_items_from_rows,
     check_answer_list_order,
     extract_delivered_list_from_answer,
+    extract_delivered_list_from_observation,
+    extract_delivered_list_from_text,
     extract_prefix_limit,
     extract_row_identity,
     has_explicit_sort_request,
@@ -733,26 +735,51 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
                 delivered = None
             resolution = resolve_ordinal_binding(ordinal_ref, delivered)
             ctx.ordinal_binding = resolution
-            if resolution.status in {"missing_list", "out_of_range"}:
-                if resolution.status == "missing_list":
-                    state.ledger.append("list_ordinal_missing", phrase=ordinal_ref.raw_phrase)
+            if resolution.status == "missing_list":
+                state.ledger.append(
+                    "list_ordinal_missing",
+                    phrase=ordinal_ref.raw_phrase,
+                    write_intent=intent.mode,
+                )
+                if intent.mode in {"save", "draft"}:
                     question = (
-                        f"当前对话里还没有已交付的列表可供按「{ordinal_ref.raw_phrase}」定位。"
+                        f"当前对话里还没有已交付的列表可供按「{ordinal_ref.raw_phrase}」定位写入目标。"
                         "请先让我列出相关记录，或直接告诉我具体的记录名称或编号。"
                     )
-                else:
-                    n_items = len(delivered.items) if delivered is not None else 0
-                    state.ledger.append(
-                        "list_ordinal_out_of_range",
-                        phrase=ordinal_ref.raw_phrase,
-                        requested_position=ordinal_ref.position,
-                        from_end=ordinal_ref.from_end,
-                        list_size=n_items,
-                    )
-                    question = (
-                        f"最近交付的列表共有 {n_items} 行，不存在「{ordinal_ref.raw_phrase}」"
-                        f"（有效范围为第 1 行至第 {n_items} 行）。请确认要查看或操作第几行，或直接提供记录名称。"
-                    )
+                    state.terminal_reason = "needs_clarification"
+                    state.stop_reason = "needs_clarification"
+                    state.clarification = {
+                        "schema_version": 1,
+                        "clarification_id": f"{state.run_id}-ordinal"[:100],
+                        "task_id": state.run_id[:100],
+                        "question": question[:500],
+                        "response_kind": "free_text",
+                        "choices": [],
+                    }
+                    try:
+                        return question
+                    finally:
+                        ctx.ordinal_binding = prev_ordinal
+                        ctx.prefix_limit = prev_prefix_limit
+                        ctx.explicit_sort = prev_explicit_sort
+                        ctx.turn_tables = prev_tables
+                        self._active_model_state = prev_model_state
+                        ctx.write_intent = prev_intent
+                        ctx.earlier_requests = prev_earlier
+                        ctx.current_request = prev_request
+            elif resolution.status == "out_of_range":
+                n_items = len(delivered.items) if delivered is not None else 0
+                state.ledger.append(
+                    "list_ordinal_out_of_range",
+                    phrase=ordinal_ref.raw_phrase,
+                    requested_position=ordinal_ref.position,
+                    from_end=ordinal_ref.from_end,
+                    list_size=n_items,
+                )
+                question = (
+                    f"最近交付的列表共有 {n_items} 行，不存在「{ordinal_ref.raw_phrase}」"
+                    f"（有效范围为第 1 行至第 {n_items} 行）。请确认要查看或操作第几行，或直接提供记录名称。"
+                )
                 state.terminal_reason = "needs_clarification"
                 state.stop_reason = "needs_clarification"
                 state.clarification = {
@@ -1253,6 +1280,67 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
                             source_path=delivered.source_path,
                             ordered_by_user=delivered.ordered_by_user,
                         )
+        if args.get("status") == "done" and hasattr(s, "delivered_list") and getattr(s, "delivered_list", None) is None and not turn.get("written"):
+            binding = getattr(ctx, "ordinal_binding", None)
+            already_bound = binding is not None and getattr(binding, "status", "") == "bound"
+            if not already_bound:
+                obs = getattr(s, "obs", None)
+                if obs is not None:
+                    obs_route = str(getattr(obs, "page_route", "") or urlsplit(getattr(obs, "url", "") or "").path).strip()
+                    obs_record_route = str(getattr(obs, "record_route", "") or "").strip()
+                    has_dialog = any(
+                        str((getattr(e, "attrs", None) or {}).get("form_scope", "")).startswith("dialog")
+                        or getattr(e, "role", "") == "dialog"
+                        for e in getattr(obs, "elements", ()) or ()
+                    )
+                    if obs_route.rstrip("/") not in {"", "/index"} and not has_dialog and not (obs_record_route and obs_record_route == obs_route):
+                        page_read_meta = getattr(obs, "page_read", None)
+                        obs_source_path = str((page_read_meta.get("path") if isinstance(page_read_meta, dict) else "") or obs_route).strip()[:240]
+                        obs_entity = obs_source_path.removeprefix("/admin-api/").rsplit("/", 1)[0] if "/" in obs_source_path else ""
+                        obs_list = extract_delivered_list_from_observation(
+                            obs,
+                            entity=obs_entity,
+                            source_path=obs_source_path,
+                            ordered_by_user=ctx.explicit_sort,
+                        )
+                        min_obs_rows = 1 if isinstance(page_read_meta, dict) else 2
+                        if obs_list is not None and len(obs_list.items) >= min_obs_rows:
+                            s.delivered_list = obs_list.to_dict()
+                            s.ledger.append(
+                                "delivered_list_recorded",
+                                source="page_table",
+                                count=len(obs_list.items),
+                                total_rows=obs_list.total_rows,
+                                source_path=obs_list.source_path,
+                                ordered_by_user=obs_list.ordered_by_user,
+                            )
+                if getattr(s, "delivered_list", None) is None:
+                    page_read = getattr(obs, "page_read", None) if obs is not None else None
+                    read_path = page_read.get("path") if isinstance(page_read, dict) else ""
+                    obs_route = str(getattr(obs, "page_route", "") or urlsplit(getattr(obs, "url", "") or "").path).strip() if obs is not None else ""
+                    fallback_path = str(read_path or obs_route or "").strip()[:240]
+                    fallback_entity = fallback_path.removeprefix("/admin-api/").rsplit("/", 1)[0] if "/" in fallback_path else ""
+                    fallback_label = str(getattr(obs, "title", "") or fallback_path or "")[:200] if obs is not None else ""
+                    raw_total = page_read.get("total") if isinstance(page_read, dict) else 0
+                    fallback_total = raw_total if isinstance(raw_total, int) and not isinstance(raw_total, bool) else 0
+                    text_list = extract_delivered_list_from_text(
+                        str(args.get("answer") or ""),
+                        entity=fallback_entity,
+                        source_path=fallback_path,
+                        label=fallback_label,
+                        total_rows=fallback_total,
+                        ordered_by_user=ctx.explicit_sort,
+                    )
+                    if text_list is not None:
+                        s.delivered_list = text_list.to_dict()
+                        s.ledger.append(
+                            "delivered_list_recorded",
+                            source="text_list",
+                            count=len(text_list.items),
+                            total_rows=text_list.total_rows,
+                            source_path=text_list.source_path,
+                            ordered_by_user=text_list.ordered_by_user,
+                        )
         if args.get("status") == "need_input" and args.get("options"):
             normalized = _normalize_input_options(args.get("options"))
             if normalized:
@@ -1686,6 +1774,24 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
             prefill_port.last_field_outcomes = None
         spec_decorator = None
         binding = getattr(ctx, "ordinal_binding", None) if ctx is not None else None
+        if binding is not None and getattr(binding, "status", "") == "missing_list":
+            owned = writes.owner_for_operation(operation)
+            definition = owned[1] if owned is not None else None
+            ref_inputs = set(getattr(definition, "reference_inputs", ()) or ()) if definition is not None else set()
+            if isinstance(inputs, dict) and (any(k in inputs for k in _ORDINAL_TARGET_KEYS) or bool(ref_inputs & set(inputs))):
+                s.ledger.append(
+                    "list_ordinal_missing_write_blocked",
+                    operation=operation,
+                    phrase=binding.reference.raw_phrase,
+                )
+                return LoopToolResult(
+                    f"当前对话里还没有已交付的列表可供按「{binding.reference.raw_phrase}」定位写入目标。"
+                    "请先让我列出相关记录，或直接指定具体的记录名称或编号。",
+                    kind="write",
+                    state="needs_input",
+                    dispatch="not_dispatched",
+                    error_code="list_ordinal_missing",
+                )
         if binding is not None and getattr(binding, "status", "") == "bound" and binding.item is not None:
             owned = writes.owner_for_operation(operation)
             definition = owned[1] if owned is not None else None

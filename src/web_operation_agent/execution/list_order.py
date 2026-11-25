@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import re
 from typing import Any
 
@@ -38,8 +39,10 @@ _ITEM_UNIT = r"(?:个|条|位|台|辆|单|笔|份|家|张|件|行|项|名|人|�
 _EXPLICIT_SORT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
         r"排序|排一下序|重新排|升序|降序|正序|倒序|逆序|顺排|倒排"
-        r"|从小到大|从大到小|由小到大|由大到小|由低到高|由高到低|从低到高|从高到低"
-        r"|从早到晚|从晚到早|从新到旧|从旧到新|从近到远|从远到近|由近及远|由近到远"
+        r"|(?:从|由)(?:小[至到]大|大[至到]小|低[至到]高|高[至到]低|少[至到]多|多[至到]少"
+        r"|早[至到]晚|晚[至到]早|新[至到]旧|旧[至到]新|近[至到]远|远[至到]近"
+        r"|轻[至到]重|重[至到]轻|短[至到]长|长[至到]短|便宜[至到]贵|贵[至到]便宜)"
+        r"|由近及远|由远及近"
     ),
     re.compile(r"按[^，。；！？?\n]{1,16}(?:从|由|顺|逆|升|降)?排(?:序|列)?"),
     re.compile(r"以[^，。；！？?\n]{1,12}(?:升序|降序|顺序|倒序)"),
@@ -200,7 +203,11 @@ def has_explicit_sort_request(prompt: object) -> bool:
     if any(pat.search(text) for pat in _EXPLICIT_SORT_PATTERNS):
         return True
     # "按<列/条件>排/列" style phrasing.
-    if re.search(r"按[^\s，。；！？?\n]{1,12}(?:排序|顺排|倒排|从小|从大|从高|从低|从早|从晚)", text):
+    if re.search(
+        r"按[^\s，。；！？?\n]{1,12}(?:排序|顺排|倒排|升序|降序|正序|倒序|逆序"
+        r"|(?:从|由)(?:小|大|高|低|少|多|早|晚|新|旧|近|远|轻|重|短|长))",
+        text,
+    ):
         return True
     return False
 
@@ -1010,6 +1017,381 @@ def extract_delivered_list_from_answer(
     )
 
 
+_LABEL_DISPLAY_RE = re.compile(
+    r"(?:名称|名字|标题|姓名|单号|编号|编码|主题|name|title|subject|no|code)",
+    re.IGNORECASE,
+)
+_LABEL_SKIP_RE = re.compile(
+    r"(?:时间|日期|状态|类型|备注|说明|排序|创建|更新|操作|time|date|status|state|remark|desc|sort|creator|updater)",
+    re.IGNORECASE,
+)
+_LABEL_ID_RE = re.compile(r"^(?:id|编号|记录\s*id|record_id)$", re.IGNORECASE)
+_LABEL_INDEX_RE = re.compile(r"^(?:序号|行号|#|no\.?)$", re.IGNORECASE)
+_KV_HEADER_LEFT_RE = re.compile(r"^(?:字段|属性|项目|key|field)$", re.IGNORECASE)
+_KV_HEADER_RIGHT_RE = re.compile(r"^(?:值|内容|value)$", re.IGNORECASE)
+_INLINE_ID_RE = re.compile(r"(?:[（(]\s*(?:id|编号)\s*[=:：#]?\s*([A-Za-z0-9_.:@-]+)\s*[）)]|\bID\s*[=:：]\s*([A-Za-z0-9_.:@-]+))", re.IGNORECASE)
+_DATE_OR_TIME_VAL_RE = re.compile(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?$")
+_SUMMARY_ROW_RE = re.compile(r"^(?:合计|总计|小计|total|sum)\b", re.IGNORECASE)
+_KV_LINE_RE = re.compile(r"^\s*[-*•]?\s*([^：:\n]{1,10})\s*[：:]\s*\S")
+
+
+def _clean_text_cell(raw: object) -> str:
+    text = str(raw or "").strip()
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _parse_record_value_pairs(raw: object) -> list[tuple[str, str]]:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return []
+    pairs: list[tuple[str, str]] = []
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            label = _clean_text_cell(k)
+            val = _clean_text_cell(v)
+            if label or val:
+                pairs.append((label, val))
+        return pairs
+    if isinstance(raw, (list, tuple)):
+        for entry in raw:
+            if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                label = _clean_text_cell(entry[0])
+                val = _clean_text_cell(entry[1])
+                if label or val:
+                    pairs.append((label, val))
+    return pairs
+
+
+def _build_item_from_label_pairs(
+    position: int,
+    record_id: str,
+    pairs: list[tuple[str, str]],
+) -> DeliveredListItem | None:
+    rid = str(record_id or "").strip()[:120]
+    display = ""
+    if not rid:
+        for label, val in pairs:
+            if label and _LABEL_ID_RE.match(label) and val and re.fullmatch(r"[A-Za-z0-9_.:@-]{1,60}", val):
+                rid = val[:120]
+                break
+    for label, val in pairs:
+        if not val or val in {"-", "--", "—", "(空)"}:
+            continue
+        if _LABEL_ID_RE.match(label):
+            continue
+        if label and _LABEL_DISPLAY_RE.search(label) and not _LABEL_SKIP_RE.search(label):
+            display = val[:240]
+            break
+    if not display:
+        for label, val in pairs:
+            if not val or val in {"-", "--", "—", "(空)"}:
+                continue
+            if _LABEL_INDEX_RE.match(label) or _LABEL_SKIP_RE.search(label):
+                continue
+            if _DATE_OR_TIME_VAL_RE.match(val):
+                continue
+            display = val[:240]
+            break
+    if not display:
+        for _label, val in pairs:
+            if val and val not in {"-", "--", "—", "(空)"}:
+                display = val[:240]
+                break
+    if not display and rid:
+        display = rid
+    if not display and not rid:
+        return None
+    aliases: list[str] = []
+    for label, val in pairs:
+        if not val or val == display or val in {"-", "--", "—", "(空)"} or len(val) > 160:
+            continue
+        if label and (_LABEL_SKIP_RE.search(label) or _LABEL_INDEX_RE.match(label)):
+            continue
+        if _DATE_OR_TIME_VAL_RE.match(val):
+            continue
+        aliases.append(val)
+    if rid and rid != display and rid not in aliases:
+        aliases.append(rid)
+    return DeliveredListItem(
+        position=position,
+        record_id=rid,
+        display=display,
+        aliases=tuple(dict.fromkeys(aliases))[:8],
+    )
+
+
+def extract_delivered_list_from_observation(
+    observation: object,
+    *,
+    entity: str = "",
+    source_path: str = "",
+    ordered_by_user: bool = False,
+    max_items: int = 50,
+) -> DeliveredList | None:
+    """Extract an ordered ``DeliveredList`` from native page elements carrying table row bindings."""
+    if observation is None:
+        return None
+    elements = getattr(observation, "elements", ()) or ()
+    by_table: dict[str, list[tuple[str, list[tuple[str, str]]]]] = {}
+    seen_by_table: dict[str, set[str]] = {}
+    for elem in elements:
+        attrs = getattr(elem, "attrs", None)
+        if not isinstance(attrs, dict):
+            continue
+        table_name = str(attrs.get("record_table") or "").strip()
+        rec_id = str(attrs.get("record_id") or "").strip()
+        if not table_name or not rec_id:
+            continue
+        seen = seen_by_table.setdefault(table_name, set())
+        if rec_id in seen:
+            continue
+        seen.add(rec_id)
+        pairs = _parse_record_value_pairs(attrs.get("record_values"))
+        if not pairs:
+            name = _clean_text_cell(getattr(elem, "name", ""))
+            if name:
+                pairs = [("name", name)]
+        by_table.setdefault(table_name, []).append((rec_id, pairs))
+
+    if not by_table:
+        return None
+    _best_table, rows = max(by_table.items(), key=lambda kv: len(kv[1]))
+    items: list[DeliveredListItem] = []
+    for pos, (rec_id, pairs) in enumerate(rows[:max_items], start=1):
+        item = _build_item_from_label_pairs(pos, rec_id, pairs)
+        if item is not None:
+            items.append(item)
+    if not items:
+        return None
+
+    page_read = getattr(observation, "page_read", None)
+    read_path = page_read.get("path") if isinstance(page_read, dict) else ""
+    page_route = str(getattr(observation, "page_route", "") or "").strip()
+    resolved_path = str(source_path or read_path or page_route or "").strip()[:240]
+    stripped_path = resolved_path.strip("/")
+    resolved_entity = (entity or (stripped_path.rsplit("/", 1)[0] if "/" in stripped_path else "")).strip()[:120]
+    title = _clean_text_cell(getattr(observation, "title", ""))
+    label = (title or resolved_path or "页面列表")[:200]
+    raw_total = page_read.get("total") if isinstance(page_read, dict) else None
+    total_rows = raw_total if isinstance(raw_total, int) and not isinstance(raw_total, bool) and raw_total >= len(items) else len(items)
+    return DeliveredList(
+        entity=resolved_entity,
+        source_path=resolved_path,
+        label=label,
+        total_rows=total_rows,
+        ordered_by_user=ordered_by_user,
+        items=tuple(items),
+    )
+
+
+def _split_md_row(line: str) -> list[str]:
+    stripped = line.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+    return [_clean_text_cell(cell) for cell in stripped.split("|")]
+
+
+def _looks_like_header_row(cells: list[str]) -> bool:
+    if len(cells) < 2:
+        return False
+    header_hits = 0
+    for cell in cells:
+        if not cell or len(cell) > 16:
+            return False
+        if re.search(r"\d{3,}", cell):
+            return False
+        if _LABEL_DISPLAY_RE.search(cell) or _LABEL_SKIP_RE.search(cell) or _LABEL_ID_RE.match(cell) or _LABEL_INDEX_RE.match(cell) or re.search(r"金额|数量|价格|费用|部门|员工|客户|供应商|人|日期|时间", cell):
+            header_hits += 1
+    return header_hits >= max(2, (len(cells) + 1) // 2)
+
+
+def _items_from_tabular_rows(headers: list[str], data_rows: list[list[str]], *, max_items: int) -> list[DeliveredListItem]:
+    if len(headers) == 2 and _KV_HEADER_LEFT_RE.match(headers[0]) and _KV_HEADER_RIGHT_RE.match(headers[1]):
+        return []
+    items: list[DeliveredListItem] = []
+    for cells in data_rows[:max_items]:
+        if not cells or all(not c for c in cells):
+            continue
+        if _SUMMARY_ROW_RE.match(cells[0]):
+            continue
+        pairs: list[tuple[str, str]] = []
+        for idx, val in enumerate(cells):
+            lbl = headers[idx] if idx < len(headers) else ""
+            pairs.append((lbl, val))
+        item = _build_item_from_label_pairs(len(items) + 1, "", pairs)
+        if item is not None:
+            items.append(item)
+    return items
+
+
+def _extract_items_from_text_blocks(answer: str, *, max_items: int) -> list[DeliveredListItem]:
+    lines = answer.splitlines()
+    blocks = _extract_list_blocks(lines)
+
+    best_items: list[DeliveredListItem] = []
+
+    # 1. Markdown tables
+    for fmt, start, _end, line_idxs in blocks:
+        if fmt != "table":
+            continue
+        header_idx = start - 2
+        headers = _split_md_row(lines[header_idx]) if header_idx >= 0 else []
+        data_rows = [_split_md_row(lines[li]) for li in line_idxs]
+        items = _items_from_tabular_rows(headers, data_rows, max_items=max_items)
+        if len(items) > len(best_items):
+            best_items = items
+
+    # 2. Tab-separated (\t) data blocks (with optional inline header row or stacked header above)
+    i, n = 0, len(lines)
+    while i < n:
+        if "\t" not in lines[i]:
+            i += 1
+            continue
+        j = i
+        tsv_rows: list[list[str]] = []
+        while j < n and "\t" in lines[j] and lines[j].strip():
+            cells = [_clean_text_cell(c) for c in lines[j].split("\t")]
+            if len(cells) >= 2:
+                tsv_rows.append(cells)
+            j += 1
+        if len(tsv_rows) >= 2:
+            col_len = len(tsv_rows[0])
+            consistent = [row for row in tsv_rows if len(row) == col_len]
+            if len(consistent) >= 2:
+                headers: list[str] = []
+                data_rows = consistent
+                if _looks_like_header_row(consistent[0]) and len(consistent) >= 3:
+                    headers = consistent[0]
+                    data_rows = consistent[1:]
+                else:
+                    # Check stacked single-cell header block separated by literal "\t" lines right above
+                    raw_above = [c.strip() for c in lines[max(0, i - col_len * 3) : i] if c.strip() and c.strip() != "\t"]
+                    if len(raw_above) >= col_len:
+                        tail_headers = [_clean_text_cell(c) for c in raw_above[-col_len:]]
+                        if _looks_like_header_row(tail_headers):
+                            headers = tail_headers
+                items = _items_from_tabular_rows(headers, data_rows, max_items=max_items)
+                if len(items) > len(best_items):
+                    best_items = items
+        i = j + 1
+
+    # 3. Numbered / bulleted lists (rejecting single-record key-value detail summaries)
+    for fmt, _start, _end, line_idxs in blocks:
+        if fmt not in {"numbered", "bullet"}:
+            continue
+        raw_texts = [lines[li] for li in line_idxs]
+        kv_hits = [m.group(1).strip() for txt in raw_texts if (m := _KV_LINE_RE.match(txt))]
+        if fmt == "bullet" and len(kv_hits) >= max(2, (len(raw_texts) + 1) // 2) and len(set(kv_hits)) == len(kv_hits):
+            continue
+        items = []
+        for raw_line in raw_texts[:max_items]:
+            body = re.sub(r"^\s*\d+\s*[.、)）]\s*", "", raw_line.strip())
+            body = re.sub(r"^\s*[-*•]\s+", "", body)
+            body = _clean_text_cell(body)
+            if not body:
+                continue
+            rid = ""
+            m_id = _INLINE_ID_RE.search(body)
+            if m_id:
+                rid = (m_id.group(1) or m_id.group(2) or "").strip()[:120]
+            clean_body = _INLINE_ID_RE.sub("", body).strip(" ，,;；:：")
+            segs = [s.strip() for s in re.split(r"\s+(?:/|\||—)\s+", clean_body) if s.strip()]
+            if not segs:
+                segs = [re.split(r"[（(：:]", clean_body, maxsplit=1)[0].strip() or clean_body]
+            display = segs[0][:240]
+            if not display and not rid:
+                continue
+            aliases = [s[:160] for s in segs[1:] if s and s != display and not _DATE_OR_TIME_VAL_RE.match(s)]
+            if rid and rid != display and rid not in aliases:
+                aliases.append(rid)
+            items.append(
+                DeliveredListItem(
+                    position=len(items) + 1,
+                    record_id=rid,
+                    display=display or rid,
+                    aliases=tuple(dict.fromkeys(aliases))[:8],
+                )
+            )
+        if len(items) > len(best_items):
+            best_items = items
+
+    # 4. Contiguous slash-separated row lines ("标题 / 属性 / 申请人 / 时间 / 状态")
+    i = 0
+    while i < n:
+        line = lines[i].strip()
+        if line.count(" / ") >= 2 and not line.endswith(("。", "？", "！")):
+            j = i
+            slash_lines: list[str] = []
+            while j < n:
+                cur = lines[j].strip()
+                if cur.count(" / ") >= 2 and not cur.endswith(("。", "？", "！")):
+                    slash_lines.append(cur)
+                    j += 1
+                else:
+                    break
+            if len(slash_lines) >= 2:
+                items = []
+                for row_line in slash_lines[:max_items]:
+                    rid = ""
+                    m_id = _INLINE_ID_RE.search(row_line)
+                    if m_id:
+                        rid = (m_id.group(1) or m_id.group(2) or "").strip()[:120]
+                    segs = [_clean_text_cell(s) for s in row_line.split(" / ") if _clean_text_cell(s)]
+                    if not segs:
+                        continue
+                    display = segs[0][:240]
+                    aliases = [s[:160] for s in segs[1:] if s and s != display and not _DATE_OR_TIME_VAL_RE.match(s)]
+                    if rid and rid != display and rid not in aliases:
+                        aliases.append(rid)
+                    items.append(
+                        DeliveredListItem(
+                            position=len(items) + 1,
+                            record_id=rid,
+                            display=display or rid,
+                            aliases=tuple(dict.fromkeys(aliases))[:8],
+                        )
+                    )
+                if len(items) > len(best_items):
+                    best_items = items
+            i = j + 1
+            continue
+        i += 1
+
+    return best_items if len(best_items) >= 2 else []
+
+
+def extract_delivered_list_from_text(
+    answer: str,
+    *,
+    entity: str = "",
+    source_path: str = "",
+    label: str = "",
+    total_rows: int = 0,
+    ordered_by_user: bool = False,
+    max_items: int = 50,
+) -> DeliveredList | None:
+    """Extract a ``DeliveredList`` directly from structured rows rendered in answer prose."""
+    if not isinstance(answer, str) or not answer.strip():
+        return None
+    items = _extract_items_from_text_blocks(answer, max_items=max_items)
+    if len(items) < 2:
+        return None
+    return DeliveredList(
+        entity=entity,
+        source_path=source_path,
+        label=label or source_path or "文本列表",
+        total_rows=max(len(items), total_rows),
+        ordered_by_user=ordered_by_user,
+        items=tuple(items),
+    )
+
+
 __all__ = [
     "DeliveredList",
     "DeliveredListItem",
@@ -1020,6 +1402,8 @@ __all__ = [
     "check_answer_list_order",
     "enforce_sql_default_order",
     "extract_delivered_list_from_answer",
+    "extract_delivered_list_from_observation",
+    "extract_delivered_list_from_text",
     "extract_prefix_limit",
     "extract_row_identity",
     "has_explicit_sort_request",
