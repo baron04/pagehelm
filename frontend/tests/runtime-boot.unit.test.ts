@@ -522,3 +522,47 @@ describe('a fresh conversation', () => {
     expect(h.status.log.at(-1)).toBe('rested')
   })
 })
+
+describe('destroy', () => {
+  it('stops running or in-flight runtimes, cancels renewals, invokes onDestroy once, and stays settled', async () => {
+    const onDestroy = vi.fn()
+    const rt = new FakeRuntime()
+    const src = source([{config: config(), renew_at: Date.now() + 5000}])
+    const supervisor = new Supervisor({
+      source: src,
+      status: new FakeStatus(),
+      start: async () => rt,
+      onDestroy,
+    })
+    supervisor.start()
+    await flush()
+    supervisor.destroy({clearSession: true})
+    expect(supervisor.state).toEqual({kind: 'settled', reason: 'destroyed'})
+    expect(rt.stopCalls).toBe(1)
+    expect(onDestroy).toHaveBeenCalledTimes(1)
+    expect(onDestroy).toHaveBeenCalledWith({clearSession: true})
+
+    supervisor.destroy()
+    supervisor.start()
+    supervisor.connect()
+    expect(supervisor.newConversation()).toBe(false)
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(src.calls).toBe(1)
+    expect(onDestroy).toHaveBeenCalledTimes(1)
+
+    // A start still in flight when destroyed is stopped when it resolves.
+    let finish: (value: Bootstrap) => void = () => {}
+    const late = new FakeRuntime()
+    const pending = new Supervisor({
+      source: source([new Promise<Bootstrap>(resolve => { finish = resolve })]),
+      status: new FakeStatus(),
+      start: async () => late,
+    })
+    pending.start()
+    pending.destroy()
+    finish({config: config('late')})
+    await flush()
+    expect(pending.state).toEqual({kind: 'settled', reason: 'destroyed'})
+    expect(late.stopCalls).toBe(1)
+  })
+})

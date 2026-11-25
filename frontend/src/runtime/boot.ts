@@ -159,7 +159,7 @@ type BootState =
   | {kind: 'retrying'; attempt: number; failure: BootFailure}
   | {kind: 'unavailable'; failure: BootFailure}
   /** Over, with the panel left as the Runtime left it; it is the one that says why. */
-  | {kind: 'settled'; reason: 'replaced' | 'not_renewable'}
+  | {kind: 'settled'; reason: 'replaced' | 'not_renewable' | 'destroyed'}
 
 interface SupervisorDeps {
   source: SessionSource
@@ -178,6 +178,8 @@ interface SupervisorDeps {
    * timeline and the conversation counter -- so `newConversation` leaves a clean page.
    */
   resetConversation?(): void
+  /** Tear down the host shell, listeners and optional per-tab session state on destroy. */
+  onDestroy?(options?: {clearSession?: boolean}): void
 }
 
 export class Supervisor {
@@ -241,6 +243,7 @@ export class Supervisor {
    * panel's action can fall back to the session's own refusal.
    */
   newConversation(): boolean {
+    if (this.current.kind === 'settled' && this.current.reason === 'destroyed') return false
     const runtime = this.current.kind === 'running' ? this.current.runtime : null
     if (runtime && !runtime.canRenewSession()) return false
     this.current = {kind: 'idle'}
@@ -253,6 +256,23 @@ export class Supervisor {
     this.deps.resetConversation?.()
     this.deps.status.rested()
     return true
+  }
+
+  /**
+   * Permanently tear down this supervisor, any running Runtime and the host panel shell.
+   * Used when an SPA leaves the authenticated application (e.g. sign-out without reload).
+   */
+  destroy(options?: {clearSession?: boolean}): void {
+    if (this.current.kind === 'settled' && this.current.reason === 'destroyed') return
+    const runtime = this.current.kind === 'running' ? this.current.runtime : null
+    this.current = {kind: 'settled', reason: 'destroyed'}
+    this.cancel('pending')
+    this.cancel('renewal')
+    this.cancel('unwatch')
+    if (runtime) {
+      try { runtime.stop() } catch (error) { report('destroy', error) }
+    }
+    try { this.deps.onDestroy?.(options) } catch (error) { report('destroy', error) }
   }
 
   private async attempt(attempt: number, mine: BootState): Promise<void> {
@@ -509,6 +529,9 @@ export function autoBoot(win: Window = window): Supervisor | null {
   const eager = () => handedOver || engagement.read() === 'active'
   // What the person sent while no session could take it: it goes to the first one that does.
   let waiting = ''
+  let destroyed = false
+  let resting: Cancel | null = null
+  let unlistenDomReady: Cancel | null = null
   // The panel's verbs while no Runtime is bound. Sending makes a session, and opening the
   // panel on a conversation this tab has makes one to show it; the rest wait for one.
   const shell = createShell({
@@ -533,8 +556,8 @@ export function autoBoot(win: Window = window): Supervisor | null {
   examplesFromPage(win.document, DEFAULT_CONFIGURATION.limits.goal_max_chars))
   // Loaded ahead of the page -- as a harness injects it -- the tag that declares the examples
   // is not parsed yet; watch for it instead of guessing when it is likely there.
-  watchForExamples(win.document, DEFAULT_CONFIGURATION.limits.goal_max_chars,
-    examples => shell.host.offerExamples(examples))
+  const unwatchExamples = watchForExamples(win.document, DEFAULT_CONFIGURATION.limits.goal_max_chars,
+    examples => { if (!destroyed) shell.host.offerExamples(examples) })
   const baseStatus = panelStartStatus(shell.host)
   const startStatus: StartStatus = {
     ...baseStatus,
@@ -549,6 +572,9 @@ export function autoBoot(win: Window = window): Supervisor | null {
       })
     },
   }
+  let unsubscribeRotated: Cancel = () => {}
+  let unsubscribeHost: Cancel = () => {}
+  let unlistenOnline: Cancel = () => {}
   const supervisor: Supervisor = new Supervisor({
     source,
     start: async config => await startEmbeddedRuntime(config, shell, {
@@ -580,12 +606,37 @@ export function autoBoot(win: Window = window): Supervisor | null {
       shell.host.clearTimeline()
       shell.host.clearNotice()
     },
+    onDestroy: options => {
+      if (destroyed) return
+      destroyed = true
+      waiting = ''
+      resting?.()
+      resting = null
+      unlistenDomReady?.()
+      unlistenDomReady = null
+      unlistenOnline()
+      unwatchExamples()
+      unsubscribeHost()
+      unsubscribeRotated()
+      if (options?.clearSession) {
+        engagement.clear()
+        clearPageStorage()
+        epochMemory = 0
+        try { sessionStorage.removeItem(EPOCH_KEY) } catch { epochStorage = false }
+      }
+      shell.destroy?.()
+      if (win.__WOA_ASSISTANT__ === supervisor) {
+        delete win.__WOA_ASSISTANT__
+        delete win.__WOA_RUNTIME_READY__
+      }
+    },
   })
   win.__WOA_ASSISTANT__ = supervisor
   // A tab duplicated by the browser holds this tab's identity and session pointer. The
   // lock `tabId` claims settles which tab keeps it; the duplicate's cloned state drops,
   // and the panel -- cloned session and all -- goes back to its resting page.
-  whenTabIdRotated(() => {
+  unsubscribeRotated = whenTabIdRotated(() => {
+    if (destroyed) return
     engagement.clear()
     clearPageStorage()
     epochMemory = 0
@@ -596,8 +647,8 @@ export function autoBoot(win: Window = window): Supervisor | null {
   })
   // Keep the tab's record current, and let a session go once it has had nothing to do for a
   // while: every change the panel shows while it is idle starts the wait again.
-  let resting: Cancel | null = null
-  shell.host.subscribe(snapshot => {
+  unsubscribeHost = shell.host.subscribe(snapshot => {
+    if (destroyed) return
     // Only a live session speaks for the turn. One that is ending says it is no longer busy,
     // which is not the same as the turn being over: the next session may have to resume it.
     const state = supervisor.state
@@ -612,7 +663,8 @@ export function autoBoot(win: Window = window): Supervisor | null {
     })
   })
   // The network coming back is the moment a failed start is worth trying again.
-  listen('boot online', win, 'online', () => {
+  unlistenOnline = listen('boot online', win, 'online', () => {
+    if (destroyed) return
     const kind = supervisor.state.kind
     if (eager() && (kind === 'retrying' || kind === 'unavailable')) supervisor.retry()
   })
@@ -620,6 +672,7 @@ export function autoBoot(win: Window = window): Supervisor | null {
   // duplicated tab does not; what it does next must wait for that decision, which is why
   // everything that depends on which tab this is starts inside the resolution.
   detach('boot', tabId().then(() => {
+    if (destroyed) return
     if (!eager()) {
       // This identifier hints at history; the server still authenticates the current actor.
       // Keep the greeting hidden until that actor's timeline has arrived. A start the
@@ -628,7 +681,10 @@ export function autoBoot(win: Window = window): Supervisor | null {
       return
     }
     if (win.document.readyState === 'loading') {
-      listen('boot', win.document, 'DOMContentLoaded', () => supervisor.start(), {once: true})
+      unlistenDomReady = listen('boot', win.document, 'DOMContentLoaded', () => {
+        unlistenDomReady = null
+        if (!destroyed) supervisor.start()
+      }, {once: true})
     } else {
       supervisor.start()
     }

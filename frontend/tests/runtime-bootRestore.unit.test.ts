@@ -10,7 +10,7 @@ import type * as RuntimeModule from '../src/runtime/runtime'
 vi.mock('../src/runtime/shell', async () => {
   const {PanelHost} = await import('../src/runtime/panelHost')
   return {createShell: vi.fn((actions: PanelActions, configuration: PanelConfiguration) => ({
-    host: new PanelHost({actions, configuration}), container: document.createElement('div'),
+    host: new PanelHost({actions, configuration}), container: document.createElement('div'), destroy: vi.fn(),
   }))}
 })
 
@@ -182,5 +182,37 @@ describe('the first panel state depends on a locally saved session', () => {
     startGate.resolve?.(fakeRuntime())
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(submittedAfterBoot).toEqual(['列出订单'])
+  })
+
+  it('destroys the shell, clears tab session state on sign-out, and lets autoBoot mount cleanly again', async () => {
+    engagementRecord().remember('actor-a-session')
+    sessionStorage.setItem('woa.remote.state', JSON.stringify({taskInFlight: true}))
+    sessionStorage.setItem('woa.assistant.epoch.v1', '2')
+
+    const first = autoBoot()!
+    const firstShell = vi.mocked(createShell).mock.results[0]!.value as {destroy: ReturnType<typeof vi.fn>}
+    expect(window.__WOA_ASSISTANT__).toBe(first)
+
+    first.destroy({clearSession: true})
+    expect(first.state).toEqual({kind: 'settled', reason: 'destroyed'})
+    expect(firstShell.destroy).toHaveBeenCalledOnce()
+    expect(window.__WOA_ASSISTANT__).toBeUndefined()
+    expect(engagementRecord().read()).toBe('none')
+    expect(engagementRecord().sessionId()).toBe('')
+    expect(sessionStorage.getItem('woa.remote.state')).toBeNull()
+    expect(sessionStorage.getItem('woa.assistant.epoch.v1')).toBeNull()
+
+    // Subsequent lifecycle calls on the destroyed supervisor are no-ops.
+    first.start()
+    first.connect()
+    expect(first.newConversation()).toBe(false)
+    expect(first.state).toEqual({kind: 'settled', reason: 'destroyed'})
+
+    // Re-login in the same document can cleanly mount a brand-new supervisor and shell.
+    const second = autoBoot()!
+    expect(second).not.toBe(first)
+    expect(window.__WOA_ASSISTANT__).toBe(second)
+    expect(vi.mocked(createShell)).toHaveBeenCalledTimes(2)
+    second.destroy()
   })
 })

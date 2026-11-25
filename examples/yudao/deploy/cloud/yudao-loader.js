@@ -12,9 +12,24 @@
 // Only a refresh yudao itself refuses means signing in again.
 (() => {
   if (window.top !== window || window.__WOA_YUDAO_LOADER__) return;
-  window.__WOA_YUDAO_LOADER__ = true;
   const BOOTSTRAP = "/woa-agent-boot/bootstrap";
   const RUNTIME = "/woa-agent/v1/runtime/assistant.js";
+  const PUBLIC_PATHS = [
+    "/login",
+    "/sso",
+    "/social-login",
+    "/auth-redirect",
+    "/bind",
+    "/register",
+    "/oauthLogin",
+    "/pms/kb/document/share",
+  ];
+  const SYNC_INTERVAL_MS = 250;
+
+  const isPublicPath = (path) => {
+    const value = String(path || "");
+    return PUBLIC_PATHS.some((prefix) => value === prefix || value.startsWith(prefix + "/"));
+  };
 
   const stored = (key) => {
     try {
@@ -107,9 +122,90 @@
     return response;
   };
 
-  const start = () => {
-    if (!stored("ACCESS_TOKEN") && !stored("REFRESH_TOKEN")) return false;
-    if (document.querySelector("script[data-woa-bootstrap]")) return true;
+  const hasToken = () => Boolean(stored("ACCESS_TOKEN") || stored("REFRESH_TOKEN"));
+
+  const readYudaoState = () => {
+    const appEl = document.getElementById("app");
+    const vueApp = appEl && appEl.__vue_app__;
+    const globals = vueApp && vueApp.config && vueApp.config.globalProperties;
+    const stores = globals && globals.$pinia && globals.$pinia._s;
+    const getStore = (name) => (stores && typeof stores.get === "function" ? stores.get(name) : null);
+    const router = globals && globals.$router;
+    const route = router && router.currentRoute && router.currentRoute.value;
+    return {
+      appEl,
+      vueApp,
+      userStore: getStore("admin-user"),
+      appStore: getStore("app"),
+      router,
+      route,
+    };
+  };
+
+  const hasVisibleFullscreenLoading = () => {
+    const masks = document.querySelectorAll(".el-loading-mask.is-fullscreen");
+    for (const mask of masks) {
+      if (!mask.isConnected) continue;
+      const style = typeof window.getComputedStyle === "function" ? window.getComputedStyle(mask) : null;
+      if (!style) return true;
+      const opacity = style.opacity === "" ? 1 : Number(style.opacity);
+      if (style.display !== "none" && style.visibility !== "hidden" && !(opacity <= 0)) return true;
+    }
+    return false;
+  };
+
+  // True only after Yudao has finished authenticating, loading user/routes and dismissing
+  // the splash/login loading overlays. Prevents showing the panel or launcher mid-login or
+  // beside the initial `.app-loading` screen on refresh.
+  const isLoginComplete = () => {
+    if (document.readyState === "loading") return false;
+    if (!hasToken() || isPublicPath(location.pathname)) return false;
+    const {appEl, vueApp, userStore, appStore, route} = readYudaoState();
+    if (!appEl || !vueApp || appEl.childElementCount === 0) return false;
+    if (appEl.querySelector(".app-loading")) return false;
+    if (!userStore || !userStore.isSetUser) return false;
+    if (!route || !Array.isArray(route.matched) || route.matched.length === 0) return false;
+    if (isPublicPath(route.path)) return false;
+    if (appStore && appStore.pageLoading) return false;
+    if (hasVisibleFullscreenLoading()) return false;
+    return true;
+  };
+
+  // Once mounted, keep the assistant across normal authenticated SPA route changes (where
+  // `appStore.pageLoading` briefly toggles), and tear down immediately on sign-out or return
+  // to a login/public route.
+  const isSessionStillAuthenticated = () => {
+    if (!hasToken() || isPublicPath(location.pathname)) return false;
+    const {appEl, vueApp, userStore, route} = readYudaoState();
+    if (!appEl || !vueApp || appEl.querySelector(".app-loading")) return false;
+    if (!userStore || !userStore.isSetUser) return false;
+    if (route && isPublicPath(route.path)) return false;
+    return true;
+  };
+
+  let mounted = false;
+  let ownsBootstrapScript = false;
+  let runtimeEverInjected = false;
+  let loaderScript = null;
+  let bootingModule = false;
+  let disposed = false;
+  let syncScheduled = false;
+  let hookedRouter = null;
+  let hookedUserStore = null;
+  let hookedAppStore = null;
+  let unhookRouterAfter = null;
+  let unhookRouterBefore = null;
+  let unhookUserStore = null;
+  let unhookAppStore = null;
+  let domObserver = null;
+  let observedAppEl = null;
+  let observedBody = null;
+  let timer = null;
+
+  const ensureBootstrapScript = () => {
+    if (loaderScript && loaderScript.isConnected) return loaderScript;
+    const existing = document.querySelector("script[data-woa-bootstrap]");
+    if (existing) return existing;
     const script = document.createElement("script");
     script.type = "module";
     script.src = RUNTIME;
@@ -121,14 +217,148 @@
       {kind: "operate", text: "打开合同管理页面"},
     ]);
     document.head.append(script);
-    return true;
+    loaderScript = script;
+    ownsBootstrapScript = true;
+    return script;
   };
-  // The login page has no token yet; the admin UI signs in without reloading the page.
-  const begin = () => {
-    if (!start()) {
-      const timer = setInterval(() => { if (start()) clearInterval(timer); }, 1500);
+
+  const mountAssistant = () => {
+    if (mounted || !document.head) return;
+    // Respect a host/test page that already placed its own bootstrap tag before this loader ran.
+    if (!ownsBootstrapScript && document.querySelector("script[data-woa-bootstrap]")) {
+      mounted = true;
+      return;
+    }
+    mounted = true;
+    const alreadyEvaluated = runtimeEverInjected;
+    runtimeEverInjected = true;
+    ensureBootstrapScript();
+    // An ES module script tag with the same URL does not re-execute after SPA sign-out +
+    // re-login in the same document, so invoke the cached module's exported `autoBoot()`.
+    if (alreadyEvaluated && !window.__WOA_ASSISTANT__ && !bootingModule) {
+      bootingModule = true;
+      import(/* @vite-ignore */ RUNTIME)
+        .then((mod) => {
+          if (!disposed && mounted && isSessionStillAuthenticated() && !window.__WOA_ASSISTANT__) {
+            if (mod && typeof mod.autoBoot === "function") mod.autoBoot(window);
+          }
+        })
+        .catch(() => {
+          // Allow the next sync tick to retry a transient module import failure.
+          if (mounted && !window.__WOA_ASSISTANT__) mounted = false;
+        })
+        .finally(() => { bootingModule = false; });
     }
   };
-  if (document.head) begin();
-  else document.addEventListener("DOMContentLoaded", begin, {once: true});
+
+  const unmountAssistant = () => {
+    if (!mounted) return;
+    mounted = false;
+    guardPath = "";
+    if (!ownsBootstrapScript) return;
+    if (loaderScript && loaderScript.isConnected) loaderScript.remove();
+    loaderScript = null;
+    const assistant = window.__WOA_ASSISTANT__;
+    if (assistant && typeof assistant.destroy === "function") {
+      assistant.destroy({clearSession: true});
+    }
+  };
+
+  const attachAppHooks = () => {
+    const {appEl, userStore, appStore, router} = readYudaoState();
+    if (typeof MutationObserver === "function") {
+      if (!domObserver) domObserver = new MutationObserver(() => scheduleSync());
+      if (appEl && appEl !== observedAppEl) {
+        observedAppEl = appEl;
+        domObserver.observe(appEl, {childList: true});
+      }
+      if (document.body && document.body !== observedBody) {
+        observedBody = document.body;
+        domObserver.observe(document.body, {childList: true});
+      }
+    }
+    if (router && router !== hookedRouter) {
+      try { unhookRouterAfter && unhookRouterAfter(); } catch {}
+      try { unhookRouterBefore && unhookRouterBefore(); } catch {}
+      hookedRouter = router;
+      unhookRouterAfter = typeof router.afterEach === "function"
+        ? router.afterEach(() => scheduleSync()) : null;
+      unhookRouterBefore = typeof router.beforeEach === "function"
+        ? router.beforeEach((to) => { if (to && isPublicPath(to.path)) scheduleSync(); }) : null;
+    }
+    if (userStore && userStore !== hookedUserStore) {
+      try { unhookUserStore && unhookUserStore(); } catch {}
+      hookedUserStore = userStore;
+      unhookUserStore = typeof userStore.$subscribe === "function"
+        ? userStore.$subscribe(() => scheduleSync()) : null;
+    }
+    if (appStore && appStore !== hookedAppStore) {
+      try { unhookAppStore && unhookAppStore(); } catch {}
+      hookedAppStore = appStore;
+      unhookAppStore = typeof appStore.$subscribe === "function"
+        ? appStore.$subscribe(() => scheduleSync()) : null;
+    }
+  };
+
+  const sync = () => {
+    if (disposed) return;
+    if (window.__WOA_YUDAO_LOADER__ !== loaderHandle) {
+      dispose();
+      return;
+    }
+    attachAppHooks();
+    if (!mounted) {
+      if (isLoginComplete()) mountAssistant();
+    } else if (!isSessionStillAuthenticated()) {
+      unmountAssistant();
+    }
+  };
+
+  const scheduleSync = () => {
+    if (disposed || syncScheduled) return;
+    syncScheduled = true;
+    queueMicrotask(() => {
+      syncScheduled = false;
+      sync();
+    });
+  };
+
+  const onDomReady = () => scheduleSync();
+  const onStateEvent = () => scheduleSync();
+
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    if (timer !== null) {
+      clearInterval(timer);
+      timer = null;
+    }
+    if (domObserver) {
+      domObserver.disconnect();
+      domObserver = null;
+    }
+    try { unhookRouterAfter && unhookRouterAfter(); } catch {}
+    try { unhookRouterBefore && unhookRouterBefore(); } catch {}
+    try { unhookUserStore && unhookUserStore(); } catch {}
+    try { unhookAppStore && unhookAppStore(); } catch {}
+    document.removeEventListener("DOMContentLoaded", onDomReady);
+    window.removeEventListener("storage", onStateEvent);
+    window.removeEventListener("popstate", onStateEvent);
+    window.removeEventListener("hashchange", onStateEvent);
+    if (window.__WOA_YUDAO_LOADER__ === loaderHandle) delete window.__WOA_YUDAO_LOADER__;
+  };
+
+  const loaderHandle = {dispose, sync};
+  window.__WOA_YUDAO_LOADER__ = loaderHandle;
+
+  // The login page has no completed session yet and Yudao signs in/out via SPA routes
+  // without reloading the page; watch auth, router and loading state continuously.
+  window.addEventListener("storage", onStateEvent);
+  window.addEventListener("popstate", onStateEvent);
+  window.addEventListener("hashchange", onStateEvent);
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", onDomReady, {once: true});
+  }
+  sync();
+  timer = setInterval(sync, SYNC_INTERVAL_MS);
 })();

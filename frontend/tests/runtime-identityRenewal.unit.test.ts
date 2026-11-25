@@ -8,7 +8,9 @@ import type {RuntimeConfig} from '../src/runtime/types'
 const runtimes: EmbeddedWebRuntime[] = []
 afterEach(() => {
   for (const runtime of runtimes.splice(0)) runtime.stop()
-  delete (window as unknown as {__WOA_YUDAO_LOADER__?: boolean}).__WOA_YUDAO_LOADER__
+  const handle = (window as unknown as {__WOA_YUDAO_LOADER__?: {dispose?: () => void}}).__WOA_YUDAO_LOADER__
+  handle?.dispose?.()
+  delete (window as unknown as {__WOA_YUDAO_LOADER__?: unknown}).__WOA_YUDAO_LOADER__
   document.head.innerHTML = ''
   localStorage.clear()
   sessionStorage.clear()

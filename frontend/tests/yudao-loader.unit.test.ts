@@ -1,8 +1,103 @@
 import {afterEach, describe, expect, it, vi} from 'vitest'
 
+interface FakeStore {
+  $subscribe(listener: () => void): () => void
+  notify(): void
+}
+interface FakeUserStore extends FakeStore {
+  isSetUser: boolean
+  user: {id: number}
+}
+interface FakeAppStore extends FakeStore {
+  pageLoading: boolean
+}
+interface FakeRouter {
+  currentRoute: {value: {path: string; matched: unknown[]}}
+  beforeEach(cb: (to: {path: string}) => void): () => void
+  afterEach(cb: () => void): () => void
+  navigate(path: string, matched?: unknown[]): void
+}
+interface FakeYudaoApp {
+  appEl: HTMLDivElement
+  userStore: FakeUserStore
+  appStore: FakeAppStore
+  router: FakeRouter
+  mountVue(): void
+  showSplash(): void
+  showContent(): void
+}
+
+function makeStore<T extends object>(initial: T): T & FakeStore {
+  const listeners = new Set<() => void>()
+  return Object.assign(initial, {
+    $subscribe(listener: () => void) {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+    notify() {
+      for (const listener of listeners) listener()
+    },
+  })
+}
+
+function installFakeYudaoApp({
+  path = '/index',
+  isSetUser = true,
+  pageLoading = false,
+  matched = [{path: '/'}, {path}],
+  splash = false,
+  mounted = true,
+}: {
+  path?: string
+  isSetUser?: boolean
+  pageLoading?: boolean
+  matched?: unknown[]
+  splash?: boolean
+  mounted?: boolean
+} = {}): FakeYudaoApp {
+  window.history.replaceState({}, '', path)
+  const appEl = document.createElement('div')
+  appEl.id = 'app'
+  document.body.append(appEl)
+
+  const userStore = makeStore({isSetUser, user: {id: isSetUser ? 1 : 0}})
+  const appStore = makeStore({pageLoading})
+  const beforeHooks = new Set<(to: {path: string}) => void>()
+  const afterHooks = new Set<() => void>()
+  const router: FakeRouter = {
+    currentRoute: {value: {path, matched}},
+    beforeEach(cb) { beforeHooks.add(cb); return () => { beforeHooks.delete(cb) } },
+    afterEach(cb) { afterHooks.add(cb); return () => { afterHooks.delete(cb) } },
+    navigate(nextPath, nextMatched = [{path: nextPath}]) {
+      for (const cb of beforeHooks) cb({path: nextPath})
+      window.history.replaceState({}, '', nextPath)
+      router.currentRoute.value = {path: nextPath, matched: nextMatched}
+      for (const cb of afterHooks) cb()
+    },
+  }
+  const stores = new Map<string, unknown>([['admin-user', userStore], ['app', appStore]])
+  const vueApp = {config: {globalProperties: {$pinia: {_s: stores}, $router: router}}}
+  const showSplash = () => { appEl.innerHTML = '<div class="app-loading">芋道管理系统</div>' }
+  const showContent = () => { appEl.innerHTML = '<section class="v-layout">工作台</section>' }
+  const mountVue = () => {
+    ;(appEl as unknown as {__vue_app__?: unknown}).__vue_app__ = vueApp
+  }
+  if (splash) showSplash()
+  else showContent()
+  if (mounted) mountVue()
+  return {appEl, userStore, appStore, router, mountVue, showSplash, showContent}
+}
+
+const flush = async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve() }
+
 afterEach(() => {
-  delete (window as unknown as {__WOA_YUDAO_LOADER__?: boolean}).__WOA_YUDAO_LOADER__
+  const handle = (window as unknown as {__WOA_YUDAO_LOADER__?: {dispose?: () => void}}).__WOA_YUDAO_LOADER__
+  handle?.dispose?.()
+  delete (window as unknown as {__WOA_YUDAO_LOADER__?: unknown}).__WOA_YUDAO_LOADER__
+  delete (window as unknown as {__WOA_ASSISTANT__?: unknown}).__WOA_ASSISTANT__
   document.head.innerHTML = ''
+  document.body.innerHTML = ''
+  window.history.replaceState({}, '', '/')
   localStorage.clear()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
@@ -87,6 +182,7 @@ describe('Yudao identity for the server-declared native guard', () => {
   })
 
   it('starts from a surviving refresh token and replaces expired storage metadata after renewal', async () => {
+    installFakeYudaoApp({path: '/index', isSetUser: true, pageLoading: false})
     localStorage.setItem('ACCESS_TOKEN', JSON.stringify({e: Date.now() - 1, v: JSON.stringify('expired')}))
     localStorage.setItem('REFRESH_TOKEN', JSON.stringify({v: JSON.stringify('refresh')}))
     const fetcher = vi.fn(async (input: string, init?: RequestInit) => {
@@ -102,6 +198,101 @@ describe('Yudao identity for the server-declared native guard', () => {
     expect((await window.fetch('/woa-agent-boot/bootstrap', {method: 'POST'})).status).toBe(200)
     expect((await window.fetch('/woa-agent-boot/bootstrap', {method: 'POST'})).status).toBe(200)
     expect(fetcher.mock.calls.filter(([input]) => input.startsWith('/admin-api/'))).toHaveLength(1)
+  })
+
+  it('gates mounting past splash/login loading, keeps normal nav, tears down on SPA logout, and remounts after re-login', async () => {
+    // 1. Refresh with existing token: stay unmounted across `.app-loading` splash and pending Vue/user/route boot.
+    localStorage.setItem('ACCESS_TOKEN', JSON.stringify({v: JSON.stringify('token-1')}))
+    const yudao = installFakeYudaoApp({
+      path: '/index', isSetUser: false, pageLoading: true, matched: [], splash: true, mounted: false,
+    })
+    vi.resetModules()
+    // @ts-expect-error Application loader intentionally ships as framework-free JS.
+    await import('../../examples/yudao/deploy/cloud/yudao-loader.js')
+    expect(document.querySelector('script[data-woa-bootstrap]')).toBeNull()
+
+    yudao.showContent()
+    yudao.mountVue()
+    ;(window as unknown as {__WOA_YUDAO_LOADER__: {sync(): void}}).__WOA_YUDAO_LOADER__.sync()
+    await flush()
+    expect(document.querySelector('script[data-woa-bootstrap]')).toBeNull()
+
+    yudao.userStore.isSetUser = true
+    yudao.userStore.user = {id: 1}
+    yudao.userStore.notify()
+    await flush()
+    expect(document.querySelector('script[data-woa-bootstrap]')).toBeNull()
+
+    yudao.appStore.pageLoading = false
+    yudao.router.navigate('/index', [{path: '/'}, {path: '/index'}])
+    yudao.appStore.notify()
+    await flush()
+    expect(document.querySelector('script[data-woa-bootstrap]')).not.toBeNull()
+
+    // 2. Normal authenticated route switch with transient `pageLoading` must NOT tear down.
+    const destroy = vi.fn(() => { delete (window as unknown as {__WOA_ASSISTANT__?: unknown}).__WOA_ASSISTANT__ })
+    ;(window as unknown as {__WOA_ASSISTANT__?: unknown}).__WOA_ASSISTANT__ = {destroy}
+    yudao.appStore.pageLoading = true
+    yudao.appStore.notify()
+    yudao.router.navigate('/erp/sale/order', [{path: '/'}, {path: '/erp/sale/order'}])
+    yudao.appStore.pageLoading = false
+    yudao.appStore.notify()
+    await flush()
+    expect(destroy).not.toHaveBeenCalled()
+
+    // 3. SPA logout clears token/user and returns to `/login`: tear down immediately.
+    localStorage.clear()
+    yudao.userStore.isSetUser = false
+    yudao.userStore.user = {id: 0}
+    yudao.userStore.notify()
+    yudao.router.navigate('/login', [{path: '/login'}])
+    await flush()
+    expect(destroy).toHaveBeenCalledWith({clearSession: true})
+    expect(document.querySelector('script[data-woa-bootstrap]')).toBeNull()
+
+    // 4. Re-login in progress (`/login` + fullscreen loading mask + `pageLoading`) stays unmounted until mask closes.
+    localStorage.setItem('ACCESS_TOKEN', JSON.stringify({v: JSON.stringify('token-2')}))
+    const mask = document.createElement('div')
+    mask.className = 'el-loading-mask is-fullscreen'
+    mask.style.display = 'block'
+    mask.style.opacity = '1'
+    document.body.append(mask)
+    yudao.appStore.pageLoading = true
+    yudao.appStore.notify()
+    await flush()
+    expect(document.querySelector('script[data-woa-bootstrap]')).toBeNull()
+
+    yudao.userStore.isSetUser = true
+    yudao.userStore.user = {id: 2}
+    yudao.appStore.pageLoading = false
+    yudao.router.navigate('/index', [{path: '/'}, {path: '/index'}])
+    yudao.appStore.notify()
+    await flush()
+    expect(document.querySelector('script[data-woa-bootstrap]')).toBeNull()
+
+    mask.remove()
+    await flush()
+    expect(document.querySelector('script[data-woa-bootstrap]')).not.toBeNull()
+  })
+
+  it('does not remove a bootstrap tag already placed by the host page before the loader ran', async () => {
+    const marker = document.createElement('script')
+    marker.dataset.woaBootstrap = '/woa-agent-boot/bootstrap'
+    document.head.append(marker)
+    const yudao = installFakeYudaoApp({path: '/index', isSetUser: true, pageLoading: false})
+    localStorage.setItem('ACCESS_TOKEN', JSON.stringify({v: JSON.stringify('live-token')}))
+    vi.resetModules()
+    // @ts-expect-error Application loader intentionally ships as framework-free JS.
+    await import('../../examples/yudao/deploy/cloud/yudao-loader.js')
+    const destroy = vi.fn()
+    ;(window as unknown as {__WOA_ASSISTANT__?: unknown}).__WOA_ASSISTANT__ = {destroy}
+
+    localStorage.clear()
+    yudao.userStore.isSetUser = false
+    yudao.userStore.notify()
+    await flush()
+    expect(destroy).not.toHaveBeenCalled()
+    expect(marker.isConnected).toBe(true)
   })
 
   it('reuses a token the page refreshed while bootstrap was awaiting its 401', async () => {
