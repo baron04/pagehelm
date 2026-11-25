@@ -401,6 +401,8 @@ class TurnTables:
         self.receipts: set[str] = set()
         self.tables: dict[str, dict] = {}
         self.queries: dict[str, dict] = {}
+        self.table_rows: dict[str, list[dict]] = {}
+        self.query_rows: dict[str, list[dict]] = {}
         self.decoded_ascii_labels: set[str] = set()
         self.precomputed_column_sums: set[str] = set()
 
@@ -409,6 +411,8 @@ class TurnTables:
         self.receipts.clear()
         self.tables.clear()
         self.queries.clear()
+        self.table_rows.clear()
+        self.query_rows.clear()
         self.decoded_ascii_labels.clear()
         self.precomputed_column_sums.clear()
 
@@ -551,6 +555,7 @@ class TurnTables:
                 excluded_cols=coded_folded,
             )
         self.tables[name] = info
+        self.table_rows[name] = [dict(row) for row in rows]
         return info
 
     def describe(self) -> dict:
@@ -628,9 +633,20 @@ class TurnTables:
             return {"title": title, "columns": cols, "rows": rows, "total_rows": total_rows}
         raise TurnReadError("table_not_found", f"本轮不存在表格或查询结果引用：{key}。")
 
-    def query(self, statement: str) -> dict:
+    def query(self, statement: str, *, preserve_default_order: bool = False) -> dict:
         if not isinstance(statement, str) or not re.match(r"\s*(?:SELECT|WITH)\b", statement, re.IGNORECASE):
             raise TurnReadError("sql_refused", "只接受一条 SQLite SELECT 或 WITH 查询。")
+        order_enforced = False
+        original_order = ""
+        if preserve_default_order:
+            from .list_order import enforce_sql_default_order
+
+            referenced = [t for t in self.tables if re.search(rf"\b{re.escape(t)}\b", statement, re.IGNORECASE)]
+            statement, order_enforced, original_order = enforce_sql_default_order(
+                statement,
+                allow_sort=False,
+                has_row_column=(len(referenced) == 1),
+            )
         deadline = time.monotonic() + 1.5
         expired = False
         sources: set[str] = set()
@@ -743,10 +759,13 @@ class TurnTables:
                 out["tie_note"] = extremum_note
         source_paths = [str(self.tables[name].get("path") or name) for name in sorted(sources)]
         title = " / ".join(dict.fromkeys(source_paths)) if source_paths else qname
+        source_table = next(iter(sources)) if len(sources) == 1 else ""
         self.queries[qname] = {
             "name": qname,
             "receipt": receipt,
             "title": title[:EXPORT_TITLE_CHARS],
+            "path": source_paths[0] if len(source_paths) == 1 else "",
+            "source_table": source_table,
             "columns": list(columns),
             "rows": export_rows,
             "row_count": len(export_rows),
@@ -754,6 +773,10 @@ class TurnTables:
             "sources": out["sources"],
             "sources_complete": out["sources_complete"],
         }
+        self.query_rows[qname] = self._materialize_query_rows(columns, export_rows, source_table)
+        if order_enforced:
+            out["order_enforced"] = True
+            out["original_order"] = original_order
         if out["sources_complete"] and not truncated and 2 <= len(out["rows"]) <= 50:
             _register_small_table_sums(
                 self.precomputed_column_sums,
@@ -761,6 +784,59 @@ class TurnTables:
                 out["rows"],
                 is_dict_rows=False,
             )
+        return out
+
+    def _materialize_query_rows(
+        self,
+        columns: list[str],
+        rows: list[list],
+        source_table: str,
+    ) -> list[dict]:
+        """Map query output rows back to source row dicts when possible (preserving order)."""
+        src_rows = self.table_rows.get(source_table, ()) if source_table else ()
+        by_id: dict[str, dict] = {}
+        for r in src_rows:
+            if isinstance(r, dict) and r.get("id") is not None and not isinstance(r.get("id"), bool):
+                key = str(r["id"])
+                if key not in by_id:
+                    by_id[key] = r
+        id_col = next((i for i, col in enumerate(columns) if col == "id"), None)
+        row_col = next((i for i, col in enumerate(columns) if col == "_row"), None)
+        out: list[dict] = []
+        for raw_row in rows:
+            item = {columns[i]: raw_row[i] for i in range(min(len(columns), len(raw_row)))}
+            enriched: dict | None = None
+            if row_col is not None and row_col < len(raw_row):
+                rnum = raw_row[row_col]
+                if isinstance(rnum, int) and 1 <= rnum <= len(src_rows):
+                    enriched = src_rows[rnum - 1]
+            elif id_col is not None and id_col < len(raw_row):
+                rid = raw_row[id_col]
+                if rid is not None:
+                    enriched = by_id.get(str(rid))
+            out.append({**enriched, **item} if isinstance(enriched, dict) else item)
+        return out
+
+    def rows_for_ref(self, ref: str) -> tuple[list[dict], dict] | None:
+        """Return ordered row dicts and metadata for a ``tK`` or ``qM`` handle."""
+        key = str(ref or "").strip()
+        if key in self.queries:
+            return list(self.query_rows.get(key) or ()), dict(self.queries[key])
+        if key in self.tables:
+            return list(self.table_rows.get(key) or ()), dict(self.tables[key])
+        return None
+
+    def latest_list_tables(self) -> list[tuple[str, list[dict], dict]]:
+        """Return query handles and base tables with >= 1 row in reverse chronological order."""
+        out: list[tuple[str, list[dict], dict]] = []
+        for qname in reversed(list(self.queries)):
+            rows = self.query_rows.get(qname) or []
+            if rows:
+                out.append((qname, rows, dict(self.queries[qname])))
+        for tname in reversed(list(self.tables)):
+            rows = self.table_rows.get(tname) or []
+            if rows:
+                out.append((tname, rows, dict(self.tables[tname])))
         return out
 
     def _scalar_extremum_note(self, conn, statement, sources, rows_out, authorize, deadline) -> str:

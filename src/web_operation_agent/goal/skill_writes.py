@@ -162,7 +162,8 @@ class SkillWrites:
 
     def propose(self, operation: str, inputs: dict, *, step: int, texts,
                 prefill_port=None, prefill_observation=None,
-                existing_values: dict[str, tuple[str, ...]] | None = None) -> OperationOutcome:
+                existing_values: dict[str, tuple[str, ...]] | None = None,
+                spec_decorator=None) -> OperationOutcome:
         """One proposed operation, to its verified result or to the reason it did not run.
 
         `texts` are the person's own messages: a registered literal input must copy one of
@@ -205,6 +206,7 @@ class SkillWrites:
             check_proposal=lambda proposal: self._validate_prepared_update(
                 definition, inputs, texts, proposal, existing_values=existing_values
             ),
+            **({"spec_decorator": spec_decorator} if spec_decorator is not None else {}),
         )
         if outcome.state == "completed":
             self._completed.add(key)

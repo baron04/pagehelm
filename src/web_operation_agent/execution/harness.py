@@ -281,6 +281,7 @@ class HarnessTurnContext:
     finish_table: dict[str, Any] | None = None
     input_options: list[dict[str, str]] = field(default_factory=list)
     handoff_payload: dict[str, Any] | None = None
+    delivered_list: dict[str, Any] | None = None
 
 
 def _sanitize_trace_label(value: str, *, max_len: int = 120) -> str:
@@ -1011,6 +1012,7 @@ class TurnHarness:
             status=status.value,
             business_result=execution.business_result,
             clarification=s.clarification if status == AgentTurnStatus.NEEDS_INPUT else None,
+            delivered_list=getattr(s, "delivered_list", None) if status == AgentTurnStatus.FINISHED else None,
         )
         s.ledger.append(
             "conversation_state_updated",

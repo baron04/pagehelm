@@ -482,7 +482,8 @@ class BusinessToolRuntime:
     def prepare_mutation(self, name: str, args: object,
                          loaded_ids: set[str], *,
                          context: OperationContext | None = None,
-                         skill_id: str = ""
+                         skill_id: str = "",
+                         spec_decorator=None,
                          ) -> BusinessMutationProposal:
         args = self._validate_call(name, args, loaded_ids, context)
         if not self.is_mutation(name):
@@ -508,6 +509,11 @@ class BusinessToolRuntime:
         if not isinstance(spec, BusinessMutationSpec):
             raise BusinessToolContractError(
                 "business mutation preparation returned an invalid result")
+        if spec_decorator is not None:
+            spec = spec_decorator(spec)
+            if not isinstance(spec, BusinessMutationSpec):
+                raise BusinessToolContractError(
+                    "business mutation spec decorator returned an invalid result")
         now_ms = int(time.time() * 1000)
         proposal = BusinessMutationProposal(
             tool=name, args=spec.args, effect=spec.effect, targets=spec.targets,

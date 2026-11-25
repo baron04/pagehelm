@@ -41,9 +41,15 @@ class BusinessWriteService:
         self.runtime, self.approvals, self.loaded_ids = runtime, approvals, loaded_ids
         self.pipeline = pipeline or WritePipeline()
 
-    def prepare(self, name, inputs, *, context, skill_id=""):
+    def prepare(self, name, inputs, *, context, skill_id="", spec_decorator=None):
         if not self.approvals.mutations_enabled:
             raise BusinessToolRequestError("approved business writes are disabled")
+        if spec_decorator is not None:
+            return self.runtime.prepare_mutation(
+                name, inputs, self.loaded_ids,
+                context=context, skill_id=skill_id,
+                spec_decorator=spec_decorator,
+            )
         return self.runtime.prepare_mutation(name, inputs, self.loaded_ids,
                                               context=context, skill_id=skill_id)
 
@@ -77,7 +83,8 @@ class BusinessWriteService:
     def run(self, name, inputs, *, step, context, skill_id="", expected=None,
             prefill_port: MutationPrefillPort | None = None,
             prefill_observation=None,
-            check_proposal=None) -> OperationOutcome:
+            check_proposal=None,
+            spec_decorator=None) -> OperationOutcome:
         """One proposed operation from preparation to its verified result, exactly once.
 
         Preparation is read-only. With `expected`, the application's projection of what it
@@ -91,7 +98,10 @@ class BusinessWriteService:
             approvals=self.approvals,
             step=step,
             context=context,
-            prepare_fn=lambda: self.prepare(name, inputs, context=context, skill_id=skill_id),
+            prepare_fn=lambda: self.prepare(
+                name, inputs, context=context, skill_id=skill_id,
+                **({"spec_decorator": spec_decorator} if spec_decorator is not None else {}),
+            ),
             approve_fn=lambda proposal, offer_prefill: self.approve(
                 proposal, step=step, context=context, identity=identity, offer_prefill=offer_prefill
             ),

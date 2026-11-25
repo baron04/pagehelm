@@ -2683,7 +2683,8 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
         the conversation state holds, then this turn's."""
         return [*self._earlier_words, prompt]
 
-    def _propose(self, s, writes, operation: str, inputs: dict, turn: dict) -> LoopToolResult:
+    def _propose(self, s, writes, operation: str, inputs: dict, turn: dict, *,
+                 spec_decorator=None) -> LoopToolResult:
         """One proposed write, from its preparation to what the application read back.
         Only a refusal before the person was asked returns for another attempt; anything
         after that ends the turn, and nothing is dispatched twice."""
@@ -2714,7 +2715,8 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                                      prefill_port=self.profile.mutation_prefill,
                                      prefill_observation=(PageObservation.from_json(s.obs.to_json())
                                                           if s.obs is not None else None),
-                                     existing_values=existing_values)
+                                     existing_values=existing_values,
+                                     **({"spec_decorator": spec_decorator} if spec_decorator is not None else {}))
         if (outcome.state == "refused" and not outcome.asked
                 and outcome.proposal is not None and outcome.proposal.effect_projection is not None):
             before_items = [

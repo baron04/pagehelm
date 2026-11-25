@@ -38,11 +38,28 @@ from web_operation_agent.business.convention_writes import resolve_write_route_c
 from web_operation_agent.business.errors import (
     BusinessToolContractError,
     BusinessToolIdentityError,
+    BusinessToolRequestError,
     BusinessToolUnavailableError,
 )
 from web_operation_agent.execution.checks import ProgramCheckSpec, record_check_fired
 from web_operation_agent.execution.draft_handoff import field_identity, handoff_draft, unrestorable_form
+from web_operation_agent.execution.list_order import (
+    DeliveredList,
+    OrdinalResolution,
+    build_delivered_items_from_rows,
+    check_answer_list_order,
+    extract_delivered_list_from_answer,
+    extract_prefix_limit,
+    extract_row_identity,
+    has_explicit_sort_request,
+    parse_ordinal_reference,
+    reorder_answer_to_default,
+    resolve_ordinal_binding,
+    target_matches_bound,
+)
 from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor, history_messages
+from web_operation_agent.execution.value_source import note_candidates
+from web_operation_agent.schemas.approval_details import ApprovalDetail
 from web_operation_agent.execution.model_loop_contracts import (
     DeliveryFeedback,
     LoopProcedure,
@@ -525,6 +542,146 @@ def _emit_yudao_check_fired(executor, s, check: str, *, outcome: str = "blocked"
     )
 
 
+_ORDINAL_TARGET_KEYS = ("target", "no", "record", "record_id", "id")
+_LIST_ENDPOINT_SUFFIX_RE = re.compile(r"(?:/page|/list|/tree|/simple-list|/list-all-simple|-simple)$", re.I)
+
+
+def _match_turn_list_table(
+    tables_store,
+    answer: str,
+    *,
+    min_matches: int = 2,
+    prefix_limit: int | None = None,
+) -> tuple[str, list[dict], dict, list[int]] | None:
+    """Find the most recently populated TurnTable/query matching rows in ``answer``."""
+    if tables_store is None or not hasattr(tables_store, "latest_list_tables"):
+        return None
+    best = None
+    best_count = 0
+    for ref, rows, meta in tables_store.latest_list_tables():
+        check = check_answer_list_order(answer, rows, prefix_limit=prefix_limit)
+        matched = check["matched_indices"]
+        if len(matched) < min_matches:
+            continue
+        if len(matched) > best_count:
+            best = (ref, rows, meta, matched)
+            best_count = len(matched)
+    return best
+
+
+def _prepared_reconciled_record_id(spec) -> str:
+    reconcile = getattr(spec, "reconciliation", None)
+    if isinstance(reconcile, dict):
+        for key in ("id", "bizId", "recordId", "record_id"):
+            val = reconcile.get(key)
+            if val is not None and not isinstance(val, (bool, dict, list)) and str(val).strip():
+                return str(val).strip()
+    args = getattr(spec, "args", None)
+    if isinstance(args, dict):
+        body = args.get("body") if isinstance(args.get("body"), dict) else args
+        for key in ("id", "bizId", "recordId", "record_id"):
+            val = body.get(key)
+            if val is not None and not isinstance(val, (bool, dict, list)) and str(val).strip():
+                return str(val).strip()
+    return ""
+
+
+def _ordinal_spec_decorator(resolution: OrdinalResolution, s, operation: str):
+    """Build a MutationSpec decorator enforcing ID match and approval card row disclosure."""
+    pos = resolution.resolved_position
+    item = resolution.item
+
+    def _decorate(spec):
+        prepared_id = _prepared_reconciled_record_id(spec)
+        if item.record_id and prepared_id and prepared_id != item.record_id:
+            s.ledger.append(
+                "list_ordinal_mismatch_refused",
+                operation=operation,
+                bound_position=pos,
+                bound_id=item.record_id,
+                bound_display=item.display,
+                prepared_id=prepared_id,
+                side_effect_possible=False,
+            )
+            raise BusinessToolRequestError(
+                f"写入目标（ID={prepared_id}）与程序绑定的列表第 {pos} 行"
+                f"（{item.display}，ID={item.record_id}）不一致，已拒绝提案。"
+            )
+        label_prefix = f"列表第 {pos} 行"
+        new_targets: list[str] = []
+        for idx, tgt in enumerate(spec.targets):
+            if idx == 0:
+                if label_prefix in tgt and (not item.display or item.display in tgt):
+                    annotated = tgt
+                elif not item.display or item.display in tgt:
+                    annotated = f"{label_prefix}：{tgt}"
+                else:
+                    annotated = f"{label_prefix}：{item.display}（{tgt}）"
+                new_targets.append(annotated[:300])
+            else:
+                new_targets.append(tgt)
+        id_note = f"（ID={item.record_id}）" if item.record_id and item.record_id != item.display else ""
+        detail_text = f"最近交付列表第 {pos} 行：{item.display}{id_note}"[:500]
+        binding_detail = ApprovalDetail("target_rule", "列表序号绑定", detail_text)
+        new_details = (binding_detail, *spec.details[:199])
+        return replace(spec, targets=tuple(new_targets), details=new_details)
+
+    return _decorate
+
+
+def _override_write_inputs_for_ordinal(inputs: dict, definition, resolution: OrdinalResolution, s, turn: dict) -> dict:
+    """Enforce program ordinal target on existing-record write inputs when model disagrees."""
+    item = resolution.item
+    delivered = resolution.delivered_list
+    if item is None or not isinstance(inputs, dict):
+        return inputs
+    ref_inputs = set(getattr(definition, "reference_inputs", ()) or ()) if definition is not None else set()
+    cand_keys = [k for k in _ORDINAL_TARGET_KEYS if k in inputs and (not ref_inputs or k in ref_inputs)]
+    if not cand_keys and ref_inputs:
+        schema_props = {}
+        try:
+            schema_props = json.loads(definition.input_json).get("properties", {})
+        except Exception:
+            schema_props = {}
+        cand_keys = [k for k in _ORDINAL_TARGET_KEYS if k in ref_inputs and k in schema_props and k in inputs]
+    if not cand_keys:
+        return inputs
+    key = cand_keys[0]
+    raw_target = inputs.get(key)
+    out = dict(inputs)
+    if key in ("id", "record_id") and item.record_id:
+        replacement = item.record_id
+    elif key == "no":
+        no_alias = next((a for a in item.aliases if a and a != item.record_id and not a.isdigit()), "")
+        replacement = no_alias or item.display or item.record_id
+    else:
+        has_dup_display = (
+            delivered is not None
+            and bool(item.display)
+            and sum(1 for row in delivered.items if row.display == item.display) > 1
+        )
+        op_name = getattr(definition, "name", "") if definition is not None else ""
+        if has_dup_display and item.record_id and op_name in {"update_record", "toggle_record_status", "assign_record_relations"}:
+            replacement = f"{item.display}（ID={item.record_id}）"
+        else:
+            replacement = item.display or item.record_id
+    if not target_matches_bound(raw_target, item):
+        s.ledger.append(
+            "list_ordinal_override",
+            stage="write_propose",
+            operation=getattr(definition, "name", ""),
+            field=key,
+            model_target=str(raw_target)[:120],
+            bound_position=resolution.resolved_position,
+            bound_id=item.record_id,
+            bound_display=item.display,
+        )
+        out[key] = replacement
+    entity = delivered.entity if delivered is not None else ""
+    note_candidates(turn, [(entity, v) for v in (replacement, item.display, item.record_id, *item.aliases) if v])
+    return out
+
+
 class YudaoTurnExecutor(ModelDrivenTurnExecutor):
     """Canonical Yudao composition of the application-neutral model-driven executor."""
 
@@ -544,8 +701,14 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
         prev_earlier = ctx.earlier_requests
         prev_intent = ctx.write_intent
         prev_tables = ctx.turn_tables
+        prev_explicit_sort = ctx.explicit_sort
+        prev_prefix_limit = ctx.prefix_limit
+        prev_ordinal = ctx.ordinal_binding
         prev_model_state = getattr(self, "_active_model_state", None)
         ctx.current_request = state.message.text
+        ctx.explicit_sort = has_explicit_sort_request(state.message.text)
+        ctx.prefix_limit = extract_prefix_limit(state.message.text)
+        ctx.ordinal_binding = None
         self._active_model_state = state
         self.knowledge.turn_targets = {}
         self.knowledge.probed_s3_edges = set()
@@ -561,6 +724,72 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
         if getattr(self, "procedures", None) is not None:
             self.procedures.form_fill = None
             self.procedures.turn_context = ctx
+        ordinal_ref = parse_ordinal_reference(state.message.text)
+        if ordinal_ref is not None:
+            raw_list = self.conversation_state.latest_delivered_list()
+            try:
+                delivered = DeliveredList.from_dict(raw_list) if raw_list is not None else None
+            except ValueError:
+                delivered = None
+            resolution = resolve_ordinal_binding(ordinal_ref, delivered)
+            ctx.ordinal_binding = resolution
+            if resolution.status in {"missing_list", "out_of_range"}:
+                if resolution.status == "missing_list":
+                    state.ledger.append("list_ordinal_missing", phrase=ordinal_ref.raw_phrase)
+                    question = (
+                        f"当前对话里还没有已交付的列表可供按「{ordinal_ref.raw_phrase}」定位。"
+                        "请先让我列出相关记录，或直接告诉我具体的记录名称或编号。"
+                    )
+                else:
+                    n_items = len(delivered.items) if delivered is not None else 0
+                    state.ledger.append(
+                        "list_ordinal_out_of_range",
+                        phrase=ordinal_ref.raw_phrase,
+                        requested_position=ordinal_ref.position,
+                        from_end=ordinal_ref.from_end,
+                        list_size=n_items,
+                    )
+                    question = (
+                        f"最近交付的列表共有 {n_items} 行，不存在「{ordinal_ref.raw_phrase}」"
+                        f"（有效范围为第 1 行至第 {n_items} 行）。请确认要查看或操作第几行，或直接提供记录名称。"
+                    )
+                state.terminal_reason = "needs_clarification"
+                state.stop_reason = "needs_clarification"
+                state.clarification = {
+                    "schema_version": 1,
+                    "clarification_id": f"{state.run_id}-ordinal"[:100],
+                    "task_id": state.run_id[:100],
+                    "question": question[:500],
+                    "response_kind": "free_text",
+                    "choices": [],
+                }
+                try:
+                    return question
+                finally:
+                    ctx.ordinal_binding = prev_ordinal
+                    ctx.prefix_limit = prev_prefix_limit
+                    ctx.explicit_sort = prev_explicit_sort
+                    ctx.turn_tables = prev_tables
+                    self._active_model_state = prev_model_state
+                    ctx.write_intent = prev_intent
+                    ctx.earlier_requests = prev_earlier
+                    ctx.current_request = prev_request
+            bound_item = resolution.item
+            if bound_item is not None and resolution.delivered_list is not None:
+                state.ledger.append(
+                    "list_ordinal_bound",
+                    phrase=ordinal_ref.raw_phrase,
+                    position=resolution.resolved_position,
+                    record_id=bound_item.record_id,
+                    display=bound_item.display,
+                    source_path=resolution.delivered_list.source_path,
+                    list_size=len(resolution.delivered_list.items),
+                )
+                if bound_item.record_id and "/" in resolution.delivered_list.source_path:
+                    src_prefix = resolution.delivered_list.source_path.rsplit("/", 1)[0]
+                    if not src_prefix.startswith("/admin-api/"):
+                        src_prefix = "/admin-api/" + src_prefix.lstrip("/")
+                    self.knowledge.turn_targets.setdefault(src_prefix, set()).add(bound_item.record_id)
         handoffs = getattr(self.knowledge, "handoffs", BASELINE_SESSION_HANDOFFS)
         date_override = getattr(self, "_date_override", getattr(self, "today", ""))
         time_zone = getattr(self, "_time_zone", "Asia/Shanghai")
@@ -573,6 +802,9 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
             with turn_actor_reads(self.knowledge.client, turn_context=ctx, knowledge=self.knowledge):
                 return super()._run(state)
         finally:
+            ctx.ordinal_binding = prev_ordinal
+            ctx.prefix_limit = prev_prefix_limit
+            ctx.explicit_sort = prev_explicit_sort
             ctx.turn_tables = prev_tables
             tables.close()
             self._active_model_state = prev_model_state
@@ -913,7 +1145,33 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
 
     def _closing(self, s, turn, args):
         args = super()._closing(s, turn, args)
+        ctx = self._ctx()
+        table_ctx = ctx.turn_tables
         table_ref = str(args.get("table_ref") or "").strip()
+        if args.get("status") == "done" and table_ctx is not None and not ctx.explicit_sort and not table_ref:
+            matched_tbl = _match_turn_list_table(
+                table_ctx[0],
+                str(args.get("answer") or ""),
+                min_matches=(1 if ctx.prefix_limit is not None else 2),
+                prefix_limit=ctx.prefix_limit,
+            )
+            if matched_tbl is not None:
+                m_ref, m_rows, _m_meta, _m_indices = matched_tbl
+                chk = check_answer_list_order(str(args.get("answer") or ""), m_rows, prefix_limit=ctx.prefix_limit)
+                if not chk["in_order"] or not chk["prefix_ok"]:
+                    repaired, changed = reorder_answer_to_default(
+                        str(args.get("answer") or ""),
+                        m_rows,
+                        prefix_limit=ctx.prefix_limit,
+                    )
+                    if changed:
+                        args = {**args, "answer": repaired}
+                        s.ledger.append(
+                            "list_order_enforced",
+                            stage="delivery_rewrite",
+                            table_ref=m_ref,
+                            prefix_limit=ctx.prefix_limit,
+                        )
         if table_ref:
             exported = self._resolve_finish_table(s, args)
             if exported is not None:
@@ -934,9 +1192,67 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
                         turn["finish_table_trace_recorded"] = True
                     except Exception:
                         pass
-                receipt = self._ctx().turn_tables[0].receipt_for_table_ref(table_ref) if self._ctx().turn_tables else ""
+                receipt = table_ctx[0].receipt_for_table_ref(table_ref) if table_ctx else ""
                 s.ledger.append("finish_table_attached", ref=table_ref, rows=len(exported["rows"]),
                                 total_rows=exported["total_rows"], receipt=receipt)
+                if table_ctx and hasattr(s, "delivered_list"):
+                    ref_data = table_ctx[0].rows_for_ref(table_ref)
+                    if ref_data is not None:
+                        ref_rows, ref_meta = ref_data
+                        items = build_delivered_items_from_rows(ref_rows)
+                        if items:
+                            src_path = str(ref_meta.get("path") or ref_meta.get("title") or "")
+                            entity = src_path.removeprefix("/admin-api/").rsplit("/", 1)[0] if "/" in src_path else ""
+                            delivered = DeliveredList(
+                                entity=entity,
+                                source_path=src_path,
+                                label=str(ref_meta.get("title") or src_path or table_ref)[:200],
+                                total_rows=int(exported.get("total_rows") or len(ref_rows)),
+                                ordered_by_user=ctx.explicit_sort,
+                                items=items,
+                            )
+                            s.delivered_list = delivered.to_dict()
+                            s.ledger.append(
+                                "delivered_list_recorded",
+                                count=len(delivered.items),
+                                total_rows=delivered.total_rows,
+                                source_path=delivered.source_path,
+                                ordered_by_user=delivered.ordered_by_user,
+                            )
+        elif args.get("status") == "done" and table_ctx is not None and hasattr(s, "delivered_list"):
+            binding = getattr(ctx, "ordinal_binding", None)
+            min_rec = 2 if (binding is not None and getattr(binding, "status", "") == "bound") else 1
+            matched_tbl = _match_turn_list_table(
+                table_ctx[0],
+                str(args.get("answer") or ""),
+                min_matches=min_rec,
+                prefix_limit=ctx.prefix_limit,
+            )
+            if matched_tbl is not None:
+                m_ref, m_rows, m_meta, _m_indices = matched_tbl
+                src_path = str(m_meta.get("path") or m_meta.get("title") or "")
+                is_list_source = bool(m_ref.startswith("q") or _LIST_ENDPOINT_SUFFIX_RE.search(src_path))
+                if is_list_source:
+                    entity = src_path.removeprefix("/admin-api/").rsplit("/", 1)[0] if "/" in src_path else ""
+                    delivered = extract_delivered_list_from_answer(
+                        str(args.get("answer") or ""),
+                        m_rows,
+                        entity=entity,
+                        source_path=src_path,
+                        label=str(m_meta.get("title") or src_path or m_ref)[:200],
+                        total_rows=int(m_meta.get("total") or m_meta.get("total_rows") or len(m_rows)),
+                        ordered_by_user=ctx.explicit_sort,
+                        prefix_limit=ctx.prefix_limit,
+                    )
+                    if delivered is not None and (binding is None or getattr(binding, "status", "") != "bound" or len(delivered.items) >= 2):
+                        s.delivered_list = delivered.to_dict()
+                        s.ledger.append(
+                            "delivered_list_recorded",
+                            count=len(delivered.items),
+                            total_rows=delivered.total_rows,
+                            source_path=delivered.source_path,
+                            ordered_by_user=delivered.ordered_by_user,
+                        )
         if args.get("status") == "need_input" and args.get("options"):
             normalized = _normalize_input_options(args.get("options"))
             if normalized:
@@ -1104,6 +1420,96 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
         feedback = super()._finish_feedback(s, turn, args)
         if feedback:
             return feedback
+        ctx = self._ctx()
+        table_ctx = ctx.turn_tables
+        if args.get("status") == "done":
+            answer_text = str(args.get("answer") or "")
+            simple_subs = turn.get("simple_list_substitutes") or {}
+            main_called = turn.get("main_list_paths_called") or set()
+            if not ctx.explicit_sort and simple_subs and not turn.get("simple_list_bounced") and table_ctx is not None:
+                matched_simple = _match_turn_list_table(table_ctx[0], answer_text, min_matches=2)
+                if matched_simple is not None:
+                    src_p = "/" + str(matched_simple[2].get("path") or "").lstrip("/")
+                    if src_p and not src_p.startswith("/admin-api/"):
+                        src_p = "/admin-api" + src_p
+                    sub_main = simple_subs.get(src_p)
+                    if sub_main and sub_main not in main_called:
+                        turn["simple_list_bounced"] = True
+                        s.ledger.append("list_order_enforced", stage="simple_list_bounce", simple_path=src_p, main_path=sub_main)
+                        return DeliveryFeedback(
+                            "list_default_order_source",
+                            f"用户未指定自定义排序，请改用应用页面主列表接口 {sub_main} 读取列表默认顺序后再交付。",
+                        )
+            binding = getattr(ctx, "ordinal_binding", None)
+            if (
+                binding is not None
+                and getattr(binding, "status", "") == "bound"
+                and binding.item is not None
+                and binding.delivered_list is not None
+                and not turn.get("written")
+                and not turn.get("ordinal_read_bounced")
+            ):
+                bound_item = binding.item
+                has_bound = (
+                    (bound_item.display and bound_item.display in answer_text)
+                    or (bound_item.record_id and bound_item.record_id in answer_text)
+                )
+                wrong_row = next(
+                    (
+                        other
+                        for other in binding.delivered_list.items
+                        if other.position != binding.resolved_position
+                        and other.display
+                        and len(other.display) >= 2
+                        and other.display in answer_text
+                    ),
+                    None,
+                )
+                if wrong_row is not None and not has_bound:
+                    turn["ordinal_read_bounced"] = True
+                    s.ledger.append(
+                        "list_ordinal_override",
+                        stage="read_answer_bounce",
+                        model_target=wrong_row.display,
+                        bound_position=binding.resolved_position,
+                        bound_id=bound_item.record_id,
+                        bound_display=bound_item.display,
+                    )
+                    return DeliveryFeedback(
+                        "ordinal_target_mismatch",
+                        f"用户要求查看最近交付列表第 {binding.resolved_position} 行（{bound_item.display}），"
+                        f"但当前答复引用了其它行（{wrong_row.display}）。请基于第 {binding.resolved_position} 行"
+                        f"（{bound_item.display}）的真实读取结果重新作答。",
+                    )
+            if not ctx.explicit_sort and not args.get("table_ref") and not turn.get("list_order_bounced") and table_ctx is not None:
+                matched_tbl = _match_turn_list_table(
+                    table_ctx[0],
+                    answer_text,
+                    min_matches=(1 if ctx.prefix_limit is not None else 2),
+                    prefix_limit=ctx.prefix_limit,
+                )
+                if matched_tbl is not None:
+                    m_ref, m_rows, _m_meta, _m_idx = matched_tbl
+                    chk = check_answer_list_order(answer_text, m_rows, prefix_limit=ctx.prefix_limit)
+                    if not chk["in_order"] or not chk["prefix_ok"]:
+                        turn["list_order_bounced"] = True
+                        s.ledger.append(
+                            "list_order_enforced",
+                            stage="delivery_bounce",
+                            table_ref=m_ref,
+                            in_order=chk["in_order"],
+                            prefix_ok=chk["prefix_ok"],
+                            prefix_limit=ctx.prefix_limit,
+                        )
+                        preview_n = ctx.prefix_limit or min(len(m_rows), 20)
+                        preview_items = build_delivered_items_from_rows(m_rows[:preview_n], max_items=preview_n)
+                        expected_text = "、".join(f"{it.position}. {it.display}" for it in preview_items)
+                        return DeliveryFeedback(
+                            "list_delivery_order_mismatch",
+                            f"用户未要求重新排序；交付列表须严格按应用默认顺序"
+                            + (f"取前 {preview_n} 项" if ctx.prefix_limit else "")
+                            + f"（程序核对顺序：{expected_text}）。请按该顺序重新交付。",
+                        )
         if args.get("table_ref"):
             if args.get("status") != "done":
                 return DeliveryFeedback("invalid_table_ref", "table_ref 仅可在 status=done 时使用。")
@@ -1278,7 +1684,14 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
             prefill_port.last_handoff_facts = None
         if prefill_port is not None and hasattr(prefill_port, "last_field_outcomes"):
             prefill_port.last_field_outcomes = None
-        result = super()._propose(s, writes, operation, inputs, turn)
+        spec_decorator = None
+        binding = getattr(ctx, "ordinal_binding", None) if ctx is not None else None
+        if binding is not None and getattr(binding, "status", "") == "bound" and binding.item is not None:
+            owned = writes.owner_for_operation(operation)
+            definition = owned[1] if owned is not None else None
+            inputs = _override_write_inputs_for_ordinal(inputs, definition, binding, s, turn)
+            spec_decorator = _ordinal_spec_decorator(binding, s, operation)
+        result = super()._propose(s, writes, operation, inputs, turn, spec_decorator=spec_decorator)
         field_outcomes = getattr(prefill_port, "last_field_outcomes", None)
         if isinstance(field_outcomes, dict):
             target_outcomes = turn.setdefault("form_field_outcomes", {})

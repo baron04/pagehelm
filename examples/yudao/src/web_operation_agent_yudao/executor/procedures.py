@@ -15,6 +15,10 @@ from web_operation_agent.business.errors import (
     BusinessToolUnavailableError,
 )
 from web_operation_agent.execution.checks import record_check_fired
+from web_operation_agent.execution.list_order import (
+    strip_unrequested_sort_params,
+    value_matches_other_row,
+)
 from web_operation_agent.execution.draft_handoff import (
     add_draft_lines,
     field_identity,
@@ -594,6 +598,67 @@ class YudaoProceduresBase:
                                       kind="page", state="refused", error_code="invalid_target")
         return self._act(s, "select", {"ref": element.ref, "value": value, "option_label": value})
 
+    def _prepare_call_api_order_and_ordinal(self, called_path: str, params: dict) -> tuple[dict, list[str], dict | None]:
+        """Strip unrequested sort params and override wrong-row ordinal IDs on call_api."""
+        ctx = self._ctx()
+        removed_sort: list[str] = []
+        cleaned = dict(params)
+        if not ctx.explicit_sort:
+            cleaned, removed_sort = strip_unrequested_sort_params(cleaned)
+        ordinal_override: dict | None = None
+        binding = getattr(ctx, "ordinal_binding", None)
+        if binding is not None and getattr(binding, "status", "") == "bound" and binding.item is not None:
+            item = binding.item
+            delivered = binding.delivered_list
+            src_path = delivered.source_path if delivered is not None else ""
+            src_prefix = src_path.rsplit("/", 1)[0] if "/" in src_path else ""
+            same_family = bool(src_prefix and called_path.removeprefix("/admin-api/").startswith(src_prefix.removeprefix("/admin-api/")))
+            raw_id = cleaned.get("id")
+            if (
+                same_family
+                and item.record_id
+                and raw_id is not None
+                and str(raw_id).strip()
+                and str(raw_id).strip() != item.record_id
+            ):
+                ordinal_override = {
+                    "model_target": str(raw_id),
+                    "bound_position": binding.resolved_position,
+                    "bound_id": item.record_id,
+                    "bound_display": item.display,
+                }
+                cleaned["id"] = int(item.record_id) if isinstance(raw_id, int) and item.record_id.isdigit() else item.record_id
+        return cleaned, removed_sort, ordinal_override
+
+    def _find_record_ordinal_override(self, raw_name: str) -> tuple[str, dict | None]:
+        """Override find_record when the model searches for a different row from the bound list."""
+        binding = getattr(self._ctx(), "ordinal_binding", None)
+        if binding is None or getattr(binding, "status", "") != "bound" or binding.item is None:
+            return raw_name, None
+        other = value_matches_other_row(raw_name, binding.delivered_list, binding.resolved_position)
+        if other is None:
+            return raw_name, None
+        replacement = binding.item.display or binding.item.record_id or raw_name
+        return replacement, {
+            "model_target": raw_name,
+            "bound_position": binding.resolved_position,
+            "bound_id": binding.item.record_id,
+            "bound_display": binding.item.display,
+        }
+
+    def _main_list_substitute_for_simple(self, called_path: str) -> str:
+        """If ``called_path`` is a simple-list and a UI main list exists in the same group, return it."""
+        if not re.search(r"(?:^|/|-)(?:simple-list|list-all-simple)(?:$|/|-)|-simple$", called_path, re.I):
+            return ""
+        self.knowledge._load()
+        prefix = called_path.rsplit("/", 1)[0]
+        by_path = getattr(self.knowledge, "_by_path", None) or {}
+        for suffix in ("/page", "/list", "/tree"):
+            cand = f"{prefix}{suffix}"
+            if cand in by_path and cand != called_path:
+                return cand
+        return ""
+
     @staticmethod
     def _note(s, **facts):
         s.progress(facts)
@@ -609,7 +674,7 @@ class YudaoProceduresBase:
                 if name == "tables":
                     data = store.describe()
                 elif name == "sql":
-                    data = store.query(args["query"])
+                    data = store.query(args["query"], preserve_default_order=not ctx.explicit_sort)
                     if policy_turn is not None and isinstance(data, dict):
                         if re.search(
                             r"\b(?:FROM|JOIN)\s+[\"'`]?(?:t\d+(?:_sib\d*)?|q\d+|q_prev)[\"'`]?\b",
@@ -617,14 +682,23 @@ class YudaoProceduresBase:
                             re.I,
                         ):
                             _note_sql_receipt_values(policy_turn, data)
+                    if isinstance(data, dict) and data.get("order_enforced") and hasattr(s, "audit"):
+                        s.audit(
+                            "list_order_enforced",
+                            stage="sql_default_order",
+                            original_order=str(data.get("original_order") or "")[:120],
+                            user_requested_sort=False,
+                        )
                 else:
                     data = date_range(today=today, zone=zone, **args)
                     if policy_turn is not None:
                         for value in _date_range_receipt_values(data):
                             note_receipt(policy_turn, "", value)
                 body = fenced(json.dumps(data, ensure_ascii=False))
-                if name == "sql" and isinstance(data, dict) and data.get("table_ref"):
-                    if data.get("returned_rows", 0) >= 20 or data.get("truncated"):
+                if name == "sql" and isinstance(data, dict):
+                    if data.get("order_enforced"):
+                        body += "\n[程序顺序约束] 用户未指定排序方式，已移除 SQL 中擅自添加的 ORDER BY，恢复应用列表默认顺序。"
+                    if data.get("table_ref") and (data.get("returned_rows", 0) >= 20 or data.get("truncated")):
                         body += f"\n本结果集较大，可用 finish(..., table_ref=\"{data['table_ref']}\") 原样交付完整表格。"
                 return LoopToolResult(body, kind="read")
             except TurnReadError as exc:
@@ -700,15 +774,24 @@ class YudaoProceduresBase:
                 kind="read",
             )
         if name == "find_record":
-            self._note(s, stage="search", what="record", term=args["name"], tool=name, arguments=said)
+            raw_find_name = args["name"].strip()
+            effective_name, ord_override = self._find_record_ordinal_override(raw_find_name)
+            self._note(s, stage="search", what="record", term=effective_name, tool=name, arguments=said)
+            if ord_override is not None and hasattr(s, "audit"):
+                s.audit("list_ordinal_override", stage="find_record", **ord_override)
             targets: list[AnswerTarget] = []
             found: list = []
             try:
-                text = self._find_record(s, args["name"].strip(), args.get("kind", "").strip(),
+                text = self._find_record(s, effective_name, args.get("kind", "").strip(),
                                          answer_targets=targets, found_values=found)
             except QueryParametersError as exc:
                 return LoopToolResult("查找未完成：" + str(exc) + "。用 search_api 核对接口，再用 call_api 读取。",
                                       kind="read", state="refused", error_code="invalid_arguments")
+            if ord_override is not None:
+                text = (
+                    f"[程序序号绑定已纠正查找目标] 已将“{ord_override['model_target']}”纠正为"
+                    f"第 {ord_override['bound_position']} 行「{ord_override['bound_display']}」。\n{text}"
+                )
             if policy_turn is not None:
                 note_candidates(policy_turn, _found_candidate_pairs(found))
             return LoopToolResult(text, kind="read", answer_targets=tuple(targets))
@@ -718,6 +801,11 @@ class YudaoProceduresBase:
             if not isinstance(params, dict):
                 raise ValueError("query parameters must be an object")
             called_path = "/admin-api/" + args["path"].removeprefix("/admin-api/").lstrip("/")
+            params, removed_sort, ord_override = self._prepare_call_api_order_and_ordinal(called_path, params)
+            if removed_sort and hasattr(s, "audit"):
+                s.audit("list_order_enforced", stage="call_api_strip_sort", path=called_path, removed_params=removed_sort)
+            if ord_override is not None and hasattr(s, "audit"):
+                s.audit("list_ordinal_override", stage="call_api", path=called_path, **ord_override)
             with s.measure("business"):
                 try:
                     sink = {"row_sink": table_context[0].add} if table_context is not None else {}
@@ -780,6 +868,30 @@ class YudaoProceduresBase:
                         text += "\n本页表格列名（接口字段→页面列）：" + "、".join(named)
             if know.last_read and policy_turn is not None:
                 note_candidates(policy_turn, know.last_read.get("values") or ())
+            if removed_sort:
+                text += f"\n[程序顺序约束] 用户未指定排序方式，已移除参数 {', '.join(removed_sort)}，按应用默认顺序返回。"
+            if ord_override is not None:
+                text += f"\n[程序序号绑定] 已按列表第 {ord_override['bound_position']} 行覆盖参数 id 为 {ord_override['bound_id']}（{ord_override['bound_display']}）。"
+            if not ctx.explicit_sort and know.last_read:
+                main_sub = self._main_list_substitute_for_simple(called_path)
+                if main_sub:
+                    if policy_turn is not None:
+                        policy_turn.setdefault("simple_list_substitutes", {})[called_path] = main_sub
+                    text += f"\n[列表默认顺序提示] 精简接口（{called_path}）顺序可能与列表页默认顺序不一致；如需交付默认顺序列表，请改用 {main_sub}。"
+                elif policy_turn is not None and called_path.endswith(("/page", "/list", "/tree")):
+                    policy_turn.setdefault("main_list_paths_called", set()).add(called_path)
+            if removed_sort:
+                text += f"\n[程序顺序约束] 用户未指定排序方式，已移除参数 {', '.join(removed_sort)}，按应用默认顺序返回。"
+            if ord_override is not None:
+                text += f"\n[程序序号绑定] 已按列表第 {ord_override['bound_position']} 行覆盖参数 id 为 {ord_override['bound_id']}（{ord_override['bound_display']}）。"
+            if not ctx.explicit_sort and know.last_read:
+                main_sub = self._main_list_substitute_for_simple(called_path)
+                if main_sub:
+                    if policy_turn is not None:
+                        policy_turn.setdefault("simple_list_substitutes", {})[called_path] = main_sub
+                    text += f"\n[列表默认顺序提示] 精简接口（{called_path}）顺序可能与列表页默认顺序不一致；如需交付默认顺序列表，请改用 {main_sub}。"
+                elif policy_turn is not None and called_path.endswith(("/page", "/list", "/tree")):
+                    policy_turn.setdefault("main_list_paths_called", set()).add(called_path)
             turn["reads"].append((json.dumps(args, ensure_ascii=False)[:160], text[:1500]))
             if know.last_read:
                 self._note(s, stage="read_done", tool=name,
@@ -801,6 +913,23 @@ class YudaoProceduresBase:
             path = "/" + args["path"].lstrip("/")
             if not re.fullmatch(r"/[A-Za-z0-9_\-/]{1,200}", path):
                 return LoopToolResult("路径不合法。用 search_menu 查找。", kind="page", state="refused")
+            binding = getattr(ctx, "ordinal_binding", None)
+            if binding is not None and getattr(binding, "status", "") == "bound" and binding.item is not None and binding.item.record_id:
+                m_tail = re.match(r"^(.*/)(\d+)$", path)
+                if m_tail and m_tail.group(2) != binding.item.record_id:
+                    other = value_matches_other_row(m_tail.group(2), binding.delivered_list, binding.resolved_position)
+                    if other is not None:
+                        old_id = m_tail.group(2)
+                        path = m_tail.group(1) + binding.item.record_id
+                        if hasattr(s, "audit"):
+                            s.audit(
+                                "list_ordinal_override",
+                                stage="goto",
+                                model_target=old_id,
+                                bound_position=binding.resolved_position,
+                                bound_id=binding.item.record_id,
+                                bound_display=binding.item.display,
+                            )
             failed = self._act(s, "goto", {"url": self.application.descriptor.origin + path}, navigating=True)
             if failed:
                 return failed
@@ -1840,7 +1969,23 @@ class YudaoProceduresBase:
                 source=source,
                 ui=ui,
             )
-        for extra in (dates, fms_note, domain_note, conventions_note):
+        ordinal_note = ""
+        binding = getattr(self._ctx(), "ordinal_binding", None)
+        if binding is not None and getattr(binding, "status", "") == "bound" and binding.item is not None:
+            item = binding.item
+            delivered = binding.delivered_list
+            total_in_list = len(delivered.items) if delivered is not None else binding.resolved_position
+            id_part = f"（ID={item.record_id}）" if item.record_id else ""
+            src_part = f"，来源 {delivered.source_path}" if delivered and delivered.source_path else ""
+            ordinal_note = (
+                f"[程序序号绑定] 用户所指「{binding.reference.raw_phrase}」已由程序锁定为"
+                f"最近交付列表（共 {total_in_list} 行{src_part}）第 {binding.resolved_position} 行："
+                f"{item.display}{id_part}。读详情、打开页面或提出写入提案时，必须严格针对该绑定记录；"
+                "不得擅自改换为列表中的其它行。"
+            )
+            if isinstance(policy_turn, dict):
+                note_candidates(policy_turn, [(binding.delivered_list.entity if binding.delivered_list else "", v) for v in (item.display, item.record_id, *item.aliases) if v])
+        for extra in (ordinal_note, dates, fms_note, domain_note, conventions_note):
             if extra:
                 suggested = (suggested + "\n\n" + extra) if suggested else extra
         return suggested
@@ -1922,10 +2067,11 @@ class YudaoProceduresBase:
                     measure=lambda _name: contextlib.nullcontext(),
                     page=SimpleNamespace(checkpoint=checkpoint),
                 )
+                effective_name, ord_override = self._find_record_ordinal_override(arguments["name"].strip())
                 try:
                     text = self._find_record(
                         worker_state,
-                        arguments["name"].strip(),
+                        effective_name,
                         arguments.get("kind", "").strip(),
                         answer_targets=targets,
                         found_values=found,
@@ -1933,17 +2079,24 @@ class YudaoProceduresBase:
                     )
                 except QueryParametersError as exc:
                     return {"error": exc, "preview_commits": preview_commits}
+                if ord_override is not None:
+                    text = (
+                        f"[程序序号绑定已纠正查找目标] 已将“{ord_override['model_target']}”纠正为"
+                        f"第 {ord_override['bound_position']} 行「{ord_override['bound_display']}」。\n{text}"
+                    )
                 return {
                     "text": text,
                     "targets": targets,
                     "found": found,
                     "preview_commits": preview_commits,
+                    "ord_override": ord_override,
                 }
             if name == "call_api":
                 params = json.loads(arguments.get("params", "{}"))
                 if not isinstance(params, dict):
                     raise ValueError("query parameters must be an object")
                 called_path = "/admin-api/" + arguments["path"].removeprefix("/admin-api/").lstrip("/")
+                params, removed_sort, ord_override = self._prepare_call_api_order_and_ordinal(called_path, params)
                 use_table_sink = self._ctx().turn_tables is not None
                 actor_digest = (
                     operation.principal.actor_authority_digest
@@ -1967,7 +2120,14 @@ class YudaoProceduresBase:
                 if (called_path.startswith("/admin-api/fms/") and table_ctx is not None
                         and not getattr(table_ctx[0], "fms_dual_month_done", False)):
                     fms_prepared = self.knowledge.fms_dual_month_context(table_ctx[1])
-                return {"called_path": called_path, "params": params, "api": api_prepared, "fms_prepared": fms_prepared}
+                return {
+                    "called_path": called_path,
+                    "params": params,
+                    "api": api_prepared,
+                    "fms_prepared": fms_prepared,
+                    "removed_sort": removed_sort,
+                    "ord_override": ord_override,
+                }
         raise ValueError(f"unsupported concurrent read tool: {name}")
 
     def commit_read(self, name: str, prepared: dict, arguments: dict, context) -> LoopToolResult:
@@ -1994,6 +2154,8 @@ class YudaoProceduresBase:
             return LoopToolResult(prepared["text"], kind="read")
         if name == "find_record":
             self._note(context, stage="search", what="record", term=arguments["name"], tool=name, arguments=said)
+            if prepared.get("ord_override") is not None and hasattr(context, "audit"):
+                context.audit("list_ordinal_override", stage="find_record", **prepared["ord_override"])
             for preview_prepared in prepared.get("preview_commits", ()):
                 try:
                     self.knowledge._commit_call_api(preview_prepared)
@@ -2012,6 +2174,12 @@ class YudaoProceduresBase:
             know = self.knowledge
             called_path = prepared["called_path"]
             params = prepared["params"]
+            removed_sort = prepared.get("removed_sort") or []
+            ord_override = prepared.get("ord_override")
+            if removed_sort and hasattr(context, "audit"):
+                context.audit("list_order_enforced", stage="call_api_strip_sort", path=called_path, removed_params=removed_sort)
+            if ord_override is not None and hasattr(context, "audit"):
+                context.audit("list_ordinal_override", stage="call_api", path=called_path, **ord_override)
             self._note(context, stage="tool", tool=name, arguments=said)
             for page_no in prepared["api"].get("pages_read", ()):
                 self._publish_read_page(context, page_no)
@@ -2078,6 +2246,18 @@ class YudaoProceduresBase:
                         text += "\n本页表格列名（接口字段→页面列）：" + "、".join(named)
             if know.last_read and policy_turn is not None:
                 note_candidates(policy_turn, know.last_read.get("values") or ())
+            if removed_sort:
+                text += f"\n[程序顺序约束] 用户未指定排序方式，已移除参数 {', '.join(removed_sort)}，按应用默认顺序返回。"
+            if ord_override is not None:
+                text += f"\n[程序序号绑定] 已按列表第 {ord_override['bound_position']} 行覆盖参数 id 为 {ord_override['bound_id']}（{ord_override['bound_display']}）。"
+            if not ctx.explicit_sort and know.last_read:
+                main_sub = self._main_list_substitute_for_simple(called_path)
+                if main_sub:
+                    if policy_turn is not None:
+                        policy_turn.setdefault("simple_list_substitutes", {})[called_path] = main_sub
+                    text += f"\n[列表默认顺序提示] 精简接口（{called_path}）顺序可能与列表页默认顺序不一致；如需交付默认顺序列表，请改用 {main_sub}。"
+                elif policy_turn is not None and called_path.endswith(("/page", "/list", "/tree")):
+                    policy_turn.setdefault("main_list_paths_called", set()).add(called_path)
             if know.last_read:
                 self._note(
                     context,

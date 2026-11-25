@@ -66,6 +66,7 @@ class ConversationState:
         self.max_bytes = max_bytes
         self.max_business_bytes = max_business_bytes
         self._turns: deque[dict] = deque()
+        self._delivered_lists: deque[dict] = deque()
         self._pending_clarification: dict | None = None
         self._page_operation_granted: bool = False
         self._lock = threading.RLock()
@@ -102,6 +103,7 @@ class ConversationState:
         with self._lock:
             dropped = len(self._turns)
             self._turns.clear()
+            self._delivered_lists.clear()
             self._pending_clarification = None
             self._page_operation_granted = False
             return dropped
@@ -111,6 +113,18 @@ class ConversationState:
         with self._lock:
             return str(self._turns[-1]["user"]) if self._turns else ""
 
+    def latest_delivered_list(self) -> dict | None:
+        """Return the most recently delivered list projection, if retained."""
+        with self._lock:
+            if not self._delivered_lists:
+                return None
+            return copy.deepcopy(self._delivered_lists[-1])
+
+    def delivered_lists(self) -> tuple[dict, ...]:
+        """Return retained delivered-list projections, oldest first."""
+        with self._lock:
+            return tuple(copy.deepcopy(item) for item in self._delivered_lists)
+
     @property
     def pending_clarification(self) -> dict | None:
         with self._lock:
@@ -118,7 +132,8 @@ class ConversationState:
 
     def record(self, *, message_id: str, user_text: str, assistant_text: str,
                status: str, business_result: BusinessToolResult | None = None,
-               clarification: dict | None = None) -> None:
+               clarification: dict | None = None,
+               delivered_list: dict | None = None) -> None:
         if (not isinstance(message_id, str) or not message_id.strip()
                 or len(message_id) > 200):
             raise ValueError("conversation message_id is invalid")
@@ -135,6 +150,11 @@ class ConversationState:
             clarification = self._validate_clarification(clarification)
         elif clarification is not None:
             raise ValueError("clarification is only valid for needs_input")
+        checked_list = (
+            self._validate_delivered_list(delivered_list)
+            if status == "finished" and delivered_list is not None
+            else None
+        )
         turn = {
             "message_id": message_id,
             "user": _redact_json(user_text.strip()),
@@ -154,14 +174,25 @@ class ConversationState:
                 }
         with self._lock:
             self._turns.append(turn)
+            if checked_list is not None:
+                self._delivered_lists.append(checked_list)
             if status == "needs_input":
                 self._pending_clarification = clarification
             elif status in {"finished", "refused", "cancelled", "indeterminate"}:
                 self._pending_clarification = None
             while len(self._turns) > self.max_turns:
                 self._turns.popleft()
-            while self._turns and len(_canonical(self._model_value())) > self.max_bytes:
-                self._turns.popleft()
+            while len(self._delivered_lists) > self.max_turns:
+                self._delivered_lists.popleft()
+            while (self._turns or len(self._delivered_lists) > 1) and len(_canonical(self._snapshot_value())) > self.max_bytes:
+                if self._turns:
+                    self._turns.popleft()
+                elif len(self._delivered_lists) > 1:
+                    self._delivered_lists.popleft()
+                else:
+                    break
+            while len(self._delivered_lists) > 0 and len(_canonical(self._snapshot_value())) > self.max_bytes:
+                self._delivered_lists.popleft()
 
     def _validate_clarification(self, value: object) -> dict:
         if not isinstance(value, dict) or set(value) != {
@@ -207,10 +238,30 @@ class ConversationState:
             raise ValueError("clarification exceeds the conversation limit")
         return normalized
 
+    def _validate_delivered_list(self, value: object) -> dict:
+        from ..execution.list_order import DeliveredList
+
+        parsed = DeliveredList.from_dict(value)
+        normalized = _redact_json(parsed.to_dict())
+        cap = min(8 * 1024, self.max_business_bytes)
+        items = list(normalized.get("items") or ())
+        while len(items) > 1 and len(_canonical({**normalized, "items": items})) > cap:
+            items.pop()
+        normalized["items"] = items
+        if len(_canonical(normalized)) > self.max_bytes:
+            raise ValueError("delivered list exceeds the conversation limit")
+        return normalized
+
     def _model_value(self) -> dict:
         value = {"schema_version": 1, "prior_turns": list(self._turns)}
         if self._pending_clarification is not None:
             value["pending_clarification"] = self._pending_clarification
+        return value
+
+    def _snapshot_value(self) -> dict:
+        value = self._model_value()
+        if self._delivered_lists:
+            value["delivered_lists"] = list(self._delivered_lists)
         return value
 
     def model_context(self) -> dict | None:
@@ -226,7 +277,7 @@ class ConversationState:
     def snapshot(self) -> dict:
         """Return the bounded, already-redacted value suitable for durable storage."""
         with self._lock:
-            value = self._model_value()
+            value = self._snapshot_value()
             if len(_canonical(value)) > self.max_bytes:
                 raise RuntimeError("bounded conversation state exceeded its configured limit")
             return copy.deepcopy(value)
@@ -234,7 +285,7 @@ class ConversationState:
     def restore(self, value: object) -> None:
         """Restore a persisted model projection after validating every field again."""
         if not isinstance(value, dict) or set(value) - {
-                "schema_version", "prior_turns", "pending_clarification"}:
+                "schema_version", "prior_turns", "pending_clarification", "delivered_lists"}:
             raise ValueError("persisted conversation state has invalid fields")
         if value.get("schema_version") != 1:
             raise ValueError("persisted conversation state version is unsupported")
@@ -264,13 +315,23 @@ class ConversationState:
         pending = value.get("pending_clarification")
         if pending is not None:
             pending = self._validate_clarification(pending)
-        restored = {"schema_version": 1, "prior_turns": checked}
+        raw_lists = value.get("delivered_lists")
+        checked_lists: list[dict] = []
+        if raw_lists is not None:
+            if not isinstance(raw_lists, list) or len(raw_lists) > self.max_turns:
+                raise ValueError("persisted delivered lists are invalid")
+            for item in raw_lists:
+                checked_lists.append(self._validate_delivered_list(item))
+        restored: dict = {"schema_version": 1, "prior_turns": checked}
         if pending is not None:
             restored["pending_clarification"] = pending
+        if checked_lists:
+            restored["delivered_lists"] = checked_lists
         if len(_canonical(restored)) > self.max_bytes:
             raise ValueError("persisted conversation state exceeds its limit")
         with self._lock:
             self._turns = deque(checked)
+            self._delivered_lists = deque(checked_lists)
             self._pending_clarification = copy.deepcopy(pending)
 
     @property

@@ -52,6 +52,9 @@ class SlimTurnContext:
     executor_turn: dict | None = None
     actor_reads: dict[str, Any] | None = None
     today: str = ""
+    explicit_sort: bool = False
+    prefix_limit: int | None = None
+    ordinal_binding: Any = None
 
 
 # -- tools ------------------------------------------------------------------------------

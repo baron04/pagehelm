@@ -237,6 +237,38 @@ class DurableConversationStateTests(unittest.TestCase):
             self.assertTrue(
                 SQLiteConversationState(path, "legacy-session").page_operation_granted)
 
+    def test_delivered_lists_persist_across_sqlite_restart_and_do_not_enter_model_context(self):
+        delivered = {
+            "entity": "demo/item",
+            "source_path": "/admin-api/demo/item/page",
+            "label": "列表",
+            "total_rows": 2,
+            "ordered_by_user": False,
+            "items": [
+                {"position": 1, "record_id": "10", "display": "第一项", "aliases": ["NO-10"]},
+                {"position": 2, "record_id": "20", "display": "第二项?token=secret-tok", "aliases": ["NO-20"]},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "conversation.sqlite3"
+            state = SQLiteConversationState(path, "list-session")
+            state.record(
+                message_id="m1",
+                user_text="列出所有记录",
+                assistant_text="1. 第一项\n2. 第二项",
+                status="finished",
+                delivered_list=delivered,
+            )
+            self.assertNotIn("delivered_lists", state.model_context() or {})
+            reopened = SQLiteConversationState(path, "list-session")
+            restored_list = reopened.latest_delivered_list()
+            self.assertIsNotNone(restored_list)
+            self.assertEqual(restored_list["source_path"], "/admin-api/demo/item/page")
+            self.assertEqual(restored_list["items"][0]["record_id"], "10")
+            self.assertNotIn("secret-tok", json.dumps(restored_list))
+            reopened.clear()
+            self.assertIsNone(SQLiteConversationState(path, "list-session").latest_delivered_list())
+
 
 if __name__ == "__main__":
     unittest.main()
