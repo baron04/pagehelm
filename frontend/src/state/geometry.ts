@@ -291,7 +291,7 @@ export function useWindowGeometry(enabled: boolean): WindowGeometry {
     const onAvoid = (event: Event) => {
       const detail = (event as CustomEvent<{left: number; top: number; right: number; bottom: number}>).detail
       if (!detail || typeof detail.left !== 'number' || typeof detail.right !== 'number') return
-      if (mode === 'drawer' && !pushes) {
+      if (mode === 'drawer') {
         setMode('float')
         setPlaced(avoidRect(defaultGeometry(), detail))
         return
@@ -302,7 +302,7 @@ export function useWindowGeometry(enabled: boolean): WindowGeometry {
     }
     window.addEventListener(AVOID_TARGET_EVENT, onAvoid)
     return () => window.removeEventListener(AVOID_TARGET_EVENT, onAvoid)
-  }, [enabled, fullScreen, mode, pushes, docked])
+  }, [enabled, fullScreen, mode, docked])
 
   // Every switch starts the other mode from its defaults: what was set in one mode says
   // nothing about where the other should be.

@@ -25,6 +25,7 @@ import {
   bindElInput,
   hasVisibleElError,
   hasVisibleElLoading,
+  installElOverlayOffset,
   readElFormFacets,
   readElFormModel,
   readElPaginationControl,
@@ -569,6 +570,7 @@ const WINDOW_KEY = /^[A-Za-z0-9._-]{1,128}$/
 
 export function installPageFacts(view = window, doc = document) {
   const facts = createPageFacts({view, doc})
+  const disposeOverlayOffset = installElOverlayOffset(doc, {styleId: 'woa-yudao-overlay-offset'})
   const originalFetch = view.fetch
   const originalOpen = view.XMLHttpRequest.prototype.open
   const originalSend = view.XMLHttpRequest.prototype.send
@@ -688,10 +690,12 @@ export function installPageFacts(view = window, doc = document) {
   }
   view.fetch = fetch; view.XMLHttpRequest.prototype.open = open; view.XMLHttpRequest.prototype.send = send
   return {...facts, dispose() {
-    facts.dispose()
-    if (view.fetch === fetch) view.fetch = originalFetch
-    if (view.XMLHttpRequest.prototype.open === open) view.XMLHttpRequest.prototype.open = originalOpen
-    if (view.XMLHttpRequest.prototype.send === send) view.XMLHttpRequest.prototype.send = originalSend
+    try { disposeOverlayOffset() } finally {
+      facts.dispose()
+      if (view.fetch === fetch) view.fetch = originalFetch
+      if (view.XMLHttpRequest.prototype.open === open) view.XMLHttpRequest.prototype.open = originalOpen
+      if (view.XMLHttpRequest.prototype.send === send) view.XMLHttpRequest.prototype.send = originalSend
+    }
   }}
 }
 

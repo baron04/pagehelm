@@ -7,8 +7,24 @@ const FORM_LIMITS = {depth: 8, nodes: 6000, bytes: 200000}
 
 const CONFIRM_BOX = '.el-message-box'
 const BUSY_SELECTORS = '.el-loading-mask, .el-button.is-loading, [aria-busy="true"]'
-const OVERLAY_OFFSET_CSS = '.el-overlay, .el-drawer__wrapper { right: var(--woa-drawer-offset, 0px); }'
-const overlayOffsetOwners = new WeakMap()
+const OVERLAY_OFFSET_CSS = [
+  '.el-overlay, .el-drawer__wrapper, .el-overlay-dialog, .is-message-box .el-overlay-message-box, .el-modal-dialog, .el-modal-drawer, .el-dialog__wrapper, .el-image-viewer__wrapper { right: var(--woa-drawer-offset, 0px) !important; }',
+  ':root[data-woa-drawer-push] .el-overlay-dialog .el-dialog:not(.is-fullscreen), :root[data-woa-drawer-push] .el-dialog__wrapper .el-dialog:not(.is-fullscreen) { max-width: calc(100% - 32px) !important; }',
+  ':root[data-woa-drawer-push] .el-overlay-dialog .el-dialog.is-fullscreen, :root[data-woa-drawer-push] .el-dialog__wrapper .el-dialog.is-fullscreen { max-width: 100% !important; }',
+  ':root[data-woa-drawer-push] .el-overlay.is-drawer .el-drawer.rtl, :root[data-woa-drawer-push] .el-overlay.is-drawer .el-drawer.ltr, :root[data-woa-drawer-push] .el-modal-drawer .el-drawer.rtl, :root[data-woa-drawer-push] .el-modal-drawer .el-drawer.ltr, :root[data-woa-drawer-push] .el-drawer__wrapper .el-drawer.rtl, :root[data-woa-drawer-push] .el-drawer__wrapper .el-drawer.ltr { max-width: 100% !important; }',
+  ':root[data-woa-drawer-push] .el-notification.right, :root[data-woa-drawer-push] .el-message.is-right { right: calc(16px + var(--woa-drawer-offset, 0px)) !important; }',
+  ':root[data-woa-drawer-push] .el-message.is-center { left: calc((100% - var(--woa-drawer-offset, 0px)) / 2) !important; }',
+].join('\n')
+const OVERLAY_OFFSET_OWNERS_KEY = Symbol.for('woa.elOverlayOffsetOwners')
+
+function overlayOffsetRegistry() {
+  let owners = globalThis[OVERLAY_OFFSET_OWNERS_KEY]
+  if (!(owners instanceof WeakMap)) {
+    owners = new WeakMap()
+    globalThis[OVERLAY_OFFSET_OWNERS_KEY] = owners
+  }
+  return owners
+}
 
 export function hasVisibleElLoading(doc) {
   return Array.from(doc.querySelectorAll('.el-loading-mask,.el-loading-spinner,[aria-busy="true"]')).some(isElVisible)
@@ -326,6 +342,7 @@ function discoverCspNonce(doc) {
 /** Keep Element Plus fixed overlays/drawers clear of the side-by-side assistant drawer. */
 export function installElOverlayOffset(doc = document, {styleId = 'woa-el-overlay-offset'} = {}) {
   if (!doc || !doc.documentElement) return () => {}
+  const overlayOffsetOwners = overlayOffsetRegistry()
   let entry = overlayOffsetOwners.get(doc)
   if (!entry) {
     let sheet = null
