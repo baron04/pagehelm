@@ -213,8 +213,8 @@
     // Ways into a new conversation, one per kind, in this application's own words.
     script.dataset.woaExamples = JSON.stringify([
       {kind: "query", text: "CRM 联系人一共有多少个？"},
-      {kind: "find", text: "回款计划在哪里看？"},
       {kind: "operate", text: "打开合同管理页面"},
+      {kind: "edit", text: "新建一个 CRM 客户，名称叫星辰科技"},
     ]);
     document.head.append(script);
     loaderScript = script;

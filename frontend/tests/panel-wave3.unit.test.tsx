@@ -625,4 +625,26 @@ describe('UX-03 + UX-05 handoff summary card & prefill approval choice', () => {
     expect(reload).toHaveBeenCalledOnce()
     expect(composer.value).toBe('')
   })
+
+  it('renders starter cards with 查询数据, 页面操作, 编辑数据, 更多用法 and picks text into composer', () => {
+    const panelHost = makeHost(makeSnapshot(), {
+      examples: [
+        {kind: 'query', text: 'CRM 联系人一共有多少个？'},
+        {kind: 'operate', text: '打开合同管理页面'},
+        {kind: 'edit', text: '新建一个 CRM 客户，名称叫星辰科技'},
+      ],
+    })
+    act(() => {
+      root.render(createElement(PanelWindow, {host: panelHost, allowedOrigins: []}))
+    })
+    openPanel(host)
+    expect(host.querySelector('.woa-empty__detail')?.textContent).toBe(labels.emptyDetail)
+    const titles = Array.from(host.querySelectorAll('.woa-example__title')).map(n => n.textContent)
+    expect(titles).toEqual(['查询数据', '页面操作', '编辑数据', '更多用法'])
+    const editBtn = host.querySelector<HTMLButtonElement>('.woa-example[data-kind="edit"]')!
+    expect(editBtn).not.toBeNull()
+    act(() => { editBtn.click() })
+    expect(host.querySelector<HTMLTextAreaElement>('textarea')?.value)
+      .toBe('新建一个 CRM 客户，名称叫星辰科技')
+  })
 })

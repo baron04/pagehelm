@@ -11,7 +11,7 @@
 import type {ExampleKind, PanelExample} from '../bridge/host'
 import {listen, report} from './contain'
 
-const KINDS: readonly ExampleKind[] = ['query', 'find', 'operate']
+const KINDS: readonly ExampleKind[] = ['query', 'operate', 'edit']
 
 export function parseExamples(value: string | undefined, maxChars: number): PanelExample[] {
   if (value === undefined || !value.trim()) return []

@@ -310,15 +310,15 @@ describe('examples the page declares after the panel went up', () => {
     host.offerExamples([{kind: 'query', text: '列出所有待开票的销售订单'}])
     expect(host.examples).toEqual([{kind: 'query', text: '列出所有待开票的销售订单'}])
     expect(seen).toHaveBeenCalledTimes(1)
-    host.offerExamples([{kind: 'find', text: '在哪里新建报价单'}])
+    host.offerExamples([{kind: 'edit', text: '把报价单 S00002 确认成销售订单'}])
     expect(host.examples).toEqual([{kind: 'query', text: '列出所有待开票的销售订单'}])
   })
 
   it('never replace the ones the page declared at the start', () => {
     const host = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: actions(),
-                                examples: [{kind: 'find', text: '在哪里新建报价单'}]})
+                                examples: [{kind: 'edit', text: '把报价单 S00002 确认成销售订单'}]})
     host.offerExamples([{kind: 'query', text: '列出所有待开票的销售订单'}])
-    expect(host.examples).toEqual([{kind: 'find', text: '在哪里新建报价单'}])
+    expect(host.examples).toEqual([{kind: 'edit', text: '把报价单 S00002 确认成销售订单'}])
   })
 })
 

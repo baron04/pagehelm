@@ -359,9 +359,9 @@
   background: var(--woa-kind-query-soft);
   color: var(--woa-kind-query);
 }
-.woa-example[data-kind="find"] .woa-example__badge {
-  background: var(--woa-kind-find-soft);
-  color: var(--woa-kind-find);
+.woa-example[data-kind="edit"] .woa-example__badge {
+  background: var(--woa-kind-edit-soft);
+  color: var(--woa-kind-edit);
 }
 .woa-example[data-kind="operate"] .woa-example__badge {
   background: var(--woa-kind-operate-soft);
@@ -374,8 +374,8 @@
 .woa-example[data-kind="query"]:is(:hover, :focus-visible) .woa-example__text {
   color: var(--woa-kind-query);
 }
-.woa-example[data-kind="find"]:is(:hover, :focus-visible) .woa-example__text {
-  color: var(--woa-kind-find);
+.woa-example[data-kind="edit"]:is(:hover, :focus-visible) .woa-example__text {
+  color: var(--woa-kind-edit);
 }
 .woa-example[data-kind="operate"]:is(:hover, :focus-visible) .woa-example__text {
   color: var(--woa-kind-operate);

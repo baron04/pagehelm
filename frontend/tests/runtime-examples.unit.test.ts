@@ -18,10 +18,10 @@ function whileLoading(run: () => void): void {
 describe('the examples a page offers a new conversation', () => {
   it('reads one per kind, in the order the page gives them, trimmed', () => {
     expect(parseExamples(JSON.stringify([
-      {kind: 'find', text: ' 在哪里新建报价单 '},
+      {kind: 'edit', text: ' 把报价单 S00002 确认成销售订单 '},
       {kind: 'query', text: '列出所有待开票的销售订单'},
     ]), LIMIT)).toEqual([
-      {kind: 'find', text: '在哪里新建报价单'},
+      {kind: 'edit', text: '把报价单 S00002 确认成销售订单'},
       {kind: 'query', text: '列出所有待开票的销售订单'},
     ])
   })
@@ -89,8 +89,8 @@ describe('watching for examples a harness injects ahead of the page', () => {
     whileLoading(() => watchForExamples(document, LIMIT, examples => found.push(examples)))
     expect(found).toEqual([])
     document.body.innerHTML = `<script data-woa-bootstrap="/b"
-      data-woa-examples='[{"kind": "find", "text": "在哪里新建报价单"}]'></script>`
-    await vi.waitFor(() => expect(found).toEqual([[{kind: 'find', text: '在哪里新建报价单'}]]))
+      data-woa-examples='[{"kind": "edit", "text": "把报价单 S00002 确认成销售订单"}]'></script>`
+    await vi.waitFor(() => expect(found).toEqual([[{kind: 'edit', text: '把报价单 S00002 确认成销售订单'}]]))
   })
 
   it('gives up once the document has finished loading with nothing to find', () => {

@@ -33,7 +33,7 @@ export interface HostNotice {
 }
 
 /** What a new conversation offers to start from: one kind of request, and one example of it. */
-export type ExampleKind = 'query' | 'find' | 'operate'
+export type ExampleKind = 'query' | 'operate' | 'edit'
 export interface PanelExample {
   kind: ExampleKind
   /** A request the application has been shown to answer; picking it fills the composer. */

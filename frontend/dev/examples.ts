@@ -1,11 +1,11 @@
 /**
- * What the Odoo addon's page declares for a new conversation (`assistant_entry.xml`), for
- * the dev page, the stories and the e2e harness, which play that page. Development only.
+ * Starter examples for the dev page, Storybook and e2e harness, aligned with
+ * `examples/yudao/deploy/cloud/yudao-loader.js`. Development only.
  */
 import type {PanelExample} from '../src/bridge/host'
 
 export const SAMPLE_EXAMPLES: PanelExample[] = [
-  {kind: 'query', text: '列出所有待开票的销售订单'},
-  {kind: 'find', text: '在哪里新建报价单'},
-  {kind: 'operate', text: '打开待开票的销售订单列表'},
+  {kind: 'query', text: 'CRM 联系人一共有多少个？'},
+  {kind: 'operate', text: '打开合同管理页面'},
+  {kind: 'edit', text: '新建一个 CRM 客户，名称叫星辰科技'},
 ]

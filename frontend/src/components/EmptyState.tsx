@@ -1,4 +1,4 @@
-import {Compass, Lightbulb, Search, Sparkles} from 'lucide-react'
+import {Lightbulb, Search, Sparkles, SquarePen} from 'lucide-react'
 import type {ExampleKind, PanelExample} from '../bridge/host'
 import type {Labels} from '../contract/panel'
 import avatar from '../assets/assistant-avatar.webp'
@@ -19,11 +19,11 @@ function Quoted({text}: {text: string}): React.JSX.Element {
 }
 
 /** The kinds of request a new conversation offers, in order, with their titles and glyphs.
- *  The order is the design's: asking, acting, finding, then asking the assistant itself. */
+ *  The order is the design's: querying, operating pages, editing data, then asking the assistant itself. */
 const KINDS: readonly {kind: ExampleKind; title: keyof Labels; Icon: typeof Search}[] = [
   {kind: 'query', title: 'exampleQuery', Icon: Search},
-  {kind: 'operate', title: 'exampleOperate', Icon: Sparkles},
-  {kind: 'find', title: 'exampleFind', Icon: Compass},
+  {kind: 'operate', title: 'exampleOperate', Icon: SquarePen},
+  {kind: 'edit', title: 'exampleEdit', Icon: Sparkles},
 ]
 
 /**

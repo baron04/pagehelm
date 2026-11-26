@@ -194,7 +194,13 @@ describe('Yudao identity for the server-declared native guard', () => {
     vi.resetModules()
     // @ts-expect-error Application loader intentionally ships as framework-free JS.
     await import('../../examples/yudao/deploy/cloud/yudao-loader.js')
-    expect(document.querySelector('script[data-woa-bootstrap]')).not.toBeNull()
+    const bootstrap = document.querySelector<HTMLScriptElement>('script[data-woa-bootstrap]')
+    expect(bootstrap).not.toBeNull()
+    expect(JSON.parse(bootstrap!.dataset.woaExamples ?? '[]')).toEqual([
+      {kind: 'query', text: 'CRM 联系人一共有多少个？'},
+      {kind: 'operate', text: '打开合同管理页面'},
+      {kind: 'edit', text: '新建一个 CRM 客户，名称叫星辰科技'},
+    ])
     expect((await window.fetch('/woa-agent-boot/bootstrap', {method: 'POST'})).status).toBe(200)
     expect((await window.fetch('/woa-agent-boot/bootstrap', {method: 'POST'})).status).toBe(200)
     expect(fetcher.mock.calls.filter(([input]) => input.startsWith('/admin-api/'))).toHaveLength(1)
