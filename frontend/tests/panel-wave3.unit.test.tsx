@@ -74,19 +74,6 @@ function makeHost(snapshot: PanelSnapshot, extra: Partial<PanelHost> = {}): Pane
   }
 }
 
-function setInputValue(input: HTMLInputElement, value: string): void {
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
-  setter?.call(input, value)
-  input.dispatchEvent(new Event('input', {bubbles: true}))
-  input.dispatchEvent(new Event('change', {bubbles: true}))
-}
-
-function setSelectValue(select: HTMLSelectElement, value: string): void {
-  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
-  setter?.call(select, value)
-  select.dispatchEvent(new Event('change', {bubbles: true}))
-}
-
 function openPanel(host: HTMLElement): void {
   const launcher = host.querySelector<HTMLButtonElement>('.woa-launcher')
   if (launcher) act(() => { launcher.click() })
@@ -226,7 +213,7 @@ describe('ARC-06 structured tables inside Outcome', () => {
     vi.restoreAllMocks()
   })
 
-  it('renders StructuredTable via DataTable inside .woa-result with title, pagination, filter, and sort', () => {
+  it('renders StructuredTable via DataTable inside .woa-result with title, pagination, and sort', () => {
     const rows = Array.from({length: 15}, (_, index) => [
       `[C-${String(index + 1).padStart(3, '0')}](http://localhost/customers/${index + 1})`,
       index === 0 ? '[外链](https://evil.example/x)' : `客户 ${index + 1}`,
@@ -259,27 +246,31 @@ describe('ARC-06 structured tables inside Outcome', () => {
     expect(result.querySelector('.woa-result__table-title')?.textContent).toBe('客户列表')
     expect(result.querySelector('.woa-datatable')).not.toBeNull()
     expect(result.querySelectorAll('tbody tr')).toHaveLength(10)
-    expect(result.querySelector('.woa-datatable__pageinfo')?.textContent).toBe('1 / 2')
+    expect(result.querySelector('.woa-datatable__size')).toBeNull()
+    expect(result.querySelector('select')).toBeNull()
 
     // Same-origin markdown inline link stays clickable; foreign link is inert.
     expect(result.querySelector('tbody a')?.getAttribute('href')).toBe('http://localhost/customers/1')
     expect(result.querySelector('tbody .woa-md__inert')?.textContent).toBe('外链')
 
-    // Select 'all' inside .woa-result .woa-datatable__size select (runner.py contract).
-    const sizeSelect = result.querySelector<HTMLSelectElement>('.woa-datatable__size select')!
-    expect(Array.from(sizeSelect.options).map(o => o.value)).toEqual(['10', '25', '50', 'all'])
-    act(() => { setSelectValue(sizeSelect, 'all') })
-    expect(result.querySelectorAll('tbody tr')).toHaveLength(15)
+    // Numeric page buttons switch to page 2 showing the remaining 5 rows.
+    const pageButtons = Array.from(
+      result.querySelectorAll<HTMLButtonElement>('.woa-datatable__pagebtn:not(.woa-datatable__pagebtn--nav)'),
+    )
+    expect(pageButtons.map(btn => btn.textContent)).toEqual(['1', '2'])
+    expect(pageButtons[0]?.getAttribute('aria-current')).toBe('page')
+    act(() => { pageButtons[1]!.click() })
+    expect(result.querySelectorAll('tbody tr')).toHaveLength(5)
+    expect(pageButtons[1]?.getAttribute('aria-current')).toBe('page')
 
     // Numeric sorting ascending on 金额 column.
     const sortButtons = result.querySelectorAll<HTMLButtonElement>('.woa-datatable__sort')
     act(() => { sortButtons[2]!.click() })
     expect(result.querySelector('tbody tr td:last-child')?.textContent).toBe('100')
 
-    // Filtering narrows rows without redundant export buttons.
-    const filter = result.querySelector<HTMLInputElement>('.woa-datatable__filter input')!
-    act(() => { setInputValue(filter, 'C-002') })
-    expect(result.querySelectorAll('tbody tr')).toHaveLength(1)
+    // No redundant search or export toolbar chrome.
+    expect(result.querySelector('.woa-datatable__toolbar')).toBeNull()
+    expect(result.querySelector('.woa-datatable__filter')).toBeNull()
     expect(result.querySelector('.woa-datatable__actions')).toBeNull()
   })
 

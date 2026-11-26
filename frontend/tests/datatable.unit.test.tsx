@@ -20,19 +20,6 @@ function makeTableMarkdown(rowCount: number): string {
   return `${header}\n${rows.join('\n')}`
 }
 
-function setInputValue(input: HTMLInputElement, value: string): void {
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
-  setter?.call(input, value)
-  input.dispatchEvent(new Event('input', {bubbles: true}))
-  input.dispatchEvent(new Event('change', {bubbles: true}))
-}
-
-function setSelectValue(select: HTMLSelectElement, value: string): void {
-  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
-  setter?.call(select, value)
-  select.dispatchEvent(new Event('change', {bubbles: true}))
-}
-
 describe('DataTable helpers', () => {
   it('parses formatted numeric cells and ignores non-numeric identifiers', () => {
     expect(parseNumericCell('1,231.00')).toBe(1231)
@@ -73,7 +60,7 @@ describe('DataTable & Answer (UX-01)', () => {
     expect(host.querySelector('select')).toBeNull()
   })
 
-  it('paginates > 10 rows with 10 / 25 / 50 / showAll and Prev/Next controls', () => {
+  it('paginates > 10 rows at fixed 10 per page with numeric page buttons', () => {
     const md = makeTableMarkdown(30)
     act(() => {
       root.render(createElement(Answer, {
@@ -81,30 +68,31 @@ describe('DataTable & Answer (UX-01)', () => {
       }))
     })
     expect(host.querySelectorAll('tbody tr')).toHaveLength(10)
-    expect(host.querySelector('.woa-datatable__pageinfo')?.textContent).toBe('1 / 3')
+    expect(host.querySelector('select')).toBeNull()
+    expect(host.querySelector('.woa-datatable__size')).toBeNull()
 
-    const buttons = Array.from(host.querySelectorAll<HTMLButtonElement>('.woa-datatable__pagebtn'))
-    const prev = buttons[0]!
-    const next = buttons[1]!
+    const prev = host.querySelector<HTMLButtonElement>(`button[aria-label="${labels.tablePrevPage}"]`)!
+    const next = host.querySelector<HTMLButtonElement>(`button[aria-label="${labels.tableNextPage}"]`)!
+    const pageButtons = () => Array.from(
+      host.querySelectorAll<HTMLButtonElement>('.woa-datatable__pagebtn:not(.woa-datatable__pagebtn--nav)'),
+    )
+
+    expect(pageButtons().map(btn => btn.textContent)).toEqual(['1', '2', '3'])
+    expect(pageButtons()[0]?.getAttribute('aria-current')).toBe('page')
     expect(prev.disabled).toBe(true)
     expect(next.disabled).toBe(false)
 
-    act(() => { next.click() })
-    expect(host.querySelector('.woa-datatable__pageinfo')?.textContent).toBe('2 / 3')
+    act(() => { pageButtons()[2]!.click() })
+    expect(pageButtons()[2]?.getAttribute('aria-current')).toBe('page')
+    expect(host.querySelector('tbody tr td')?.textContent).toBe('S0021')
+    expect(prev.disabled).toBe(false)
+    expect(next.disabled).toBe(true)
+
+    act(() => { prev.click() })
+    expect(pageButtons()[1]?.getAttribute('aria-current')).toBe('page')
     expect(host.querySelector('tbody tr td')?.textContent).toBe('S0011')
     expect(prev.disabled).toBe(false)
-
-    const select = host.querySelector<HTMLSelectElement>('select')!
-    expect(Array.from(select.options).map(opt => opt.value)).toEqual(['10', '25', '50', 'all'])
-
-    act(() => { setSelectValue(select, '25') })
-    expect(host.querySelectorAll('tbody tr')).toHaveLength(25)
-    expect(host.querySelector('.woa-datatable__pageinfo')?.textContent).toBe('1 / 2')
-
-    act(() => { setSelectValue(select, 'all') })
-    expect(host.querySelectorAll('tbody tr')).toHaveLength(30)
-    expect(prev.disabled).toBe(true)
-    expect(next.disabled).toBe(true)
+    expect(next.disabled).toBe(false)
   })
 
   it('renders tables immediately even during live model typewriter reveal', () => {
@@ -122,7 +110,7 @@ describe('DataTable & Answer (UX-01)', () => {
     expect(host.textContent).toContain('S0003')
   })
 
-  it('hides the filter toolbar for small tables (<= 10 rows) and sorts numeric-aware asc/desc/none', () => {
+  it('renders small tables (<= 10 rows) without footer and sorts numeric-aware asc/desc/none', () => {
     const md = [
       '| 名称 | 数量 |',
       '| --- | --- |',
@@ -165,7 +153,7 @@ describe('DataTable & Answer (UX-01)', () => {
       .toEqual(['B-item', 'A-item', 'C-item'])
   })
 
-  it('shows the filter toolbar only for paginated tables (> 10 rows) without copy/csv buttons and keeps plainText intact', () => {
+  it('keeps paginated tables (> 10 rows) free of search/export toolbars and keeps plainText intact', () => {
     const md = makeTableMarkdown(12)
     act(() => {
       root.render(createElement(Answer, {
@@ -173,18 +161,14 @@ describe('DataTable & Answer (UX-01)', () => {
       }))
     })
 
-    const toolbar = host.querySelector('.woa-datatable__toolbar')!
-    expect(toolbar).not.toBeNull()
-    const filter = toolbar.querySelector<HTMLInputElement>(`input[placeholder="${labels.tableFilterPlaceholder}"]`)!
-    expect(filter).not.toBeNull()
-    expect(toolbar.querySelector('.woa-datatable__actions')).toBeNull()
-
-    act(() => { setInputValue(filter, 'S0012') })
-    expect(host.querySelectorAll('tbody tr')).toHaveLength(1)
-    expect(host.querySelector('tbody td')?.textContent).toBe('S0012')
-
-    act(() => { setInputValue(filter, 'not-found-xyz') })
-    expect(host.querySelector('.woa-datatable__empty')?.textContent).toBe(labels.tableNoMatch)
+    expect(host.querySelector('.woa-datatable__toolbar')).toBeNull()
+    expect(host.querySelector('.woa-datatable__filter')).toBeNull()
+    expect(host.querySelector('.woa-datatable__actions')).toBeNull()
+    expect(host.querySelector('.woa-datatable__count')?.textContent).toBe('共 12 条')
+    const firstRowCells = host.querySelectorAll('tbody tr:first-child td')
+    expect(firstRowCells[0]?.getAttribute('data-wrap')).toBe('nowrap')
+    expect(firstRowCells[1]?.getAttribute('data-wrap')).toBe('wrap')
+    expect(firstRowCells[2]?.getAttribute('data-wrap')).toBe('nowrap')
 
     const smallMd = '| 客户 | 金额 |\n| --- | ---: |\n| "Acme, Co" | 1,231.00 |'
     expect(plainText(smallMd)).toBe('客户\t金额\n"Acme, Co"\t1,231.00')

@@ -443,7 +443,7 @@ function Outcome({
       {tableBlock && (
         <div className="woa-result__table">
           {entry.table?.title && <h4 className="woa-result__table-title">{entry.table.title}</h4>}
-          <DataTable block={tableBlock} labels={labels} allow={allow} />
+          <DataTable block={tableBlock} labels={labels} allow={allow} totalRows={entry.table?.total_rows} />
         </div>
       )}
       {entry.panel_state === 'needs_input' && entry.input_options?.length ? (

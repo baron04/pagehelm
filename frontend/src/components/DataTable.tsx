@@ -1,5 +1,7 @@
-import {useMemo, useState} from 'react'
-import {ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Search} from 'lucide-react'
+import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react'
+import {
+  ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Ellipsis,
+} from 'lucide-react'
 import type {Labels, StructuredTable} from '../contract/panel'
 import {parseInline, type Block, type Inline} from '../markdown/parse'
 import {inlineText} from '../markdown/plain'
@@ -7,11 +9,37 @@ import {iconProps} from './icon'
 import {renderStaticInline} from './inline'
 
 type TableBlock = Extract<Block, {type: 'table'}>
-type PageSize = 10 | 25 | 50 | 'all'
 type SortState = {col: number; dir: 'asc' | 'desc'} | null
+export type PageItem = number | 'ellipsis-prev' | 'ellipsis-next'
 
-const PAGE_SIZES: readonly (10 | 25 | 50)[] = [10, 25, 50]
-const PAGINATION_THRESHOLD = 10
+const PAGE_SIZE = 10
+const PAGE_JUMP = 5
+const TOKEN_CELL_RE = /^[A-Za-z0-9_./:+%#-]+$/
+
+type ColumnWrap = 'nowrap' | 'wrap'
+
+/** Estimate visual width in half-width character units (CJK ~ 2, ASCII ~ 1). */
+function displayUnits(text: string): number {
+  let units = 0
+  for (const ch of text) {
+    units += ch.charCodeAt(0) > 0x7f ? 2 : 1
+  }
+  return units
+}
+
+/** Build a compact numeric page list with ellipsis for large page counts. */
+function buildPageItems(current: number, total: number): PageItem[] {
+  if (total <= 7) {
+    return Array.from({length: total}, (_, index) => index + 1)
+  }
+  if (current <= 4) {
+    return [1, 2, 3, 4, 5, 'ellipsis-next', total]
+  }
+  if (current >= total - 3) {
+    return [1, 'ellipsis-prev', total - 4, total - 3, total - 2, total - 1, total]
+  }
+  return [1, 'ellipsis-prev', current - 1, current, current + 1, 'ellipsis-next', total]
+}
 
 interface IndexedRow {
   index: number
@@ -49,13 +77,14 @@ export interface DataTableProps {
   block: TableBlock
   labels: Labels
   allow: (href: string) => boolean
+  totalRows?: number | undefined
 }
 
-export function DataTable({block, labels, allow}: DataTableProps): React.JSX.Element {
-  const [query, setQuery] = useState('')
+export function DataTable({block, labels, allow, totalRows}: DataTableProps): React.JSX.Element {
   const [sort, setSort] = useState<SortState>(null)
-  const [pageSize, setPageSize] = useState<PageSize>(10)
   const [page, setPage] = useState(1)
+  const [canScrollRight, setCanScrollRight] = useState(false)
+  const wrapRef = useRef<HTMLDivElement>(null)
 
   const columnCount = useMemo(
     () => Math.max(block.head.length, ...block.rows.map(row => row.length), 0),
@@ -86,20 +115,28 @@ export function DataTable({block, labels, allow}: DataTableProps): React.JSX.Ele
     return sawNumeric
   }), [block.align, columnCount, indexedRows])
 
-  const paginated = block.rows.length > PAGINATION_THRESHOLD
+  const columnWrap = useMemo<ColumnWrap[]>(() => Array.from({length: columnCount}, (_, col) => {
+    if (columnNumeric[col]) return 'nowrap'
+    let sawLongText = false
+    for (const row of indexedRows) {
+      const value = (row.text[col] ?? '').trim()
+      if (!value) continue
+      if (value.length <= 24 && TOKEN_CELL_RE.test(value)) continue
+      if (displayUnits(value) > 10) {
+        sawLongText = true
+        break
+      }
+    }
+    return sawLongText ? 'wrap' : 'nowrap'
+  }), [columnCount, columnNumeric, indexedRows])
 
-  const filtered = useMemo(() => {
-    if (!paginated) return indexedRows
-    const needle = query.trim().toLowerCase()
-    if (!needle) return indexedRows
-    return indexedRows.filter(row => row.text.some(cell => cell.toLowerCase().includes(needle)))
-  }, [indexedRows, paginated, query])
+  const paginated = block.rows.length > PAGE_SIZE
 
   const sorted = useMemo(() => {
-    if (!sort) return filtered
+    if (!sort) return indexedRows
     const {col, dir} = sort
     const factor = dir === 'asc' ? 1 : -1
-    const copy = [...filtered]
+    const copy = [...indexedRows]
     copy.sort((a, b) => {
       const aText = (a.text[col] ?? '').trim()
       const bText = (b.text[col] ?? '').trim()
@@ -117,18 +154,50 @@ export function DataTable({block, labels, allow}: DataTableProps): React.JSX.Ele
       return cmp !== 0 ? cmp * factor : a.index - b.index
     })
     return copy
-  }, [filtered, labels.locale, sort])
+  }, [indexedRows, labels.locale, sort])
 
-  const totalPages = paginated && pageSize !== 'all'
-    ? Math.max(1, Math.ceil(sorted.length / pageSize))
-    : 1
+  const totalPages = paginated ? Math.max(1, Math.ceil(sorted.length / PAGE_SIZE)) : 1
   const safePage = Math.min(page, totalPages)
 
   const visibleRows = useMemo(() => {
-    if (!paginated || pageSize === 'all') return sorted
-    const start = (safePage - 1) * pageSize
-    return sorted.slice(start, start + pageSize)
-  }, [pageSize, paginated, safePage, sorted])
+    if (!paginated) return sorted
+    const start = (safePage - 1) * PAGE_SIZE
+    return sorted.slice(start, start + PAGE_SIZE)
+  }, [paginated, safePage, sorted])
+
+  const pageItems = useMemo(
+    () => (totalPages > 1 ? buildPageItems(safePage, totalPages) : []),
+    [safePage, totalPages],
+  )
+
+  const syncScrollEdge = useCallback(() => {
+    const node = wrapRef.current
+    if (!node) return
+    const right = node.scrollLeft + node.clientWidth < node.scrollWidth - 1
+    setCanScrollRight(prev => (prev === right ? prev : right))
+  }, [])
+
+  useEffect(() => {
+    setPage(1)
+    setSort(null)
+  }, [block])
+
+  useEffect(() => {
+    const node = wrapRef.current
+    if (!node || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(syncScrollEdge)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [syncScrollEdge])
+
+  useLayoutEffect(() => {
+    syncScrollEdge()
+  }, [syncScrollEdge, visibleRows, columnCount])
+
+  const goToPage = (next: number) => {
+    setPage(next)
+    if (wrapRef.current) wrapRef.current.scrollTop = 0
+  }
 
   const cycleSort = (col: number) => {
     setSort(prev => {
@@ -136,124 +205,136 @@ export function DataTable({block, labels, allow}: DataTableProps): React.JSX.Ele
       if (prev.dir === 'asc') return {col, dir: 'desc'}
       return null
     })
-    setPage(1)
+    goToPage(1)
   }
 
   return (
     <div className="woa-datatable">
-      {paginated && (
-        <div className="woa-datatable__toolbar">
-          <label className="woa-datatable__filter">
-            <Search {...iconProps(12)} aria-hidden="true" />
-            <input
-              type="search"
-              value={query}
-              placeholder={labels.tableFilterPlaceholder}
-              aria-label={labels.tableFilterPlaceholder}
-              onChange={event => {
-                setQuery(event.target.value)
-                setPage(1)
-              }}
-            />
-          </label>
-        </div>
-      )}
-
-      <div className="woa-md__tablewrap">
-        <table className="woa-datatable__table">
-          <thead>
-            <tr>
-              {headCells.map((cell, col) => {
-                const active = sort?.col === col ? sort.dir : null
-                const ariaSort = active === 'asc' ? 'ascending' : active === 'desc' ? 'descending' : 'none'
-                const align = columnNumeric[col] ? 'right' : 'left'
-                return (
-                  <th key={col} scope="col" aria-sort={ariaSort} data-align={align}>
-                    <button
-                      type="button"
-                      className="woa-datatable__sort"
-                      data-sort={active ?? 'none'}
-                      onClick={() => cycleSort(col)}
-                    >
-                      <span>{renderStaticInline(cell, allow)}</span>
-                      {active === 'asc'
-                        ? <ArrowUp {...iconProps(12)} aria-hidden="true" />
-                        : active === 'desc'
-                          ? <ArrowDown {...iconProps(12)} aria-hidden="true" />
-                          : <ArrowUpDown {...iconProps(12)} aria-hidden="true" />}
-                    </button>
-                  </th>
-                )
-              })}
-            </tr>
-          </thead>
-          <tbody>
-            {visibleRows.length === 0 ? (
+      <div
+        className="woa-datatable__frame"
+        data-scroll-right={canScrollRight ? 'true' : undefined}
+      >
+        <div ref={wrapRef} className="woa-md__tablewrap" onScroll={syncScrollEdge}>
+          <table className="woa-datatable__table">
+            <thead>
               <tr>
-                <td colSpan={Math.max(1, columnCount)} className="woa-datatable__empty">
-                  {labels.tableNoMatch}
-                </td>
+                {headCells.map((cell, col) => {
+                  const active = sort?.col === col ? sort.dir : null
+                  const ariaSort = active === 'asc' ? 'ascending' : active === 'desc' ? 'descending' : 'none'
+                  const align = columnNumeric[col] ? 'right' : 'left'
+                  return (
+                    <th key={col} scope="col" aria-sort={ariaSort} data-align={align}>
+                      <button
+                        type="button"
+                        className="woa-datatable__sort"
+                        data-sort={active ?? 'none'}
+                        onClick={() => cycleSort(col)}
+                      >
+                        <span>{renderStaticInline(cell, allow)}</span>
+                        {active === 'asc'
+                          ? <ArrowUp {...iconProps(12)} aria-hidden="true" />
+                          : active === 'desc'
+                            ? <ArrowDown {...iconProps(12)} aria-hidden="true" />
+                            : <ArrowUpDown {...iconProps(12)} aria-hidden="true" />}
+                      </button>
+                    </th>
+                  )
+                })}
               </tr>
-            ) : (
-              visibleRows.map(row => (
-                <tr key={row.index}>
-                  {row.cells.map((cell, col) => {
-                    const isRight = block.align[col] === 'right' || row.numeric[col] !== null
-                    return (
-                      <td key={col} data-align={isRight ? 'right' : 'left'}>
-                        {renderStaticInline(cell, allow)}
-                      </td>
-                    )
-                  })}
+            </thead>
+            <tbody>
+              {visibleRows.length === 0 ? (
+                <tr>
+                  <td colSpan={Math.max(1, columnCount)} className="woa-datatable__empty">
+                    {labels.tableNoMatch}
+                  </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              ) : (
+                visibleRows.map((row, slotIndex) => (
+                  <tr key={slotIndex}>
+                    {row.cells.map((cell, col) => {
+                      const isRight = block.align[col] === 'right' || row.numeric[col] !== null
+                      const wrap = isRight ? 'nowrap' : columnWrap[col]
+                      return (
+                        <td
+                          key={col}
+                          data-align={isRight ? 'right' : 'left'}
+                          data-wrap={wrap}
+                        >
+                          {renderStaticInline(cell, allow)}
+                        </td>
+                      )
+                    })}
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {paginated && (
         <div className="woa-datatable__footer">
-          <label className="woa-datatable__size">
-            <span>{labels.tablePageSize}</span>
-            <select
-              aria-label={labels.tablePageSize}
-              value={String(pageSize)}
-              onChange={event => {
-                const raw = event.target.value
-                setPageSize(raw === 'all' ? 'all' : (Number(raw) as 10 | 25 | 50))
-                setPage(1)
-              }}
-            >
-              {PAGE_SIZES.map(size => (
-                <option key={size} value={String(size)}>{size}</option>
-              ))}
-              <option value="all">{labels.tableShowAll}</option>
-            </select>
-          </label>
-          <div className="woa-datatable__pager">
+          <span className="woa-datatable__count">
+            {labels.tableTotalRows.replace('{count}', String(Math.max(indexedRows.length, totalRows ?? 0)))}
+          </span>
+          <nav className="woa-datatable__pager" aria-label={labels.tablePagination}>
             <button
               type="button"
-              className="woa-datatable__pagebtn"
-              disabled={pageSize === 'all' || safePage <= 1}
-              onClick={() => setPage(current => Math.max(1, current - 1))}
+              className="woa-datatable__pagebtn woa-datatable__pagebtn--nav"
+              aria-label={labels.tablePrevPage}
+              disabled={safePage <= 1}
+              onClick={() => goToPage(Math.max(1, safePage - 1))}
             >
               <ChevronLeft {...iconProps(12)} aria-hidden="true" />
-              <span>{labels.tablePrevPage}</span>
             </button>
-            <span className="woa-datatable__pageinfo">
-              {pageSize === 'all' ? labels.tableShowAll : `${safePage} / ${totalPages}`}
-            </span>
+            {pageItems.map(item => {
+              if (item === 'ellipsis-prev' || item === 'ellipsis-next') {
+                const isPrev = item === 'ellipsis-prev'
+                const label = (isPrev ? labels.tableJumpPrev : labels.tableJumpNext)
+                  .replace('{count}', String(PAGE_JUMP))
+                const target = isPrev
+                  ? Math.max(1, safePage - PAGE_JUMP)
+                  : Math.min(totalPages, safePage + PAGE_JUMP)
+                return (
+                  <button
+                    key={item}
+                    type="button"
+                    className="woa-datatable__pagebtn woa-datatable__pagebtn--nav woa-datatable__ellipsis"
+                    aria-label={label}
+                    title={label}
+                    onClick={() => goToPage(target)}
+                  >
+                    <Ellipsis {...iconProps(12)} className="woa-datatable__dots" aria-hidden="true" />
+                    {isPrev
+                      ? <ChevronsLeft {...iconProps(12)} className="woa-datatable__jumpicon" aria-hidden="true" />
+                      : <ChevronsRight {...iconProps(12)} className="woa-datatable__jumpicon" aria-hidden="true" />}
+                  </button>
+                )
+              }
+              return (
+                <button
+                  key={item}
+                  type="button"
+                  className="woa-datatable__pagebtn"
+                  data-active={item === safePage ? '' : undefined}
+                  aria-current={item === safePage ? 'page' : undefined}
+                  onClick={() => goToPage(item)}
+                >
+                  {item}
+                </button>
+              )
+            })}
             <button
               type="button"
-              className="woa-datatable__pagebtn"
-              disabled={pageSize === 'all' || safePage >= totalPages}
-              onClick={() => setPage(current => Math.min(totalPages, current + 1))}
+              className="woa-datatable__pagebtn woa-datatable__pagebtn--nav"
+              aria-label={labels.tableNextPage}
+              disabled={safePage >= totalPages}
+              onClick={() => goToPage(Math.min(totalPages, safePage + 1))}
             >
-              <span>{labels.tableNextPage}</span>
               <ChevronRight {...iconProps(12)} aria-hidden="true" />
             </button>
-          </div>
+          </nav>
         </div>
       )}
     </div>

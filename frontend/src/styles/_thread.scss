@@ -684,56 +684,8 @@ ul.woa-md__list {
   }
 }
 
-/* A table sits in the prose, not in a box: no frame, a firmer rule under the header than
-   between rows, and its outer columns aligned with the text around it. */
 .woa-md__tablewrap {
   overflow-x: auto;
-}
-.woa-md table,
-.woa-datatable__table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--woa-font-size-small);
-  line-height: var(--woa-line-height);
-}
-.woa-md th,
-.woa-datatable__table th {
-  text-align: left;
-  font-weight: 500;
-  font-size: var(--woa-font-size-meta);
-  color: var(--woa-ink-faint);
-  padding: 6px 10px;
-  white-space: nowrap;
-  border-bottom: 1px solid var(--woa-line-strong);
-}
-.woa-md td,
-.woa-datatable__table td {
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--woa-line);
-  font-variant-numeric: tabular-nums;
-  /* Cells wrap: a long value is content, and pushing it into sideways scroll made the
-     reader miss that the row beside it had more columns. Headers keep their line. */
-  overflow-wrap: anywhere;
-}
-.woa-md tr:last-child td,
-.woa-datatable__table tr:last-child td {
-  border-bottom: 0;
-}
-.woa-md th:first-child,
-.woa-md td:first-child,
-.woa-datatable__table th:first-child,
-.woa-datatable__table td:first-child {
-  padding-inline-start: 0;
-}
-.woa-md th:last-child,
-.woa-md td:last-child,
-.woa-datatable__table th:last-child,
-.woa-datatable__table td:last-child {
-  padding-inline-end: 0;
-}
-.woa-md [data-align="right"],
-.woa-datatable__table [data-align="right"] {
-  text-align: right;
 }
 
 .woa-result__table {
