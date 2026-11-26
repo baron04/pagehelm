@@ -11,7 +11,9 @@
  *
  * Development only. `vite build` never sees this directory.
  */
-import {DEFAULT_CONFIGURATION, type ApprovalRequest, type TimelineEntry} from '../src/contract/panel'
+import {
+  DEFAULT_CONFIGURATION, type ApprovalRequest, type StructuredTable, type TimelineEntry,
+} from '../src/contract/panel'
 import type {PanelHost, PanelSnapshot} from '../src/bridge/host'
 import {SAMPLE_EXAMPLES} from './examples'
 
@@ -61,8 +63,48 @@ const ANSWER = `已扫完全部 12 条，命中 3 条：
 
 这三张都处于 \`to invoice\` 状态。`
 
+const TABLE_CUSTOMERS = [
+  '青岛望川瑞宁电力技术有限责任公司',
+  '武汉远辰能源科技股份有限公司',
+  '华东精密制造集团有限公司',
+  '南方智能装备研发中心',
+  '星辰科技有限公司',
+] as const
+
+const TABLE_CONTRACTS = [
+  '北方采购协同供货合同（南区）',
+  '区域电网自动化维保框架协议',
+  '华东生产基地设备采购合同',
+  '年度软件运维与技术支持协议',
+  '储能站点集成交付补充合同',
+] as const
+
+function formatMoney(value: number): string {
+  return value.toLocaleString('zh-CN', {minimumFractionDigits: 2, maximumFractionDigits: 2})
+}
+
+function buildSampleTable(rowCount = 95): StructuredTable {
+  const rows = Array.from({length: rowCount}, (_, index) => {
+    const seq = String(index + 1).padStart(3, '0')
+    const contractNo = `HT20261018${seq}`
+    const contractName = `${TABLE_CONTRACTS[index % TABLE_CONTRACTS.length]} #${seq}`
+    const customer = TABLE_CUSTOMERS[index % TABLE_CUSTOMERS.length]!
+    const amount = 120 + ((index * 137) % 9800) + ((index * 29) % 100) / 100
+    const paid = index % 5 === 0 ? '' : formatMoney(Number((amount * ((index % 4) * 0.25 + 0.2)).toFixed(2)))
+    const month = String((index % 12) + 1).padStart(2, '0')
+    const day = String((index % 28) + 1).padStart(2, '0')
+    return [contractNo, contractName, customer, formatMoney(amount), paid, `2026-${month}-${day}`]
+  })
+  return {
+    title: `合同台账汇总（${rowCount} 条）`,
+    columns: ['合同编号', '合同名称', '客户名称', '合同金额(元)', '已回款(元)', '签订日期'],
+    rows,
+    total_rows: rowCount,
+  }
+}
+
 export type Scenario =
-  | 'read' | 'write' | 'operate' | 'refused' | 'indeterminate'
+  | 'read' | 'table' | 'write' | 'operate' | 'refused' | 'indeterminate'
   | 'connecting' | 'reconnecting' | 'offline' | 'disconnect' | 'undelivered'
   | 'many' | 'older' | 'longtext' | 'clear' | 'effects'
 
@@ -154,6 +196,23 @@ export function createDevHost(): DevHost {
     if (mine !== live) return
     push(entry('result', ANSWER, {
       tone: 'success', panel_state: 'success', authored: 'model',
+    }))
+    commit({connection: {...state.connection, busy: false, state: 'success'}})
+  }
+
+  function runTable(goal = '列出所有合同台账（多页表格演示）'): void {
+    nextTurn()
+    push(entry('goal', goal))
+    commit({optimistic: null})
+    push(entry('progress', '已读取 95 条：合同台账', {
+      tone: 'active',
+      step: {stage: 'read_done', tool: 'query_contracts', result: '95 条 · 合同台账'},
+    }))
+    push(entry('result', '已整理 95 条合同记录，支持悬停列排序与数字分页浏览。', {
+      tone: 'success',
+      panel_state: 'success',
+      authored: 'server',
+      table: buildSampleTable(95),
     }))
     commit({connection: {...state.connection, busy: false, state: 'success'}})
   }
@@ -337,7 +396,9 @@ export function createDevHost(): DevHost {
         return
       }
       const write = /确认|开票|新建|创建|删除/.test(text)
-      void (write ? runWrite(text) : runRead(text))
+      if (write) void runWrite(text)
+      else if (/表格|台账/.test(text)) runTable(text)
+      else void runRead(text)
     },
     retrySubmit() {
       const pending = state.optimistic
@@ -395,7 +456,7 @@ export function createDevHost(): DevHost {
       // The composer cannot start a turn over one in flight; a scenario button can, so it
       // ends that turn first, the way a replacing message does, rather than letting two
       // scripts write into one conversation.
-      if (['read', 'write', 'operate', 'effects'].includes(name)
+      if (['read', 'table', 'write', 'operate', 'effects'].includes(name)
           && (state.connection.busy || state.pendingApproval)) {
         live = 0
         push(entry('result', '已中断上一项操作。', {
@@ -428,6 +489,9 @@ export function createDevHost(): DevHost {
           return
         case 'read':
           void runRead('列出所有待开票的销售订单，带金额')
+          return
+        case 'table':
+          runTable()
           return
         case 'effects':
           void previewEffects()
