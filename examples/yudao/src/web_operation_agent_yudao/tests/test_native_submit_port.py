@@ -61,6 +61,48 @@ class PrefixTests(unittest.TestCase):
         found = port().catalog(("/admin-api/mes/wm/warehouse/",))
         self.assertEqual(found, {("POST", "/admin-api/mes/wm/warehouse/create"), ("PUT", "/admin-api/mes/wm/warehouse/update")})
 
+    def test_prefix_inference_without_source_for_unique_get_and_create(self):
+        self.assertEqual(
+            port().prefixes((("/admin-api/mes/wm/warehouse/get", "id=5"),), mode="update", record_id="5"),
+            ("/admin-api/mes/wm/warehouse/",),
+        )
+        reads = (
+            ("/admin-api/mes/wm/warehouse/page", "pageNo=1"),
+            ("/admin-api/system/user/list", ""),
+        )
+        # Only warehouse has documented POST .../create, so create mode infers it uniquely when source=""
+        self.assertEqual(
+            port().prefixes(reads, mode="create", record_id=""),
+            ("/admin-api/mes/wm/warehouse/",),
+        )
+        # With two creatable list reads, source="" stays ambiguous while explicit source resolves
+        docs_two = {"paths": {
+            **DOCS["paths"],
+            "/admin-api/system/user/create": {"post": {}},
+        }}
+        p_two = YudaoSubmitPort(Client(), NS(), lambda: docs_two)
+        self.assertEqual(p_two.prefixes(reads, mode="create", record_id=""), ())
+        self.assertEqual(
+            p_two.prefixes(reads, mode="create", record_id="", source="/admin-api/mes/wm/warehouse/page"),
+            ("/admin-api/mes/wm/warehouse/",),
+        )
+
+    def test_prefix_inference_mode_any_matches_update_only_and_get_without_record_id(self):
+        docs_upd = {"paths": {
+            "/admin-api/mes/wm/warehouse/update": {"put": {}},
+            "/admin-api/mes/wm/warehouse/get": {"get": {}},
+            "/admin-api/mes/wm/warehouse/page": {"get": {}},
+        }}
+        p_upd = YudaoSubmitPort(Client(), NS(), lambda: docs_upd)
+        self.assertEqual(
+            p_upd.prefixes((("/admin-api/mes/wm/warehouse/page", "pageNo=1"),), mode="any", record_id=""),
+            ("/admin-api/mes/wm/warehouse/",),
+        )
+        self.assertEqual(
+            p_upd.prefixes((("/admin-api/mes/wm/warehouse/get", "id=5"),), mode="any", record_id=""),
+            ("/admin-api/mes/wm/warehouse/",),
+        )
+
 
 class RecordTests(unittest.TestCase):
     def test_the_record_is_read_as_the_signed_in_person_through_the_prefixs_get(self):
@@ -75,6 +117,41 @@ class RecordTests(unittest.TestCase):
         with self.assertRaises(YudaoReadRefused):
             port(down).read_record(("/admin-api/a/b/",), "5")
         self.assertIsNone(port().read_record(("/admin-api/a/b/",), ""))
+
+    def test_read_record_supplies_required_context_params_from_write_or_reads(self):
+        docs = {"paths": {
+            "/admin-api/fms/item/get": {"get": {"parameters": [
+                {"name": "id", "in": "query", "required": True},
+                {"name": "scopeId", "in": "query", "required": True},
+            ]}},
+        }}
+        client = Client({"id": 5, "scopeId": 2, "name": "A"})
+        proxy = NS(
+            guard=NS(recent_reads=lambda *_a, **_kw: (("/admin-api/fms/item/list", "scopeId=3"),)),
+            resolve_actor=lambda *_a: "a" * 64,
+        )
+        client._login = lambda: "u"
+        client.tenant = "1"
+        p = YudaoSubmitPort(client, proxy, lambda: docs)
+        # Explicit context_params from observed write takes priority
+        rec = p.read_record(("/admin-api/fms/item/",), "5", context_params={"scopeId": "2"})
+        self.assertEqual(rec["name"], "A")
+        self.assertEqual(client.calls[-1], ("fms/item/get", {"id": "5", "scopeId": "2"}))
+        # Falls back to recent_reads when context_params is absent
+        p.read_record(("/admin-api/fms/item/",), "5")
+        self.assertEqual(client.calls[-1], ("fms/item/get", {"id": "5", "scopeId": "3"}))
+
+    def test_read_record_falls_back_to_list_when_get_is_absent(self):
+        docs = {"paths": {
+            "/admin-api/cfg/item/create": {"post": {}},
+            "/admin-api/cfg/item/list": {"get": {}},
+        }}
+        client = Client([{"id": 1, "name": "first"}, {"id": 2, "name": "second"}])
+        p = YudaoSubmitPort(client, NS(), lambda: docs)
+        rec = p.read_record(("/admin-api/cfg/item/",), "2")
+        self.assertEqual(rec, {"id": 2, "name": "second"})
+        self.assertEqual(client.calls, [("cfg/item/list", {})])
+        self.assertIsNone(p.read_record(("/admin-api/cfg/item/",), "999"))
 
     def test_destructive_labels_and_unlabelled_controls_count_as_dangerous(self):
         element = lambda name, **attrs: NS(name=name, attrs=attrs)

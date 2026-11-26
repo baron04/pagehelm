@@ -918,7 +918,8 @@ class TurnHarness:
             s.terminal_reason, s.detail = "control_plane_error", str(release)[:200]
         terminal = s.terminal_reason or "agent_finished"
         stop_reason = (s.stop_reason or terminal) if not (exhausted or s.cancelled()) else terminal
-        wall = round(time.time() - s.started_at, 3)
+        waited_ms = int(getattr(getattr(s, "approvals", None), "waited_ms", 0) or 0)
+        wall = round(max(0.0, time.time() - s.started_at - waited_ms / 1000.0), 3)
         agent = RunResult(
             run_id=s.run_id,
             task_ref=s.run_id,
@@ -944,6 +945,7 @@ class TurnHarness:
             terminal_reason=terminal,
             steps_used=s.step,
             wall_seconds=wall,
+            waited_ms=waited_ms,
             agent_said=text[:300],
             page_actions=s.page_actions,
             operation_control=agent.operation_control or {},
@@ -1039,6 +1041,7 @@ class TurnHarness:
             stage_timings=stage_timings,
             tool_timings=list(s.tool_timings),
             wall_seconds=wall,
+            waited_ms=waited_ms,
             model_calls=s.model_calls,
         )
         turn_refusals: list[dict] = []

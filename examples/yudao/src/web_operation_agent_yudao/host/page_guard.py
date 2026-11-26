@@ -345,32 +345,72 @@ class NativePageGuard:
             return self._actor(actor).write_count
 
     def note_user_write(self, actor: str, method: str, path: str,
-                        record_id: str = "", created_id: str = "") -> None:
-        """The application accepted the person's own request; recorded so a handoff
-        turn can notice and read back. Nothing here admits or holds anything."""
+                        record_id: str = "", created_id: str = "", *,
+                        status: int = 200, accepted: bool = True,
+                        app_code: int | None = None, error_msg: str = "",
+                        context: dict | None = None) -> None:
+        """Record an observed user-originated write (accepted or rejected).
+
+        Observation only: nothing here admits, blocks, holds or rewrites anything.
+        """
+        safe_ctx: dict[str, str] = {}
+        if isinstance(context, dict):
+            for k, v in list(context.items())[:8]:
+                if isinstance(k, str) and isinstance(v, str) and len(k) <= 64 and len(v) <= 80:
+                    safe_ctx[k] = v
+        safe_code = app_code if isinstance(app_code, int) and not isinstance(app_code, bool) else None
         with self._condition:
             state = self._actor(actor)
             state.write_count += 1
-            state.user_writes.append((state.write_count, str(method)[:8], str(path)[:200],
-                                      str(record_id)[:80], str(created_id)[:80]))
+            state.user_writes.append({
+                "seq": state.write_count,
+                "method": str(method)[:8],
+                "path": str(path)[:200],
+                "wanted": str(record_id)[:80],
+                "created": str(created_id)[:80],
+                "status": int(status) if isinstance(status, int) and not isinstance(status, bool) else 0,
+                "accepted": bool(accepted),
+                "app_code": safe_code,
+                "error_msg": str(error_msg or "")[:200],
+                "context": safe_ctx,
+            })
 
     def user_write_after(self, actor: str, mark: int, prefixes, record_id: str,
-                         create_only: bool = False):
-        """The first accepted user write under `prefixes` after `mark`, or None.
+                         create_only: bool = False, *, include_rejected: bool = False):
+        """The first observed user write under `prefixes` after `mark`, or None.
 
-        When `record_id` is given the write must name or return that id; with
-        `create_only` only this application's create interface counts and the
-        returned event carries the new id."""
+        When `include_rejected` is False (default), only accepted writes match.
+        When `include_rejected` is True, application-rejected writes (4xx or
+        non-zero envelope code) are returned as well with `accepted=False`.
+        """
         with self._condition:
-            for sequence, method, path, wanted, created in self._actor(actor).user_writes:
+            for entry in self._actor(actor).user_writes:
+                sequence = entry["seq"]
+                path = entry["path"]
+                accepted = entry["accepted"]
                 if sequence <= mark or not any(path.startswith(prefix) for prefix in prefixes):
                     continue
-                if record_id and record_id not in {wanted, created}:
+                if not include_rejected and not accepted:
                     continue
+                wanted = entry["wanted"]
+                created = entry["created"]
+                if record_id:
+                    if accepted or wanted or created:
+                        if record_id not in {wanted, created}:
+                            continue
                 if create_only and path.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1] != "create":
                     continue
-                return {"seq": sequence, "method": method, "path": path,
-                        "record_id": created or wanted or record_id}
+                return {
+                    "seq": sequence,
+                    "method": entry["method"],
+                    "path": path,
+                    "status": entry["status"],
+                    "record_id": created or wanted or record_id,
+                    "accepted": accepted,
+                    "app_code": entry["app_code"],
+                    "error_msg": entry["error_msg"],
+                    "context": dict(entry["context"]),
+                }
             return None
 
     def begin(self, actor: str, owner: str, *, ttl_s: float = 120,

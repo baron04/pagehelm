@@ -166,6 +166,52 @@ class GuardProxyTests(unittest.TestCase):
         event = self.guard.user_write_after(actor, mark, prefixes, "", create_only=True)
         self.assertEqual(event["record_id"], "11")
 
+    def test_rejected_user_writes_are_observed_without_blocking_and_redacted(self):
+        self.begin()
+        actor = "a" * 64
+        mark = self.guard.user_write_mark(actor)
+        self.app_body = {
+            "code": 400,
+            "msg": "保存失败\npassword=topsecret access_token=abc123",
+            "data": None,
+        }
+        status, body, _ = self.request(
+            "POST",
+            "/admin-api/crm/customer/update?scopeId=12",
+            body=json.dumps({"id": 7, "accountSetId": 9, "password": "secret"}).encode(),
+            assistant=False,
+        )
+        # Forwarded untouched to caller
+        self.assertEqual(status, 200)
+        self.assertEqual(body["code"], 400)
+        # Backward-compatible default omits rejected writes
+        self.assertIsNone(self.guard.user_write_after(actor, mark, ("/admin-api/crm/customer/",), "7"))
+        # Opt-in observation sees rejected write, sanitized error, and non-secret context params
+        event = self.guard.user_write_after(
+            actor, mark, ("/admin-api/crm/customer/",), "7", include_rejected=True
+        )
+        self.assertIsNotNone(event)
+        self.assertFalse(event["accepted"])
+        self.assertEqual(event["app_code"], 400)
+        self.assertNotIn("topsecret", event["error_msg"])
+        self.assertNotIn("abc123", event["error_msg"])
+        self.assertIn("[redacted]", event["error_msg"])
+        self.assertEqual(event["context"], {"scopeId": "12", "accountSetId": "9"})
+
+        # Create mode also captures rejected POST .../create when include_rejected=True
+        mark2 = self.guard.user_write_mark(actor)
+        self.app_body = {"code": 500, "msg": "必填项缺失"}
+        self.request("POST", "/admin-api/crm/customer/create", body=b'{"name": ""}', assistant=False)
+        self.assertIsNone(
+            self.guard.user_write_after(actor, mark2, ("/admin-api/crm/customer/",), "", create_only=True)
+        )
+        rej_create = self.guard.user_write_after(
+            actor, mark2, ("/admin-api/crm/customer/",), "", create_only=True, include_rejected=True
+        )
+        self.assertIsNotNone(rej_create)
+        self.assertFalse(rej_create["accepted"])
+        self.assertEqual(rej_create["error_msg"], "必填项缺失")
+
     def windowed(self):
         self.proxy.close()
         self.proxy = NativeGuardProxy(upstream=f"http://127.0.0.1:{self.app.server_port}",

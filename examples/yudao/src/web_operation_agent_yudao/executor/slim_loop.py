@@ -828,22 +828,16 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
         return ""
 
     def _ensure_handoff_target_prefixes(self, s, turn, key) -> None:
+        from web_operation_agent.execution.native_submit import _infer_handoff_prefixes
+
         if self.native_submit is None or key is None:
             return
         targets = turn.setdefault("submit_targets", {})
         target = targets.get(key)
         if isinstance(target, dict) and target.get("prefixes"):
             return
-        recent_fn = getattr(self.native_submit, "recent_reads", None)
-        prefixes_fn = getattr(self.native_submit, "prefixes", None)
-        if not callable(recent_fn) or not callable(prefixes_fn):
-            return
-        reads = recent_fn() or ()
-        if not reads:
-            return
         record_id = str((target or {}).get("record_id") or "") if isinstance(target, dict) else ""
-        mode = "update" if record_id else "create"
-        inferred = tuple(prefixes_fn(reads, mode=mode, record_id=record_id) or ())
+        inferred = _infer_handoff_prefixes(self.native_submit, s, record_id)
         if len(inferred) != 1:
             return
         if not isinstance(target, dict):
@@ -962,11 +956,13 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
                 and not turn.get("written")
                 and not turn.get("submit_handoff_blocked")):
             label = self._default_handoff(s, turn)
-            said = str(args.get("answer") or "")
-            if not ("尚未提交" in said or "还没有提交" in said or "没有提交" in said or "停在提交前" in said):
-                note = (f"「{label}」已标出（尚未提交）。" if label else
-                        "表单已按你的要求填写，但程序没能核验并标出提交按钮；尚未提交，请核对表单后自己提交。")
-                args = {**args, "answer": (said.rstrip() + "\n\n" + note).strip()}
+            if label:
+                turn["_default_handoff_label"] = label
+            else:
+                said = str(args.get("answer") or "")
+                if not ("尚未提交" in said or "还没有提交" in said or "没有提交" in said or "停在提交前" in said):
+                    note = "表单已按你的要求填写，但程序没能核验并标出提交按钮；尚未提交，请核对表单后自己提交。"
+                    args = {**args, "answer": (said.rstrip() + "\n\n" + note).strip()}
         return self._close_with_notes(s, turn, args)
 
     def _close_with_notes(self, s, turn, args):
@@ -980,12 +976,61 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
                     + "\n\n未标出提交按钮：表单打开时页面自动修改了字段且无法还原，"
                     + (f"直接保存会把 {effects}；" if effects else "直接保存会带入未核对的变化；")
                     + "请核对后自己提交。").strip()}
-        target = (turn.get("submit_targets") or {}).get(turn.get("handoff_target_key")) or {}
-        pressed = (self._await_handoff_press(s, turn)
-                   if target.get("kind") == "row"
-                   and args.get("status") in ("done", "cannot") and self._submit_allowed(turn) else "")
+        if self.native_submit is not None and not turn.get("handoff_button"):
+            handoff = turn.get("handoff")
+            if isinstance(handoff, tuple) and len(handoff) > 1 and handoff[1] and not turn.get("submit_handoff_blocked"):
+                turn["handoff_button"] = str(handoff[1])
+                if not turn.get("handoff_target_key") and getattr(s, "obs", None) is not None:
+                    hkey = _handoff_key(s.obs, str(handoff[1]))
+                    turn["handoff_target_key"] = hkey
+                mark_fn = getattr(self.native_submit, "user_write_mark", None)
+                if turn.get("handoff_mark") is None and callable(mark_fn):
+                    turn["handoff_mark"] = mark_fn()
+        if turn.get("handoff_target_key") is not None:
+            self._ensure_handoff_target_prefixes(s, turn, turn.get("handoff_target_key"))
+        will_await = (
+            unrestorable is None
+            and not turn.get("handoff_awaited")
+            and args.get("status") in ("done", "cannot")
+            and self._submit_allowed(turn)
+            and bool(turn.get("handoff_button") or turn.get("handoff"))
+            and callable(getattr(self.native_submit, "user_write_mark", None))
+            and callable(getattr(self.native_submit, "user_write_event", None))
+        )
+        if not will_await:
+            label = turn.get("_default_handoff_label") or ""
+            said_now = str(args.get("answer") or "")
+            if (args.get("status") == "done" and label
+                    and not ("尚未提交" in said_now or "还没有提交" in said_now
+                             or "没有提交" in said_now or "停在提交前" in said_now)):
+                note = f"「{label}」已标出（尚未提交）。"
+                args = {**args, "answer": (said_now.rstrip() + "\n\n" + note).strip()}
+        return args
+
+    def _after_verified_finish(self, s, turn, args):
+        """Run user-save wait & readback only after pre-close checks approve the finish draft."""
+        unrestorable = next(iter((turn.get("unrestorable_forms") or {}).values()), None)
+        pressed = ""
+        if (unrestorable is None
+                and not turn.get("handoff_awaited")
+                and args.get("status") in ("done", "cannot")
+                and self._submit_allowed(turn)
+                and (turn.get("handoff_button") or turn.get("handoff"))):
+            pressed = self._await_handoff_press(s, turn)
+        outcome = turn.get("handoff_wait_outcome")
         if pressed:
             args = {**args, "answer": (str(args.get("answer") or "").rstrip() + "\n\n" + pressed).strip()}
+        if outcome in ("rejected", "no_press", "readback_failed"):
+            turn["handoff_incomplete"] = True
+            args = {**args, "status": "cannot"}
+        elif outcome != "verified":
+            label = turn.get("_default_handoff_label") or ""
+            said_now = str(args.get("answer") or "")
+            if (args.get("status") == "done" and label
+                    and not ("尚未提交" in said_now or "还没有提交" in said_now
+                             or "没有提交" in said_now or "停在提交前" in said_now)):
+                note = f"「{label}」已标出（尚未提交）。"
+                args = {**args, "answer": (said_now.rstrip() + "\n\n" + note).strip()}
         return args
 
     def _finish_tool(self, turn):

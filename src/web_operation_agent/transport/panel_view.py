@@ -503,6 +503,9 @@ def describe_step(facts: dict) -> str:
         return panel_contract()["label_keys"]["progressSettling"]
     if stage == "awaiting_approval":
         return panel_contract()["label_keys"]["progressAwaitingApproval"]
+    if stage == "awaiting_handoff":
+        label = _clip(facts.get("label"), 40)
+        return f"已预填表单，等待你核对后点击「{label}」保存" if label else "已预填表单，等待你核对后点击保存"
     if stage == "check":
         return "正在核对结果"
     return ""

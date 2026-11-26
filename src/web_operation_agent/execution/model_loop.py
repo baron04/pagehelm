@@ -290,6 +290,10 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
         (a handoff it must leave in place) and what the reply must say about it."""
         return args
 
+    def _after_verified_finish(self, s, turn, finish):
+        """Hook invoked after pre-close checks approve `finish`."""
+        return finish
+
     @staticmethod
     def _verified_mutation_completion_summary(s, turn) -> str | None:
         """Synthesize a deterministic summary only when all mutations are verified via readback."""
@@ -726,7 +730,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
         try:
             return self._loop(s, prompt, turn, verified=not self.verify)
         finally:
-            if not getattr(s, "mutation_outcomes", None) and turn.get("handoff"):
+            if not getattr(s, "mutation_outcomes", None) and turn.get("handoff") and not turn.get("handoff_awaited"):
                 builder = getattr(self, "_build_post_handoff_watch_context", None)
                 if callable(builder):
                     watch_ctx = builder(s, turn)
@@ -2488,11 +2492,14 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                                            "确实做不到的，用 cannot 或 need_input 如实说明。\n"
                                            + self._page(s, turn)})
                     return self._loop(s, prompt, turn, verified=True)
+            finish = self._after_verified_finish(s, turn, finish)
+            status, answer = str(finish.get("status") or "done"), str(finish.get("answer") or "").strip()
             handoff = turn.get("handoff")
             form_handed_over = bool(handoff and handoff[0] == self._page_fingerprint(s.obs))
             handed_off_cleanly = (
                 form_handed_over
                 and not turn.get("submit_handoff_blocked")
+                and not turn.get("handoff_incomplete")
                 and not turn.get("not_executed")
                 and not turn.get("delivery_terminal_refused")
                 and not s.mutation_outcomes
@@ -2552,7 +2559,11 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             s.answer_targets = answer_targets_for(tuple(turn.get("issued_targets", ())),
                 answer[:getattr(getattr(self, "config", None), "max_user_answer_chars", 4000)],
                 finished=allow_targets and not form_handed_over and not s.mutation_outcomes)
-            if effective_status == "done" and form_handed_over:
+            if (
+                effective_status == "done"
+                and form_handed_over
+                and turn.get("handoff_wait_outcome") not in ("verified", "rejected")
+            ):
                 # The explicit handoff belongs to the server's verified outcome,
                 # not to whether the model remembered to mention manual submission.
                 answer += f"\n\n**请核对后，手动点击「{handoff[1]}」提交。**"

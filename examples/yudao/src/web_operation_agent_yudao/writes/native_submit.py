@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import timedelta, timezone
+from urllib.parse import parse_qsl
 
 from web_operation_agent.execution.submit_contract import (ActionRequest, SubmitConventions,
                                                            SubmitPermit, same_value)
@@ -130,16 +131,82 @@ class YudaoSubmitPort:
         return self.proxy.guard.recent_reads(self._actor(), window=self._window_name() or None)
 
     def prefixes(self, reads, *, mode, record_id, source=""):
-        """One observed source, identified by the mounted form's own route generation."""
-        if not isinstance(source, str): return ()
-        prefix, _, leaf = source.rpartition("/")
-        if not _PREFIX.fullmatch(prefix + "/"): return ()
-        if mode == "update":
-            if not leaf.startswith("get") or not any(path == source and f"id={record_id}" in query.split("&") for path, query in reads):
-                return ()
-        elif not _LIST_READ.search(source) or not any(path == source for path, _ in reads):
+        """Resolve the write prefix from an explicit form source or unambiguous reads."""
+        if not isinstance(source, str):
             return ()
-        return (prefix + "/",)
+        source_clean = source.strip()
+        if source_clean:
+            prefix, _, leaf = source_clean.rpartition("/")
+            if not _PREFIX.fullmatch(prefix + "/"):
+                return ()
+            if mode == "update":
+                if not leaf.startswith("get") or not any(
+                    path == source_clean and f"id={record_id}" in query.split("&")
+                    for path, query in reads
+                ):
+                    return ()
+            elif mode == "any" and leaf.startswith("get"):
+                if not any(path == source_clean and "id=" in query for path, query in reads):
+                    return ()
+            elif not _LIST_READ.search(source_clean) or not any(path == source_clean for path, _ in reads):
+                return ()
+            return (prefix + "/",)
+        if not reads:
+            return ()
+        candidates: list[str] = []
+        seen: set[str] = set()
+        if mode == "update":
+            if not record_id:
+                return ()
+            for path, query in reads:
+                prefix, _, leaf = path.rpartition("/")
+                cand = prefix + "/"
+                if cand in seen or not _PREFIX.fullmatch(cand):
+                    continue
+                if leaf.startswith("get") and f"id={record_id}" in query.split("&"):
+                    seen.add(cand)
+                    candidates.append(cand)
+            if len(candidates) > 1:
+                return ()
+            return tuple(candidates) if len(candidates) == 1 else ()
+        if mode == "any":
+            for path, _query in reads:
+                if not _LIST_READ.search(path):
+                    continue
+                prefix = path.rpartition("/")[0] + "/"
+                if prefix in seen or not _PREFIX.fullmatch(prefix):
+                    continue
+                if any(
+                    (m == "POST" and p == prefix + "create") or (m in {"PUT", "PATCH"} and p == prefix + "update")
+                    for m, p in self.catalog((prefix,))
+                ):
+                    seen.add(prefix)
+                    candidates.append(prefix)
+            if len(candidates) == 1:
+                return tuple(candidates)
+            if candidates:
+                return ()
+            for path, query in reads:
+                prefix, _, leaf = path.rpartition("/")
+                cand = prefix + "/"
+                if cand in seen or not _PREFIX.fullmatch(cand):
+                    continue
+                if leaf.startswith("get") and "id=" in query and any(
+                    m in {"PUT", "PATCH"} and p == cand + "update" for m, p in self.catalog((cand,))
+                ):
+                    seen.add(cand)
+                    candidates.append(cand)
+            return tuple(candidates) if len(candidates) == 1 else ()
+        for path, _query in reads:
+            if not _LIST_READ.search(path):
+                continue
+            prefix = path.rpartition("/")[0] + "/"
+            if prefix in seen or not _PREFIX.fullmatch(prefix):
+                continue
+            if any(m == "POST" and p == prefix + "create" for m, p in self.catalog((prefix,))):
+                seen.add(prefix)
+                candidates.append(prefix)
+        return tuple(candidates) if len(candidates) == 1 else ()
 
     def row_prefixes(self, reads, row):
         """Only the list rendered by the target row's own table can name its entity."""
@@ -197,17 +264,98 @@ class YudaoSubmitPort:
         return frozenset(found)
 
     # -- the record, as the same person -------------------------------------------------
-    def read_record(self, prefixes, record_id):
+    def _api_paths(self) -> dict:
+        docs = self._api_docs() if callable(self._api_docs) else self._api_docs
+        if isinstance(docs, dict) and isinstance(docs.get("paths"), dict):
+            return docs["paths"]
+        return {}
+
+    @staticmethod
+    def _required_query_params(paths: dict, api_path: str, *, exclude=("id",)) -> tuple[str, ...]:
+        op = paths.get(api_path)
+        if not isinstance(op, dict):
+            return ()
+        get_op = op.get("get")
+        if not isinstance(get_op, dict):
+            return ()
+        out: list[str] = []
+        for param in get_op.get("parameters") or ():
+            if not isinstance(param, dict):
+                continue
+            if param.get("in") != "query" or not param.get("required"):
+                continue
+            name = param.get("name")
+            if isinstance(name, str) and name not in exclude and name not in out:
+                out.append(name)
+        return tuple(out)
+
+    def _resolve_context_params(
+        self, prefix: str, required_names: tuple[str, ...], context_params: dict | None
+    ) -> dict[str, str]:
+        if not required_names:
+            return {}
+        resolved: dict[str, str] = {}
+        if isinstance(context_params, dict):
+            for name in required_names:
+                val = context_params.get(name)
+                if isinstance(val, (str, int)) and not isinstance(val, bool) and str(val).strip():
+                    resolved[name] = str(val).strip()
+        missing = [n for n in required_names if n not in resolved]
+        if not missing:
+            return resolved
+        try:
+            reads = self.recent_reads() or ()
+        except Exception:  # noqa: BLE001
+            reads = ()
+        for path, query in reversed(reads):
+            if not path.startswith(prefix) or not query:
+                continue
+            qmap = dict(parse_qsl(query, keep_blank_values=False))
+            for name in list(missing):
+                val = qmap.get(name, "").strip()
+                if val:
+                    resolved[name] = val
+                    missing.remove(name)
+            if not missing:
+                return resolved
+        if missing:
+            for name in missing:
+                vals: set[str] = set()
+                for _path, query in reads:
+                    if not query:
+                        continue
+                    for k, v in parse_qsl(query, keep_blank_values=False):
+                        if k == name and v.strip():
+                            vals.add(v.strip())
+                if len(vals) == 1:
+                    resolved[name] = next(iter(vals))
+        return resolved
+
+    def read_record(self, prefixes, record_id, *, context_params: dict | None = None):
         """The record as the signed-in person reads it; None when it is not there."""
         if not record_id:
             return None
+        paths = self._api_paths()
         failure = None
         for prefix in prefixes:
-            for suffix in ("get", "get-detail"):
+            doc_single = tuple(s for s in ("get", "get-detail") if prefix + s in paths)
+            doc_lists = tuple(s for s in ("list", "simple-list", "page") if prefix + s in paths)
+            single_suffixes = doc_single if (doc_single or doc_lists) else ("get", "get-detail")
+            for suffix in single_suffixes:
+                extra = self._resolve_context_params(
+                    prefix,
+                    self._required_query_params(paths, prefix + suffix),
+                    context_params,
+                )
                 try:
-                    data = self.client.get((prefix + suffix).removeprefix("/admin-api/"), id=record_id)
+                    data = self.client.get(
+                        (prefix + suffix).removeprefix("/admin-api/"),
+                        id=record_id,
+                        **extra,
+                    )
                 except YudaoReadRefused as exc:
-                    if suffix == "get" and getattr(exc, "code", None) in {404, 405}:
+                    code = getattr(exc, "code", None)
+                    if (suffix == "get" or doc_lists) and code in {404, 405}:
                         failure = exc
                         continue
                     if _MISSING.search(str(exc)):
@@ -216,8 +364,38 @@ class YudaoSubmitPort:
                     break
                 if isinstance(data, dict):
                     return _enrich_erp_line_totals(prefix, data)
-                if data is None and suffix == "get-detail":
+                if data is None and suffix == single_suffixes[-1] and not doc_lists:
                     return None
+            for list_suffix in doc_lists:
+                extra = self._resolve_context_params(
+                    prefix,
+                    self._required_query_params(paths, prefix + list_suffix, exclude=()),
+                    context_params,
+                )
+                if list_suffix == "page":
+                    extra.setdefault("pageNo", 1)
+                    extra.setdefault("pageSize", 100)
+                try:
+                    data = self.client.get(
+                        (prefix + list_suffix).removeprefix("/admin-api/"),
+                        **extra,
+                    )
+                except YudaoReadRefused as exc:
+                    failure = exc
+                    continue
+                rows = (
+                    data
+                    if isinstance(data, list)
+                    else data.get("list")
+                    if isinstance(data, dict)
+                    else None
+                )
+                if isinstance(rows, list):
+                    for row in rows:
+                        if isinstance(row, dict) and str(row.get("id")) == str(record_id):
+                            return _enrich_erp_line_totals(prefix, row)
+                    if isinstance(data, list) or not isinstance(data.get("total"), int) or data.get("total", 0) <= len(rows):
+                        return None
         if failure is not None:
             raise failure
         return None
@@ -274,6 +452,7 @@ class YudaoSubmitPort:
         try:
             return self.proxy.guard.user_write_after(self._actor(), int(mark),
                                                      tuple(prefixes), str(record_id or ""),
-                                                     create_only=bool(create))
+                                                     create_only=bool(create),
+                                                     include_rejected=True)
         except Exception:  # noqa: BLE001 -- a missing observation degrades to no event
             return None

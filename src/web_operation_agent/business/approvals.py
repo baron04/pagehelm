@@ -93,6 +93,7 @@ class ApprovalWatch:
         self.approval_hold_ms = approval_hold_s * 1000
         self.operation_hold_ms = operation_hold_s * 1000
         self.waited_ms = 0
+        self.handoff_wait_deadline: float | None = None
         self.business_counts = {
             "approval_requested": 0,
             "approval_granted": 0,
@@ -137,14 +138,17 @@ class ApprovalWatch:
     @contextmanager
     def awaiting_person(self):
         """Give the time a person takes to answer back to the turn."""
+        from ..execution.events import turn_interval
+
         started = time.monotonic()
-        try:
-            yield
-        finally:
-            waited = int((time.monotonic() - started) * 1000)
-            self.waited_ms += waited
-            if self.deadline_ms:
-                self.deadline_ms += waited
+        with turn_interval("human_wait", source="human-channel"):
+            try:
+                yield
+            finally:
+                waited = int((time.monotonic() - started) * 1000)
+                self.waited_ms += waited
+                if self.deadline_ms:
+                    self.deadline_ms += waited
 
     def confirm_form_handoff(self, draft: FormDraft, step: int) -> tuple[str, str]:
         """Ask before typing into a form the application saves by itself."""

@@ -935,10 +935,18 @@ class HandoffWaitTests(_Setup, unittest.TestCase):
         self.ex.turn["handoff_button"] = "保存"
 
     def test_a_press_is_seen_and_the_change_is_read_back(self):
-        self.arm_wait(event={"method": "PUT", "path": PREFIX + "update",
-                             "status": 200, "record_id": "7"})
+        seen_deadlines = []
+
+        def poll_event(*_a, **_kw):
+            seen_deadlines.append(getattr(self.ex.s.approvals, "handoff_wait_deadline", None))
+            return {"method": "PUT", "path": PREFIX + "update", "status": 200, "record_id": "7"}
+
+        self.arm_wait()
+        self.ex.native_submit.user_write_event = poll_event
         self.ex.native_submit.record = {**LOADED, "mobile": "13900000000"}
         note = self.ex._await_handoff_press(self.ex.s, self.ex.turn)
+        self.assertIsNotNone(seen_deadlines[0])
+        self.assertIsNone(self.ex.s.approvals.handoff_wait_deadline)
         self.assertIn("已接受", note)
         self.assertIn("mobile：13800000000→13900000000", note)
         kinds = [e for e, _ in self.ex.s.events]
@@ -984,6 +992,67 @@ class HandoffWaitTests(_Setup, unittest.TestCase):
         self.assertEqual(seen, [True])
         self.assertIn("已接受", note)
 
+    def test_edit_form_without_record_id_recognizes_update_and_reads_back(self):
+        seen_create = []
+
+        def event_fn(prefixes, record_id, mark, **kw):
+            seen_create.append(kw.get("create"))
+            if kw.get("create"):
+                return None
+            return {"method": "PUT", "path": PREFIX + "update", "status": 200, "record_id": "42", "accepted": True}
+
+        for target_spec in (
+            {"kind": "form", "mode": "update", "prefixes": [PREFIX], "record_id": ""},
+            {"kind": "form", "prefixes": [PREFIX], "record_id": ""},
+        ):
+            with self.subTest(target_spec=target_spec):
+                seen_create.clear()
+                self.ex.turn.pop("handoff_awaited", None)
+                self.ex.turn.pop("handoff_wait_outcome", None)
+                self.arm_wait(mark=0)
+                self.ex.native_submit.user_write_event = event_fn
+                self.ex.turn["submit_targets"][("dialog:编辑", "i1")] = dict(target_spec)
+                self.ex.turn["form_field_outcomes"] = {"applied_fields": {"手机": "13912345678"}}
+                self.ex.native_submit.record = {"id": 42, "name": "李四", "mobile": "13912345678"}
+                note = self.ex._await_handoff_press(self.ex.s, self.ex.turn)
+                self.assertEqual(seen_create, [False])
+                self.assertEqual(self.ex.turn.get("handoff_wait_outcome"), "verified")
+                self.assertIn("回读确认记录（编号 42）", note)
+                self.assertIn("mobile：13912345678", note)
+                self.assertNotIn("新记录", note)
+                self.assertNotIn("尚未落库", note)
+
+    def test_summarize_record_fields_uses_filled_fields_then_generic_scalars_without_hardcoded_names(self):
+        from web_operation_agent.execution.native_submit import _summarize_record_fields
+
+        record = {
+            "id": 9,
+            "updateTime": "2026-11-25",
+            "customAlpha": "alpha-val",
+            "customBeta": "beta-val",
+            "nestedObj": {"x": 1},
+            "mobile": "13800000000",
+        }
+        # 1. Exact API keys in expected_fields come first
+        self.assertEqual(
+            _summarize_record_fields(record, expected_fields={"customBeta": "beta-val"}, volatile_keys=("updateTime",)),
+            "customBeta：beta-val",
+        )
+        # 2. UI-label keys in expected_fields match scalar values in record
+        self.assertEqual(
+            _summarize_record_fields(record, expected_fields={"自定义标签": "alpha-val"}, volatile_keys=("updateTime",)),
+            "customAlpha：alpha-val",
+        )
+        # 3. Without filled fields, picks first non-empty scalar fields in record order (not mobile)
+        self.assertEqual(
+            _summarize_record_fields(
+                {"id": 9, "updateTime": "2026-11-25", "zCol": "", "alphaField": "v1", "betaField": 2, "mobile": "138"},
+                expected_fields=None,
+                volatile_keys=("updateTime",),
+            ),
+            "alphaField：v1、betaField：2、mobile：138",
+        )
+
     def test_build_post_handoff_watch_context_and_poll_readback_update_and_create(self):
         from web_operation_agent.execution.native_submit import _poll_post_handoff_readback
 
@@ -1020,6 +1089,103 @@ class HandoffWaitTests(_Setup, unittest.TestCase):
         res_fail = _poll_post_handoff_readback(ctx_create)
         self.assertFalse(res_fail["verified"])
         self.assertIn("回读记录未成功", res_fail["note"])
+
+    def test_rejected_write_reports_redacted_reason_without_claiming_persistence(self):
+        self.arm_wait(event={
+            "method": "PUT", "path": PREFIX + "update", "status": 400, "app_code": 400,
+            "record_id": "7", "accepted": False,
+            "error_msg": "保存失败\nBearer eyJhbGciOiJIUzI1NiJ9 password=secret123",
+        })
+        note = self.ex._await_handoff_press(self.ex.s, self.ex.turn)
+        self.assertEqual(self.ex.turn.get("handoff_wait_outcome"), "rejected")
+        self.assertIn("应用拒绝了这次保存", note)
+        self.assertIn("未保存落库", note)
+        self.assertNotIn("secret123", note)
+        self.assertIn("[redacted]", note)
+        last_kind, last_fields = self.ex.s.events[-1]
+        self.assertEqual(last_kind, "handoff_wait_result")
+        self.assertEqual(last_fields["result"], "rejected")
+
+    def test_readback_strips_volatile_keys_and_forwards_context_params(self):
+        seen_context = []
+
+        def read_with_context(prefixes, record_id, *, context_params=None):
+            seen_context.append(context_params)
+            return {**LOADED, "mobile": "13900000000", "updateTime": "2026-11-25 12:00:00"}
+
+        self.arm_wait(event={
+            "method": "PUT", "path": PREFIX + "update", "status": 200,
+            "record_id": "7", "accepted": True, "context": {"scopeId": "2"},
+        })
+        self.ex.turn["submit_targets"][("dialog:编辑", "i1")]["baseline"] = {
+            **LOADED, "updateTime": "2026-11-24 00:00:00",
+        }
+        self.ex.native_submit.read_record = read_with_context
+        note = self.ex._await_handoff_press(self.ex.s, self.ex.turn)
+        self.assertEqual(seen_context, [{"scopeId": "2"}])
+        self.assertEqual(self.ex.turn.get("handoff_wait_outcome"), "verified")
+        self.assertIn("mobile：13800000000→13900000000", note)
+        self.assertNotIn("updateTime", note)
+
+    def test_capture_form_baseline_handles_data_refused_cleanly(self):
+        from web_operation_agent.goal.data import DataRefused
+
+        def fail_read(*_a, **_kw):
+            raise DataRefused("missing context param")
+
+        self.ex.turn["form_baselines"].clear()
+        self.ex.native_submit.read_record = fail_read
+        self.ex.capture_form_baseline(self.ex.s, self.ex.turn, self.ex.s.obs.elements[0])
+        self.assertEqual(self.ex.s.events[-1][0], "native_submit_baseline")
+        self.assertEqual(self.ex.s.events[-1][1]["reason"], "record_unreadable")
+
+    def test_waiting_time_excluded_from_harness_wall_seconds_and_emits_human_wait(self):
+        import tempfile
+        import time as pytime
+        from pathlib import Path
+        from types import SimpleNamespace as SNS
+        from web_operation_agent.business.approvals import ApprovalWatch
+        from web_operation_agent.execution.events import TurnEvents
+        from web_operation_agent.execution.harness import TurnHarness
+        from web_operation_agent.execution.product import AgentTurnMessage
+        from web_operation_agent.state.ledger import SessionLedger
+
+        events_seen = []
+        collector = TurnEvents(events_seen.append)
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = SessionLedger(Path(tmp) / "ledger.jsonl", "r-wait")
+            approvals = ApprovalWatch(
+                ledger=ledger, run_id="r-wait", principal=None, session_id="s1",
+                turn_id="t1", cancelled=lambda: False, approval_hold_s=5,
+            )
+            harness = TurnHarness.detached()
+            harness.channel = SNS(session_id="s1", publish=lambda *a, **kw: None)
+            harness.config = SNS(max_user_answer_chars=4000)
+            harness.chat = SNS()
+            msg = AgentTurnMessage(message_id="t1", text="test", page_url="https://app.test/start")
+            s = SNS(
+                run_id="r-wait", chinese=True, started_at=pytime.time(), step=1,
+                page_actions=[], detail="", clarification=None, terminal_reason="",
+                stop_reason="", reason_category="", write_intent=False,
+                mutation_outcomes=[], source_answer="", source_complete=True,
+                writes=SNS(end_control=lambda: None), approvals=approvals,
+                cancelled=lambda: False, ledger=ledger,
+                budget=SNS(projection=lambda: {"terminal_reason": ""}),
+                message=msg,
+                receipt=SNS(report=lambda *_a: {"stages": {}, "model_calls": 0}),
+                first_route_kind="", tool_timings=[], model_calls=0,
+                obs=None, delivery_result=None, finish_table=None,
+                input_options=None, handoff_payload=None, handoff_facts=None,
+                delivered_list=None, answer_targets=(),
+            )
+            with collector.turn("t1"):
+                with approvals.awaiting_person():
+                    pytime.sleep(0.12)
+            exec_res = harness.settle(s, None, "ok", decision_strategy="test", verifies_finish=False)
+            self.assertGreaterEqual(approvals.waited_ms, 100)
+            self.assertLess(exec_res.agent.wall_seconds, 0.08)
+            self.assertTrue(any(e.get("kind") == "human_wait_begin" and e.get("source") == "human-channel" for e in events_seen))
+            self.assertTrue(any(e.get("kind") == "human_wait_end" and e.get("source") == "human-channel" for e in events_seen))
 
 
 class NativeSubmitIndeterminateAccountingTests(_Setup, unittest.TestCase):

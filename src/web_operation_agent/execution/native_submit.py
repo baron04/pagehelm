@@ -15,8 +15,10 @@ send what the form holds, is not submitted: the person is handed the filled form
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import replace
 from decimal import Decimal, InvalidOperation
+import inspect
 import re
 import time
 from typing import Protocol
@@ -25,6 +27,7 @@ from urllib.parse import urlsplit
 from .model_loop_contracts import LoopToolResult
 from .submit_contract import (ContractRefused, FormData, SubmitCard, SubmitPermit, build_card,
                               diff_models, digest, is_empty, same_value, strip_volatile, terminal_state)
+from ..goal.data import DataRefused
 from ..business.write_pipeline import (
     WritePipeline,
     check_append_preservation,
@@ -92,13 +95,14 @@ class SubmitPort(Protocol):
         return None
     def user_write_event(self, prefixes: tuple[str, ...], record_id: str, mark,
                          create: bool = False):
-        """The first accepted user-originated write under `prefixes` after `mark`, or None.
+        """The first observed user-originated write under `prefixes` after `mark`, or None.
 
         Observation only: the adapter says what accepted means and never holds or changes
-        the person's request. A body `id` matching `record_id` binds the write to the
-        handed-off target; an empty `record_id` with `create=True` accepts only a write
-        the adapter identifies as the create interface for the prefix, and the returned
-        dict then carries the new record's id in `record_id`.
+        the person's request. When `record_id` is present, a body or response `id` matching
+        it binds the write to that target. When `record_id` is empty and `create=True`
+        (form mode is known to be create), only create writes are accepted; with an empty
+        `record_id` and `create=False`, both create and update writes under `prefixes` are
+        accepted and the returned dict carries the observed target id in `record_id`.
         """
         return None
 
@@ -396,6 +400,10 @@ class NativeSubmitMixin:
         except ContractRefused as exc:
             baselines[key] = None
             s.ledger.append("native_submit_baseline", captured=False, reason=exc.code, detail=exc.detail[:80])
+        except DataRefused as exc:
+            baselines[key] = None
+            s.ledger.append("native_submit_baseline", captured=False, reason="record_unreadable",
+                            detail=str(exc)[:80])
 
     @staticmethod
     def _form_key(element):
@@ -521,65 +529,129 @@ class NativeSubmitMixin:
         contract_fn = getattr(port, "contract", None) if port is not None else None
         conventions = contract_fn() if callable(contract_fn) else None
         zone = conventions.epoch_zone if conventions is not None else None
+        volatile_keys = conventions.volatile_keys if conventions is not None else ()
         targets = turn.get("submit_targets") or {}
-        target = targets.get(turn.get("handoff_target_key")) or {}
+        hkey = turn.get("handoff_target_key")
+        target = targets.get(hkey) or {}
         marked = str(turn.get("handoff_button") or "")
         mark_fn = getattr(port, "user_write_mark", None)
         event_fn = getattr(port, "user_write_event", None)
-        if (port is None or not marked or not target.get("prefixes")
-                or not callable(mark_fn) or not callable(event_fn)):
+        if port is None or not marked or not callable(mark_fn) or not callable(event_fn):
             return ""
-        prefixes = tuple(target["prefixes"])
         record_id = str(target.get("record_id") or "")
-        create = target.get("mode") == "create" or (target.get("kind") == "form"
-                                                  and not record_id)
+        prefixes = tuple(target.get("prefixes") or ())
+        if not prefixes:
+            prefixes = _infer_handoff_prefixes(port, s, record_id)
+            if prefixes and hkey is not None:
+                if not isinstance(target, dict):
+                    target = {}
+                target = dict(target)
+                target["prefixes"] = prefixes
+                target.setdefault("record_id", record_id)
+                turn.setdefault("submit_targets", {})[hkey] = target
+        if not prefixes:
+            return ""
+        create = target.get("mode") == "create"
         mark = turn.get("handoff_mark")
         if mark is None:
             mark = mark_fn()
         if mark is None:
             return ""           # without a position, observed history cannot be bounded
-        deadline = time.monotonic() + max(1.0, s.approvals.approval_hold_ms / 1000)
+        turn["handoff_awaited"] = True
+        approvals = getattr(s, "approvals", None)
+        hold_ms = getattr(approvals, "approval_hold_ms", 0) if approvals is not None else 0
+        awaiting_fn = getattr(approvals, "awaiting_person", None) if approvals is not None else None
+        cancelled_fn = getattr(s, "cancelled", None)
+        if not callable(cancelled_fn):
+            cancelled_fn = lambda: False
+        deadline = time.monotonic() + max(1.0, float(hold_ms or 0) / 1000)
         s.ledger.append("handoff_wait", step=s.step, marked=marked[:80],
                         kind=str(target.get("kind") or ""), record_id=record_id[:80],
                         prefixes=list(prefixes)[:4], dispatched=False, side_effect_possible=False)
+        note_fn = getattr(self, "_note", None)
+        if callable(note_fn):
+            note_fn(s, stage="awaiting_handoff", label=marked)
         event = None
-        with s.approvals.awaiting_person():
-            while event is None and not s.cancelled():
-                event = event_fn(prefixes, record_id, mark, create=create)
-                if event is None:
-                    left = deadline - time.monotonic()
-                    if left <= 0:
-                        break
-                    time.sleep(min(0.3, left))
-        if s.cancelled():
+        wait_cm = awaiting_fn() if callable(awaiting_fn) else nullcontext()
+        if approvals is not None:
+            approvals.handoff_wait_deadline = deadline
+        try:
+            with wait_cm:
+                while event is None and not cancelled_fn():
+                    event = event_fn(prefixes, record_id, mark, create=create)
+                    if event is None:
+                        left = deadline - time.monotonic()
+                        if left <= 0:
+                            break
+                        time.sleep(min(0.3, left))
+        finally:
+            if approvals is not None:
+                approvals.handoff_wait_deadline = None
+        if cancelled_fn():
             return ""
         if event is None:
+            turn["handoff_wait_outcome"] = "no_press"
             s.ledger.append("handoff_wait_result", step=s.step, result="no_press",
                             dispatched=False, side_effect_possible=False)
-            return (f"已标出「{marked}」，等待时间内没有看到你点击它；表单未提交，"
+            return (f"已标出「{marked}」，等待时间内没有看到你点击它；表单未提交、尚未落库，"
                     "仍可自己核对后点击。")
+        if event.get("accepted") is False:
+            reason = _sanitize_refusal_reason(event.get("error_msg"))
+            status = int(event.get("status") or 0)
+            app_code = event.get("app_code")
+            turn["handoff_wait_outcome"] = "rejected"
+            s.ledger.append("handoff_wait_result", step=s.step, result="rejected",
+                            method=str(event.get("method") or ""), path=str(event.get("path") or "")[:200],
+                            status=status,
+                            **({"app_code": app_code} if isinstance(app_code, int) else {}),
+                            dispatched=False, side_effect_possible=False)
+            if reason:
+                return f"已看到你点击「{marked}」，但应用拒绝了这次保存，记录未保存落库，请调整后重试。拒绝原因：{reason}"
+            detail = f"错误码 {app_code}" if isinstance(app_code, int) else f"状态码 {status}"
+            return f"已看到你点击「{marked}」，但应用拒绝了这次保存（{detail}），记录未保存落库，请核对后重试。"
+        eff_prefixes = (event["prefix"],) if event.get("prefix") else prefixes
+        new_id = str(event.get("record_id") or record_id)
+        record = None
+        readback_error = ""
+        if new_id:
+            try:
+                record = _call_read_record(port, eff_prefixes, new_id, event.get("context"))
+            except Exception as exc:  # noqa: BLE001 -- readback failure is reported, not hidden
+                readback_error = type(exc).__name__
+        if record is None or not isinstance(record, dict):
+            turn["handoff_wait_outcome"] = "readback_failed"
+            s.ledger.append("handoff_wait_result", step=s.step, result="pressed",
+                            method=str(event.get("method") or ""), path=str(event.get("path") or "")[:200],
+                            status=int(event.get("status") or 0),
+                            record_id=new_id[:80], readback_verified=False,
+                            **({"error_type": readback_error} if readback_error else {}),
+                            dispatched=False, side_effect_possible=False)
+            return (f"已看到你点击「{marked}」，应用已接受这次写入；"
+                    "但按同一账号回读记录没有成功，无法确认落库内容，请到应用里核对结果。")
+        changes = _readback_changes(target.get("baseline"), record, zone=zone, volatile_keys=volatile_keys)
+        turn["handoff_wait_outcome"] = "verified"
         s.ledger.append("handoff_wait_result", step=s.step, result="pressed",
                         method=str(event.get("method") or ""), path=str(event.get("path") or "")[:200],
                         status=int(event.get("status") or 0),
+                        record_id=new_id[:80], readback_verified=True,
+                        changes=changes[:8],
                         dispatched=False, side_effect_possible=False)
-        new_id = str(event.get("record_id") or record_id)
-        record = None
-        if new_id:
-            try:
-                record = port.read_record(prefixes, new_id)
-            except Exception as exc:  # noqa: BLE001 -- readback failure is reported, not hidden
-                s.ledger.append("handoff_readback_failed", step=s.step,
-                                error_type=type(exc).__name__,
-                                dispatched=False, side_effect_possible=False)
-        if record is None:
-            return (f"已看到你点击「{marked}」，应用已接受这次写入；"
-                    "但按同一账号回读记录没有成功，请到应用里核对结果。")
-        changes = _readback_changes(target.get("baseline"), record, zone=zone)
         if changes:
             return (f"已看到你点击「{marked}」，应用已接受写入；同一账号回读核对到变化："
                     + "、".join(changes) + "。")
+        expected_fields = _handoff_expected_fields(turn)
+        summary = _summarize_record_fields(
+            record, expected_fields=expected_fields, volatile_keys=volatile_keys, zone=zone
+        )
+        event_leaf = str(event.get("path") or "").split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+        is_create = create or event_leaf == "create"
+        if not record_id and new_id and is_create:
+            return (f"已看到你点击「{marked}」，应用已接受写入，回读到新记录（编号 {new_id}）"
+                    + (f"：{summary}。" if summary else "。"))
+        if target.get("baseline") is None and summary:
+            return f"已看到你点击「{marked}」，应用已接受写入；同一账号回读确认记录（编号 {new_id}）：{summary}。"
         if not record_id and new_id:
-            return f"已看到你点击「{marked}」，应用已接受写入，回读到新记录（编号 {new_id}）。"
+            return f"已看到你点击「{marked}」，应用已接受写入；同一账号回读确认记录（编号 {new_id}）。"
         return f"已看到你点击「{marked}」，应用已接受写入；同一账号回读未发现待核对的变化。"
 
     def _build_post_handoff_watch_context(self, s, turn) -> dict | None:
@@ -599,13 +671,7 @@ class NativeSubmitMixin:
         record_id = str(target.get("record_id") or "")
         prefixes = tuple(target.get("prefixes") or ())
         if not prefixes:
-            recent_fn = getattr(port, "recent_reads", None)
-            prefixes_fn = getattr(port, "prefixes", None)
-            if callable(recent_fn) and callable(prefixes_fn):
-                reads = recent_fn() or ()
-                inferred = tuple(prefixes_fn(reads, mode=("update" if record_id else "create"), record_id=record_id) or ())
-                if len(inferred) == 1:
-                    prefixes = inferred
+            prefixes = _infer_handoff_prefixes(port, s, record_id)
         if not prefixes:
             return None
         mark = turn.get("handoff_mark")
@@ -616,8 +682,9 @@ class NativeSubmitMixin:
         contract_fn = getattr(port, "contract", None)
         conventions = contract_fn() if callable(contract_fn) else None
         zone = conventions.epoch_zone if conventions is not None else None
-        create = target.get("mode") == "create" or (target.get("kind") == "form" and not record_id) or (not record_id)
-        expected_fields = dict(((turn.get("form_field_outcomes") or turn.get("field_outcomes") or {}).get("applied_fields")) or {})
+        volatile_keys = conventions.volatile_keys if conventions is not None else ()
+        create = target.get("mode") == "create"
+        expected_fields = _handoff_expected_fields(turn)
         return {
             "port": port,
             "prefixes": prefixes,
@@ -628,6 +695,7 @@ class NativeSubmitMixin:
             "baseline": target.get("baseline"),
             "expected_fields": expected_fields,
             "zone": zone,
+            "volatile_keys": volatile_keys,
             "ledger": s.ledger,
             "step": s.step,
         }
@@ -1205,13 +1273,137 @@ class NativeSubmitMixin:
         return (True if checked else None), notes
 
 
-def _readback_changes(baseline, record, *, zone=None) -> list:
+def _obs_read_source(s) -> str:
+    obs = getattr(s, "obs", None)
+    if obs is None:
+        return ""
+    for attr in ("page_read", "page_query"):
+        meta = getattr(obs, attr, None)
+        if isinstance(meta, dict):
+            path = str(meta.get("path") or "").strip()
+            if path:
+                return path
+    return ""
+
+
+def _infer_handoff_prefixes(port, s, record_id: str) -> tuple[str, ...]:
+    recent_fn = getattr(port, "recent_reads", None)
+    prefixes_fn = getattr(port, "prefixes", None)
+    if not callable(recent_fn) or not callable(prefixes_fn):
+        return ()
+    reads = recent_fn() or ()
+    if not reads:
+        return ()
+    modes = ("update",) if record_id else ("create", "any")
+    source = _obs_read_source(s)
+    attempts = [source, ""] if source else [""]
+    for mode in modes:
+        for src in attempts:
+            try:
+                if src:
+                    found = tuple(prefixes_fn(reads, mode=mode, record_id=record_id, source=src) or ())
+                else:
+                    found = tuple(prefixes_fn(reads, mode=mode, record_id=record_id) or ())
+            except TypeError:
+                found = tuple(prefixes_fn(reads, mode=mode, record_id=record_id) or ())
+            except ValueError:
+                found = ()
+            if len(found) == 1:
+                return found
+    return ()
+
+
+def _call_read_record(port, prefixes, record_id: str, context_params: dict | None = None):
+    read_fn = getattr(port, "read_record", None)
+    if not callable(read_fn):
+        return None
+    if isinstance(context_params, dict) and context_params:
+        try:
+            params = inspect.signature(read_fn).parameters
+            if "context_params" in params or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+            ):
+                return read_fn(prefixes, record_id, context_params=context_params)
+        except (TypeError, ValueError):
+            pass
+    return read_fn(prefixes, record_id)
+
+
+def _sanitize_refusal_reason(raw) -> str:
+    if not isinstance(raw, str) or not raw.strip():
+        return ""
+    redacted = str(redact_session_handoffs(redact_sensitive_assignments(raw)))
+    cleaned = "".join(" " if ch in "\r\n\t" else ch for ch in redacted if ch in "\r\n\t" or ord(ch) >= 32)
+    cleaned = " ".join(cleaned.split())
+    return cleaned[:200]
+
+
+def _handoff_expected_fields(turn: dict) -> dict:
+    for container_key in ("form_field_outcomes", "field_outcomes"):
+        container = turn.get(container_key)
+        if isinstance(container, dict) and isinstance(container.get("applied_fields"), dict):
+            return dict(container["applied_fields"])
+    applied = turn.get("applied_fields")
+    return dict(applied) if isinstance(applied, dict) else {}
+
+
+def _summarize_record_field_items(
+    record: dict, *, expected_fields=None, volatile_keys=(), zone=None
+) -> list[str]:
+    if not isinstance(record, dict):
+        return []
+    volatile = frozenset(volatile_keys or ())
+    parts: list[str] = []
+    used_keys: set[str] = set()
+    if isinstance(expected_fields, dict) and expected_fields:
+        unmatched: list = []
+        for k, filled_val in expected_fields.items():
+            if len(parts) >= 6:
+                break
+            if (isinstance(k, str) and k in record and k not in volatile and not k.startswith("_")
+                    and not isinstance(record.get(k), (dict, list)) and not is_empty(record.get(k))):
+                parts.append(f"{k}：{record.get(k)}")
+                used_keys.add(k)
+            else:
+                unmatched.append(filled_val)
+        for filled_val in unmatched:
+            if len(parts) >= 6:
+                break
+            if isinstance(filled_val, (bool, dict, list)) or is_empty(filled_val):
+                continue
+            for rk, rv in record.items():
+                if (not isinstance(rk, str) or rk.startswith("_") or rk in volatile
+                        or rk == "id" or rk in used_keys or isinstance(rv, (dict, list)) or is_empty(rv)):
+                    continue
+                if same_value(rv, filled_val, zone=zone):
+                    parts.append(f"{rk}：{rv}")
+                    used_keys.add(rk)
+                    break
+    if not parts:
+        for k, v in record.items():
+            if (not isinstance(k, str) or k.startswith("_") or k in volatile
+                    or k == "id" or isinstance(v, (dict, list)) or is_empty(v)):
+                continue
+            parts.append(f"{k}：{v}")
+            if len(parts) >= 4:
+                break
+    return parts
+
+
+def _summarize_record_fields(record: dict, *, expected_fields=None, volatile_keys=(), zone=None) -> str:
+    return "、".join(
+        _summarize_record_field_items(record, expected_fields=expected_fields, volatile_keys=volatile_keys, zone=zone)
+    )
+
+
+def _readback_changes(baseline, record, *, zone=None, volatile_keys=()) -> list:
     """"label：before→after" pairs between the baseline and the same-actor readback."""
     if not isinstance(baseline, dict) or not isinstance(record, dict):
         return []
+    volatile = frozenset(volatile_keys or ())
     out = []
     for key, after in record.items():
-        if not isinstance(key, str) or key.startswith("_"):
+        if not isinstance(key, str) or key.startswith("_") or key in volatile:
             continue
         before = baseline.get(key)
         if same_value(before, after, zone=zone) or (is_empty(before) and is_empty(after)):
@@ -1224,8 +1416,6 @@ def _readback_changes(baseline, record, *, zone=None) -> list:
 
 def _poll_post_handoff_readback(ctx: dict) -> dict | None:
     """Check once whether the user saved a handed-off form and read back under the same actor."""
-    import inspect
-
     port = ctx["port"]
     event_fn = getattr(port, "user_write_event", None)
     if not callable(event_fn):
@@ -1243,6 +1433,30 @@ def _poll_post_handoff_readback(ctx: dict) -> dict | None:
     marked = ctx["marked"]
     ledger = ctx["ledger"]
     step = ctx["step"]
+    if event.get("accepted") is False:
+        reason = _sanitize_refusal_reason(event.get("error_msg"))
+        status = int(event.get("status") or 0)
+        app_code = event.get("app_code")
+        ledger.append(
+            "handoff_wait_result",
+            step=step,
+            result="rejected",
+            method=str(event.get("method") or ""),
+            path=str(event.get("path") or "")[:200],
+            status=status,
+            **({"app_code": app_code} if isinstance(app_code, int) else {}),
+            dispatched=False,
+            side_effect_possible=False,
+        )
+        detail = reason or (f"错误码 {app_code}" if isinstance(app_code, int) else f"状态码 {status}")
+        return {
+            "record_id": str(event.get("record_id") or ctx.get("record_id") or ""),
+            "verified": False,
+            "rejected": True,
+            "changes": [],
+            "note": f"已看到你点击「{marked}」，但应用拒绝了这次保存，记录未保存落库，请调整后重试。拒绝原因：{detail}",
+            "marked": marked,
+        }
     ledger.append(
         "handoff_wait_result",
         step=step,
@@ -1259,7 +1473,7 @@ def _poll_post_handoff_readback(ctx: dict) -> dict | None:
     readback_error = ""
     if new_id and callable(getattr(port, "read_record", None)):
         try:
-            record = port.read_record(eff_prefixes, new_id)
+            record = _call_read_record(port, eff_prefixes, new_id, event.get("context"))
         except Exception as exc:  # noqa: BLE001 -- readback failure is recorded and surfaced honestly
             readback_error = type(exc).__name__
             ledger.append(
@@ -1269,18 +1483,20 @@ def _poll_post_handoff_readback(ctx: dict) -> dict | None:
                 dispatched=False,
                 side_effect_possible=False,
             )
-    changes = _readback_changes(ctx.get("baseline"), record, zone=ctx.get("zone")) if record is not None else []
+    volatile_keys = ctx.get("volatile_keys") or ()
+    changes = (
+        _readback_changes(ctx.get("baseline"), record, zone=ctx.get("zone"), volatile_keys=volatile_keys)
+        if record is not None
+        else []
+    )
     verified = isinstance(record, dict) and bool(new_id)
     if not bool(str(ctx.get("record_id") or "").strip()) and new_id and isinstance(record, dict) and not changes:
-        created_parts = []
-        for k, v in list((ctx.get("expected_fields") or {}).items())[:6]:
-            if k in record:
-                created_parts.append(f"{k}：{record.get(k)}")
-        if not created_parts:
-            for k in ("name", "title", "code"):
-                if record.get(k) not in (None, ""):
-                    created_parts.append(f"{k}：{record.get(k)}")
-        changes = created_parts
+        changes = _summarize_record_field_items(
+            record,
+            expected_fields=ctx.get("expected_fields"),
+            volatile_keys=volatile_keys,
+            zone=ctx.get("zone"),
+        )
     ledger.append(
         "handoff_post_save_readback",
         step=step,

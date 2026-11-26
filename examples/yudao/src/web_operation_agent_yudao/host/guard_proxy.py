@@ -17,8 +17,10 @@ import re
 import secrets
 import threading
 import time
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 import urllib.request
+
+from web_operation_agent.privacy import redact_sensitive_assignments, redact_session_handoffs
 
 from .page_guard import GuardRefused, NativePageGuard, WINDOW_KEY
 
@@ -251,12 +253,24 @@ class NativeGuardProxy:
                         except GuardRefused:
                             pass          # a full actor table must not stop the person's own read
                     status, payload = self.upstream_request(body)
-                    if actor is not None and self.command != "GET" \
-                            and _accepted_user_write(status, payload):
+                    if actor is not None and self.command in {"POST", "PUT", "PATCH", "DELETE"}:
+                        accepted = _accepted_user_write(status, payload)
+                        app_code, error_msg = _user_write_error(status, payload)
                         wanted, created = _write_ids(body, payload, self.path)
+                        context = _write_context(body, self.path)
                         try:
-                            proxy.guard.note_user_write(actor, self.command, self.path,
-                                                        wanted, created)
+                            proxy.guard.note_user_write(
+                                actor,
+                                self.command,
+                                self.path,
+                                wanted,
+                                created,
+                                status=status,
+                                accepted=accepted,
+                                app_code=app_code,
+                                error_msg=error_msg,
+                                context=context,
+                            )
                         except GuardRefused:
                             pass          # a full actor table must not drop the person's own write
                 else:
@@ -356,3 +370,71 @@ def _write_ids(request_body, payload, request_path) -> tuple[str, str]:
             and not isinstance(data.get("id"), bool):
         created = str(data["id"])
     return wanted, created
+
+
+_CONTEXT_KEY = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}")
+_SECRET_CONTEXT_KEY = re.compile(
+    r"(?:pass|secret|token|key|auth|cookie|credential|salt|sign)", re.IGNORECASE
+)
+
+
+def _user_write_error(status: int, payload: bytes) -> tuple[int | None, str]:
+    """(app_code, sanitized_error_msg) for a rejected user write, else (None, '')."""
+    if _accepted_user_write(status, payload):
+        return None, ""
+    app_code: int | None = None
+    raw_msg = ""
+    if payload:
+        try:
+            answer = json.loads(payload)
+        except (ValueError, UnicodeDecodeError):
+            answer = None
+        if isinstance(answer, dict):
+            code = answer.get("code")
+            if isinstance(code, int) and not isinstance(code, bool):
+                app_code = code
+            for field in ("msg", "message", "error", "detail"):
+                val = answer.get(field)
+                if isinstance(val, str) and val.strip():
+                    raw_msg = val
+                    break
+    if not raw_msg:
+        return app_code, ""
+    redacted = str(redact_session_handoffs(redact_sensitive_assignments(raw_msg)))
+    cleaned = "".join(" " if ch in "\r\n\t" else ch for ch in redacted if ch in "\r\n\t" or ord(ch) >= 32)
+    cleaned = " ".join(cleaned.split())
+    return app_code, cleaned[:200]
+
+
+def _write_context(request_body: bytes, request_path: str) -> dict[str, str]:
+    """Bounded non-secret scalar context parameters from a write request's query/body."""
+    context: dict[str, str] = {}
+    excluded = {"id", "pageNo", "pageSize"}
+
+    def _keep(key: str, value) -> None:
+        if len(context) >= 8 or not isinstance(key, str) or key in excluded:
+            return
+        if not _CONTEXT_KEY.fullmatch(key) or _SECRET_CONTEXT_KEY.search(key):
+            return
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            return
+        text = str(value).strip()
+        if not text or len(text) > 80:
+            return
+        context[key] = text
+
+    query = urlsplit(request_path).query
+    if query:
+        for key, value in parse_qsl(query, keep_blank_values=False):
+            _keep(key, value)
+    if request_body:
+        try:
+            body = json.loads(request_body)
+        except (ValueError, UnicodeDecodeError):
+            body = None
+        if isinstance(body, dict):
+            for key, value in body.items():
+                if isinstance(key, str) and (key.endswith("Id") or key.endswith("_id")):
+                    if key not in context:
+                        _keep(key, value)
+    return context
