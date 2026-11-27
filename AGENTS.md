@@ -4,9 +4,10 @@ Applies throughout this repository.
 
 ## Working rules
 
-- Read `README.md` once, then only relevant docs/code/tests. Use `rg`; exclude caches, generated output, runs and worktrees unless relevant. Reuse context; code and passing tests resolve prose drift.
+- Skip `README.md` when the task or brief already names target files/scope; otherwise read it once, then only relevant docs/code/tests. Use `rg`; exclude caches, generated output, runs and worktrees unless relevant. Reuse context; code and passing tests resolve prose drift.
 - Preserve the owner's reasoning, context and compaction settings. Default to one agent; delegate only when authorized for bounded independent work. Retain protocol-required independent authoring/review.
-- Keep large outputs in temporary logs; never hide errors or claim unread checks passed. Hand over commit, changes, checks/skips, constraints and next action briefly; do not add reviews without new risk/change.
+- Every later turn re-reads the whole context, so keep it lean: send verbose output to a log and print only counts, failures and tails; read large files and saved tool output by section (`rg -n`, then a line range), and do not re-read unchanged or just-edited files; batch independent commands into one call; wait for long jobs through a background run or one blocking wait, not repeated status checks; save repeated analysis as a script and rerun it. Never hide errors or claim unread checks passed.
+- Hand over commit, changes, checks/skips, constraints and next action briefly; do not add reviews without new risk/change.
 - Keep both READMEs aligned and limited to overview. Public behavior belongs in synchronized English and Chinese `docs/` pages (`docs/` and `docs/zh-cn/`); internal plans/research/reviews belong in ignored `.workbench/`, never product Git/public links. It has separate instructions, Git and commit authorization. Preserve frozen protocols/artifacts and original verdicts; label hypotheses and avoid generalizing fixture results.
 
 ## Task entry points
@@ -35,9 +36,11 @@ Use Python 3.13 and select checks from the actual diff:
 ```bash
 .venv/bin/python scripts/check.py --plan
 .venv/bin/python scripts/check.py
+# After changing frontend source or switching worktrees:
+.venv/bin/python scripts/build_panel.py && .venv/bin/python scripts/build_runtime.py --skip-build
 ```
 
-- For code/config changes read [development checks](docs/integration/quickstart.md#5-development-checks) ([简体中文](docs/zh-cn/integration/quickstart.md#五开发检查)). Finish selected checks and focused regressions before handoff. Docs/config-only changes require syntax, links and relevant invariants. Reuse passed checks only while relevant code/inputs/environment remain unchanged; repairs rerun affected checks. Skips are not integration evidence.
+- Read [development checks](docs/integration/quickstart.md#5-development-checks) ([简体中文](docs/zh-cn/integration/quickstart.md#五开发检查)) only if you need check/env details beyond the commands above. Finish selected checks and focused regressions before handoff. Docs/config-only changes require syntax, links and relevant invariants. Reuse passed checks only while relevant code/inputs/environment remain unchanged; repairs rerun affected checks. Skips are not integration evidence.
 - Merge checks: `--profile ci --base <ref>`; packaging/dependencies require `bash scripts/check_wheels.sh`; browser changes require the relevant integration lane. Full `scripts/qualify.sh --require-browser` only for explicit full qualification or release candidates. Never drop acceptance, independent review or safety regressions to save tokens, or duplicate encompassing/subset suites.
 - Tests must not call paid models or alter the real spend ledger. Intentional model evaluations need no approval, spend cap or cost stop; report provider/model, calls, tokens and ledger reference cost. Preserve failures/unknowns/verdicts; repeat frozen acceptance only for changed inputs or an explicit stability question.
 - Inspect status and every changed hunk; preserve unrelated work and update affected tests/docs. No published-history rewrites, push, release, remote creation or upstream submission without explicit owner authorization.
