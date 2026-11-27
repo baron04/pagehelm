@@ -1,5 +1,6 @@
 ---
 import StarlightHero from '@astrojs/starlight/components/Hero.astro';
+import avatar from '../assets/assistant-avatar.webp';
 
 const { starlightRoute } = Astro.locals;
 const entry = starlightRoute.entry;
@@ -17,47 +18,39 @@ const copy = isZh
       eyebrow: 'Alpha · Python 3.13 + TypeScript',
       title: 'PageHelm',
       lead:
-        '嵌入第一方 Web 应用的 AI 操作框架。服务端负责模型规划、权限边界与审计，浏览器负责同源页面观测、交互与可见审批。',
+        '面向第一方 Web 应用的页面操作 AI Agent。服务端负责模型规划、权限边界与审计，浏览器负责同源页面观测、交互与可见审批。',
       ctaPrimary: '运行本地示例',
       ctaSecondary: '查看架构与边界',
-      diagramTitle: '三层信任边界',
-      layers: [
-        {
-          role: '浏览器 Runtime',
-          detail: '同源挂载面板，上报页面快照与动作回执；不持有模型密钥或规划逻辑。',
-        },
-        {
-          role: '服务端核心',
-          detail: '应用无关的决策循环、权限开关、单次审批管道与 SQLite 审计账本。',
-        },
-        {
-          role: '业务适配器',
-          detail: '绑定登录身份、站内路由、同账号只读查询与经核验的写入操作。',
-        },
-      ],
+      greet: {
+        label: 'PageHelm 助手面板预览',
+        intro: '你好，我是 PageHelm',
+        title: '有什么可以帮你？',
+        detail: '可以帮你查数据、操作页面，或替你编辑数据。',
+        examples: [
+          { kind: 'query', label: '查询数据', text: '「CRM 联系人一共有多少个？」' },
+          { kind: 'operate', label: '页面操作', text: '「打开合同管理页面」' },
+          { kind: 'edit', label: '编辑数据', text: '「新建一个 CRM 客户，名称叫星辰科技」' },
+        ],
+      },
     }
   : {
       eyebrow: 'Alpha · Python 3.13 + TypeScript',
       title: 'PageHelm',
       lead:
-        'An embedded AI operations framework for first-party web applications. The server owns planning, policy, and audit state; the browser handles same-origin observation, UI actions, and visible write approvals.',
+        'An AI agent for operating first-party web applications. The server owns planning, policy, and audit state; the browser handles same-origin observation, UI actions, and visible write approvals.',
       ctaPrimary: 'Run local demo',
       ctaSecondary: 'Architecture & boundaries',
-      diagramTitle: 'Three-Layer Trust Boundary',
-      layers: [
-        {
-          role: 'Browser Runtime',
-          detail: 'Mounts the same-origin panel and sends page observations and action receipts; holds no model keys or plans.',
-        },
-        {
-          role: 'Application-Neutral Server',
-          detail: 'Owns the turn loop, safety mode policy, single-consume write pipeline, and SQLite audit journals.',
-        },
-        {
-          role: 'Application Adapter',
-          detail: 'Binds actor identity, allowed routes, same-actor read tools, and postcondition-verified writes.',
-        },
-      ],
+      greet: {
+        label: 'PageHelm assistant panel preview',
+        intro: "Hi, I'm PageHelm",
+        title: 'How can I help?',
+        detail: 'I can look up data, work the page, or edit records for you.',
+        examples: [
+          { kind: 'query', label: 'Query data', text: '“How many CRM contacts are there?”' },
+          { kind: 'operate', label: 'Page action', text: '“Open the contract management page”' },
+          { kind: 'edit', label: 'Edit data', text: '“Create a CRM customer named Xingchen Tech”' },
+        ],
+      },
     };
 ---
 
@@ -77,19 +70,21 @@ const copy = isZh
       </div>
     </div>
 
-    <aside class="ph-boundary-card" aria-label={copy.diagramTitle}>
-      <div class="ph-boundary-head">{copy.diagramTitle}</div>
-      <ol class="ph-boundary-list">
-        {copy.layers.map((layer, index) => (
-          <li class="ph-boundary-item">
-            <span class="ph-boundary-index">0{index + 1}</span>
-            <div>
-              <strong>{layer.role}</strong>
-              <p>{layer.detail}</p>
-            </div>
+    <aside class="ph-greet" aria-label={copy.greet.label}>
+      <div class="ph-greet-top">
+        <img class="ph-greet-avatar" src={avatar.src} width="88" height="88" alt="" />
+        <span class="ph-greet-bubble">{copy.greet.intro}</span>
+      </div>
+      <p class="ph-greet-title">{copy.greet.title}</p>
+      <p class="ph-greet-detail">{copy.greet.detail}</p>
+      <ul class="ph-greet-examples">
+        {copy.greet.examples.map((example) => (
+          <li class="ph-greet-example" data-kind={example.kind}>
+            <span class="ph-greet-badge">{example.label}</span>
+            <span class="ph-greet-text">{example.text}</span>
           </li>
         ))}
-      </ol>
+      </ul>
     </aside>
   </section>
 ) : (
