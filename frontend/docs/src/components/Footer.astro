@@ -2,12 +2,27 @@
 import StarlightFooter from '@astrojs/starlight/components/Footer.astro';
 
 const { starlightRoute } = Astro.locals;
+const isSplash = starlightRoute.entry?.data?.template === 'splash';
 const isZh = (starlightRoute.lang || '').toLowerCase().startsWith('zh');
 const rawBase = import.meta.env.BASE_URL || '/';
 const basePrefix = rawBase === '/' ? '' : rawBase.replace(/\/+$/, '');
-const llmsHref = `${basePrefix}/llms.txt`.replace(/\/{2,}/g, '/');
+const routePath = (rel: string) =>
+  `${basePrefix}/${rel.replace(/^\/+/, '')}`.replace(/\/{2,}/g, '/');
+const llmsHref = routePath('llms.txt');
+const nextHref = routePath(`${isZh ? 'zh-cn/' : ''}integration/quickstart/`);
 ---
 
+{isSplash && (
+  <nav class="ph-splash-next" aria-label={isZh ? '继续阅读' : 'Continue reading'}>
+    <a class="ph-next-card" href={nextHref}>
+      <span class="ph-next-label">{isZh ? '下一步' : 'Next'}</span>
+      <span class="ph-next-title">
+        {isZh ? '本地示例上手' : 'Local Demo Quickstart'}
+        <span aria-hidden="true">→</span>
+      </span>
+    </a>
+  </nav>
+)}
 <StarlightFooter />
 <div class="ph-footer-meta">
   <span>
@@ -15,5 +30,9 @@ const llmsHref = `${basePrefix}/llms.txt`.replace(/\/{2,}/g, '/');
       ? 'PageHelm（Alpha）· 仅限隔离合成环境评估'
       : 'PageHelm (Alpha) · Isolated synthetic evaluation only'}
   </span>
-  <a href={llmsHref}>llms.txt</a>
+  <span>
+    <a href="https://github.com/baron04/pagehelm" rel="noopener noreferrer" target="_blank">GitHub</a>
+    {' · '}
+    <a href={llmsHref}>llms.txt</a>
+  </span>
 </div>

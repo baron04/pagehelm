@@ -439,6 +439,46 @@ header.header starlight-lang-select select option {
   background: #eef2ff;
 }
 
+/* Splash landing next-step navigation */
+.ph-splash-next {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 2.5rem;
+}
+
+.ph-next-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.2rem;
+  min-width: min(100%, 16rem);
+  padding: 0.9rem 1.2rem;
+  border-radius: 0.7rem;
+  border: 1px solid var(--ph-border);
+  background: var(--ph-surface-raised);
+  text-decoration: none;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.ph-next-card:hover {
+  border-color: var(--sl-color-accent);
+  background: var(--ph-surface);
+}
+
+.ph-next-label {
+  font-size: 0.78rem;
+  color: var(--ph-ink-muted);
+}
+
+.ph-next-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 1.05rem;
+  font-weight: 650;
+  color: var(--ph-ink-strong);
+}
+
 /* Footer meta */
 .ph-footer-meta {
   display: flex;

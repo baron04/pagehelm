@@ -3,6 +3,7 @@ import config from 'virtual:starlight/user-config';
 import LanguageSelect from 'virtual:starlight/components/LanguageSelect';
 import Search from 'virtual:starlight/components/Search';
 import SiteTitle from 'virtual:starlight/components/SiteTitle';
+import SocialIcons from 'virtual:starlight/components/SocialIcons';
 import ThemeSelect from 'virtual:starlight/components/ThemeSelect';
 
 const { starlightRoute } = Astro.locals;
@@ -60,6 +61,9 @@ const shouldRenderSearch =
   </div>
   <div class="sl-flex print:hidden">{shouldRenderSearch && <Search />}</div>
   <div class="sl-hidden md:sl-flex print:hidden right-group">
+    <div class="sl-flex social-icons">
+      <SocialIcons />
+    </div>
     <ThemeSelect />
     <LanguageSelect />
   </div>

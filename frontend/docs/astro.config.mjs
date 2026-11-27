@@ -71,6 +71,9 @@ export default defineConfig({
         src: './src/assets/logo.svg',
         alt: 'PageHelm',
       },
+      social: [
+        { icon: 'github', label: 'GitHub', href: 'https://github.com/baron04/pagehelm' },
+      ],
       head: [
         {
           tag: 'link',
