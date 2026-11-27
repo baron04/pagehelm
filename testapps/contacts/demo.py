@@ -418,10 +418,15 @@ def _run_browser(config: DemoConfig, live: LiveProductSession,
                         # the Runtime learns of it over its own stream a moment later.
                         # Submitting the next task on the server's word alone raced that
                         # moment and the Runtime refused: "another task is still running".
+                        # Resolve the promise first, then poll synchronously: an async
+                        # predicate in wait_for_function returns a truthy Promise at once.
+                        page.evaluate(
+                            "async () => { window.__woaDemoRuntime = await "
+                            "window.__WOA_RUNTIME_READY__; }")
                         page.wait_for_function(
-                            "async () => { const runtime = await "
-                            "window.__WOA_RUNTIME_READY__; return "
-                            "!runtime.stored.taskInFlight && !runtime.stored.inFlight }",
+                            "() => Boolean(window.__woaDemoRuntime) "
+                            "&& !window.__woaDemoRuntime.stored.taskInFlight "
+                            "&& !window.__woaDemoRuntime.stored.inFlight",
                             timeout=30_000)
                         page.evaluate(
                             "task => window.__WOA_RUNTIME_READY__.then(runtime => "

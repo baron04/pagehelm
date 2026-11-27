@@ -1,6 +1,7 @@
 import {afterAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {createHash} from 'node:crypto'
 import {execFileSync} from 'node:child_process'
+import {existsSync} from 'node:fs'
 import {resolve} from 'node:path'
 import {tryOpenAnswerInPlace} from '../src/runtime/answerNavigation'
 import {Page, type PageControllerApi} from '../src/runtime/page'
@@ -1436,8 +1437,10 @@ describe('native editor mode is current application state', () => {
       {kind: 'restore', ref: 'e1', expected: model, values: {accountId: 7}},
       {kind: 'restore', ref: 'e1', expected: model, values: {accountId: 7}},
     ]
+    const venvPython = resolve(process.cwd(), '../.venv/bin/python')
+    const pythonBin = process.env.WOA_PYTHON || (existsSync(venvPython) ? venvPython : 'python3')
     const [request, ...rest] = JSON.parse(execFileSync(
-      resolve(process.cwd(), '../.venv/bin/python'), ['-m', 'web_operation_agent.tests.transport.submit_wire'],
+      pythonBin, ['-m', 'web_operation_agent.tests.transport.submit_wire'],
       {cwd: resolve(process.cwd(), '..'), input: JSON.stringify(payloads),
         env: {...process.env, PYTHONPATH: 'src:examples/yudao/src'}, encoding: 'utf8'}))
     const mismatches = rest.slice(0, 4)

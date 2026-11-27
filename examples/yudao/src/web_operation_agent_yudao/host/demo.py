@@ -342,9 +342,14 @@ def run_session(session: YudaoSession, *, chat=None, meter=None, on_write_card=N
             page.on("framenavigated", seen)
             _open(page, session.origin + session.start_path)
             for task in session.tasks:
-                _stage("the previous task to settle", lambda: page.wait_for_function(
-                    "async () => { const r = await window.__WOA_RUNTIME_READY__; "
-                    "return !r.stored.taskInFlight && !r.stored.inFlight }", timeout=60_000))
+                _stage("the previous task to settle", lambda: (
+                    page.evaluate("async () => { window.__woaDemoRuntime = await window.__WOA_RUNTIME_READY__; }"),
+                    page.wait_for_function(
+                        "() => Boolean(window.__woaDemoRuntime) "
+                        "&& !window.__woaDemoRuntime.stored.taskInFlight "
+                        "&& !window.__woaDemoRuntime.stored.inFlight",
+                        timeout=60_000),
+                ))
                 # Submitted without waiting on it: the turn's outcome, bounded below, is the wait.
                 started = time.monotonic()
                 page.evaluate("task => { window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task)); "
@@ -445,8 +450,8 @@ def _open(page, url: str) -> None:
                 url, wait_until="domcontentloaded", timeout=60_000))
             _stage("the assistant's runtime to load", lambda: page.wait_for_function(
                 "window.__WOA_RUNTIME_READY__ !== undefined", timeout=60_000))
-            _stage("the assistant's runtime to be ready", lambda: page.wait_for_function(
-                "async () => { await window.__WOA_RUNTIME_READY__; return true; }", timeout=60_000))
+            _stage("the assistant's runtime to be ready", lambda: page.evaluate(
+                "async () => { window.__woaDemoRuntime = await window.__WOA_RUNTIME_READY__; return true; }"))
             _stage("the assistant's panel", lambda: page.locator("#woa-assistant").wait_for(
                 state="visible", timeout=60_000))
             _stage("the admin page to render", lambda: page.wait_for_function(

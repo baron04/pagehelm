@@ -252,8 +252,9 @@ class NativeGuardProxy:
                             proxy.guard.note_read(actor, self.path)
                         except GuardRefused:
                             pass          # a full actor table must not stop the person's own read
-                    status, payload = self.upstream_request(body)
-                    if actor is not None and self.command in {"POST", "PUT", "PATCH", "DELETE"}:
+                    def record_user_write(status, payload):
+                        if actor is None or self.command not in {"POST", "PUT", "PATCH", "DELETE"}:
+                            return
                         accepted = _accepted_user_write(status, payload)
                         app_code, error_msg = _user_write_error(status, payload)
                         wanted, created = _write_ids(body, payload, self.path)
@@ -273,6 +274,10 @@ class NativeGuardProxy:
                             )
                         except GuardRefused:
                             pass          # a full actor table must not drop the person's own write
+
+                    # Record before sending the HTTP reply so a client checking guard state
+                    # immediately on response receipt cannot race ahead of observation.
+                    self.upstream_request(body, before_reply=record_user_write)
                 else:
                     named = self.headers.get(WINDOW_HEADER) or ""
                     window = named if WINDOW_KEY.fullmatch(named) else ""
@@ -280,7 +285,7 @@ class NativeGuardProxy:
                                              window=window) as ticket:
                         ticket.status, ticket.response = self.upstream_request(body)
 
-            def upstream_request(self, body):
+            def upstream_request(self, body, before_reply=None):
                 connect = http.client.HTTPSConnection if proxy.upstream.scheme == "https" else http.client.HTTPConnection
                 connection = connect(proxy.upstream.hostname, proxy.upstream.port, timeout=proxy.timeout_s)
                 headers = {key: self.headers[key] for key in ("Authorization", "tenant-id", "Content-Type",
@@ -293,13 +298,16 @@ class NativeGuardProxy:
                     payload = response.read(_MAX_BODY + 1)
                     if len(payload) > _MAX_BODY:
                         raise GuardRefused("upstream_body_too_large")
+                    snippet = payload[:65536]
+                    if before_reply is not None:
+                        before_reply(response.status, snippet)
                     self.send_response(response.status)
                     self.send_header("Content-Type", response.getheader("Content-Type", "application/json"))
                     self.send_header("Cache-Control", "no-store")
                     self.send_header("Content-Length", str(len(payload)))
                     self.end_headers()
                     self.wfile.write(payload)
-                    return response.status, payload[:65536]
+                    return response.status, snippet
                 finally:
                     connection.close()
 

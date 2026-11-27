@@ -335,7 +335,8 @@ def main(argv=None) -> int:
     if not plan['checks']:
         print('No relevant changes: no checks selected.')
         return 0
-    environment = {**os.environ, 'PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD': '1', 'STORYBOOK_DISABLE_TELEMETRY': '1'}
+    environment = {**os.environ, 'PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD': '1', 'STORYBOOK_DISABLE_TELEMETRY': '1',
+                   'WOA_PYTHON': sys.executable}
     environment['PYTHONPATH'] = os.pathsep.join(str(ROOT / f) for f in ('src', 'examples/yudao/src', '.'))
     if plan['needs_page_controller']:
         environment['WOA_PAGE_CONTROLLER_MODULE'] = str(ROOT / 'frontend/node_modules/@page-agent/page-controller/dist/lib/page-controller.js')
