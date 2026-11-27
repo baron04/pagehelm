@@ -72,7 +72,6 @@ def _validate_self_hosted(provider: str, base_url: str, self_hosted: bool) -> No
             "register the model price in policies/prices.json instead"
         )
 
-
 PROVIDER_DEFAULTS: dict[str, dict[str, object]] = {
     "deepseek": {
         "base_url": "https://api.deepseek.com",
@@ -111,13 +110,12 @@ PROVIDER_DEFAULTS: dict[str, dict[str, object]] = {
     },
 }
 
-OPERATION_MODES = ("read-only", "assisted-draft", "verified-operate")
 _ALLOWED_TOML_KEYS = frozenset({
     "provider",
     "model",
     "base_url",
     "self_hosted",
-    "mode",
+    "read_only",
     "daily_allowance_cny",
     "daily_total_cap_cny",
     "monthly_total_cap_cny",
@@ -127,30 +125,18 @@ _ALLOWED_TOML_KEYS = frozenset({
 _CREDENTIAL_KEY_RE = re.compile(r"(?i)(?:api_?key|secret|token|password)")
 
 
-def expand_operation_mode(mode: str) -> dict[str, object]:
-    """Expand a named PageHelm safety mode into explicit host integration switches."""
-    if not isinstance(mode, str) or mode not in OPERATION_MODES:
-        raise ValueError(f"mode must be one of {', '.join(OPERATION_MODES)}")
-    if mode == "read-only":
-        return {
-            "native_page_admission": "read-only-window",
-            "native_writes": False,
-            "native_submit": False,
-            "native_write_preparation": False,
-            "native_edit_prefill": False,
-        }
-    if mode == "assisted-draft":
-        return {
-            "native_page_admission": "read-only-window",
-            "native_writes": False,
-            "native_submit": False,
-            "native_write_preparation": True,
-            "native_edit_prefill": True,
-        }
+def expand_write_policy(*, read_only: bool = False) -> dict[str, object]:
+    """Expand the optional read-only kill-switch into explicit host integration switches.
+
+    Form prefill is always enabled. Adapter-registered writes/Skills are enabled by default
+    (each write still requires human confirmation) unless `read_only=True`.
+    """
+    if type(read_only) is not bool:
+        raise ValueError("read_only must be a boolean")
     return {
         "native_page_admission": "read-only-window",
-        "native_writes": True,
-        "native_submit": True,
+        "native_writes": not read_only,
+        "native_submit": not read_only,
         "native_write_preparation": False,
         "native_edit_prefill": True,
     }
@@ -180,12 +166,11 @@ def parse_pagehelm_toml(data: dict) -> dict[str, object]:
         if type(provider) is not str or provider not in PROVIDER_DEFAULTS:
             raise ValueError(f"provider must be one of {', '.join(PROVIDER_DEFAULTS)}")
         parsed["provider"] = provider
-    if "mode" in data:
-        mode = data["mode"]
-        if type(mode) is not str:
-            raise ValueError("mode must be a string")
-        expand_operation_mode(mode)
-        parsed["mode"] = mode
+    if "read_only" in data:
+        read_only = data["read_only"]
+        if type(read_only) is not bool:
+            raise ValueError("read_only must be a boolean")
+        parsed["read_only"] = read_only
     if "model" in data:
         raw_model = data["model"]
         model = reported_model_string(raw_model) if type(raw_model) is str else None
@@ -250,6 +235,31 @@ def _parse_optional_bool_env(raw: str, name: str) -> bool | None:
     raise ValueError(f"{name} must be true or false")
 
 
+def _parse_optional_float_env(raw: str, name: str) -> float | None:
+    text = raw.strip()
+    if not text:
+        return None
+    try:
+        value = float(text)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive finite number") from exc
+    if not math.isfinite(value) or not 0 < value <= 1_000_000.0:
+        raise ValueError(f"{name} must be a positive finite number")
+    return value
+
+
+def _parse_optional_int_env(raw: str, name: str, low: int, high: int) -> int | None:
+    text = raw.strip()
+    if not text:
+        return None
+    if not re.fullmatch(r"[+-]?\d+", text):
+        raise ValueError(f"{name} must be an integer between {low} and {high}")
+    value = int(text)
+    if not low <= value <= high:
+        raise ValueError(f"{name} must be an integer between {low} and {high}")
+    return value
+
+
 def _infer_provider_from_env(env: Mapping[str, str]) -> str:
     hits = [
         name for name, spec in PROVIDER_DEFAULTS.items()
@@ -257,7 +267,7 @@ def _infer_provider_from_env(env: Mapping[str, str]) -> str:
                for key in spec["key_envs"])  # type: ignore[index]
     ]
     if len(hits) > 1:
-        raise ProviderError("multiple provider API keys are set; specify provider in pagehelm.toml or AGENT_PROVIDER")
+        raise ProviderError("multiple provider API keys are set; specify AGENT_PROVIDER in .env")
     return hits[0] if hits else ""
 
 
@@ -266,10 +276,11 @@ def resolve_pagehelm_environment(
     *,
     env_values: Mapping[str, str] | None = None,
     toml_path: str | Path | None = None,
-    default_mode: str = "read-only",
+    load_toml: bool = True,
+    default_read_only: bool = False,
 ) -> dict[str, object]:
-    """Resolve `pagehelm.toml` + `.env` (or legacy `.env`) into normalized host settings."""
-    expand_operation_mode(default_mode)
+    """Resolve `.env` (and optional legacy `pagehelm.toml`) into normalized host settings."""
+    expand_write_policy(read_only=default_read_only)
     base_root = Path(root) if root is not None else REPO_ROOT
     env = dict(env_values) if env_values is not None else load_env(base_root / ".env")
     if toml_path is not None:
@@ -277,9 +288,11 @@ def resolve_pagehelm_environment(
         if not config_file.is_file():
             raise FileNotFoundError(f"config file not found: {config_file}")
         toml = load_pagehelm_toml(config_file)
-    else:
+    elif load_toml:
         config_file = base_root / "pagehelm.toml"
         toml = load_pagehelm_toml(config_file) if config_file.is_file() else {}
+    else:
+        toml = {}
 
     raw_env_url = str(env.get("AGENT_OPENAI_BASE_URL") or "").strip()
     raw_env_model = str(env.get("AGENT_OPENAI_MODEL") or "").strip()
@@ -329,11 +342,11 @@ def resolve_pagehelm_environment(
 
     missing = []
     if not raw_base_url:
-        missing.append("provider/base_url (pagehelm.toml) or AGENT_OPENAI_BASE_URL")
+        missing.append("AGENT_PROVIDER or AGENT_OPENAI_BASE_URL")
     if require_api_key and not api_key:
         missing.append(f"{key_candidates[0]} or AGENT_OPENAI_API_KEY")
     if not raw_model:
-        missing.append("model (pagehelm.toml) or AGENT_OPENAI_MODEL")
+        missing.append("AGENT_OPENAI_MODEL")
     if missing:
         raise ProviderError("missing model configuration: " + ", ".join(missing))
 
@@ -342,36 +355,68 @@ def resolve_pagehelm_environment(
     if not model:
         raise ProviderError("invalid AGENT_OPENAI_MODEL")
 
-    raw_native = str(env.get("WOA_NATIVE_WRITES") or "").strip().lower()
-    if raw_native and raw_native not in {"true", "false"}:
-        raise ValueError("WOA_NATIVE_WRITES must be true or false")
-    explicit_mode = str(toml.get("mode") or env.get("WOA_MODE") or "").strip()
-    if explicit_mode:
-        options = expand_operation_mode(explicit_mode)
-        if raw_native and (raw_native == "true") != bool(options["native_writes"]):
-            raise ValueError(f"mode {explicit_mode!r} conflicts with WOA_NATIVE_WRITES={raw_native!r}")
-        mode = explicit_mode
-    elif raw_native:
-        mode = "verified-operate" if raw_native == "true" else "read-only"
-        options = expand_operation_mode(mode)
+    env_read_only = _parse_optional_bool_env(str(env.get("WOA_READ_ONLY") or ""), "WOA_READ_ONLY")
+    env_native_writes = _parse_optional_bool_env(str(env.get("WOA_NATIVE_WRITES") or ""), "WOA_NATIVE_WRITES")
+    if "read_only" in toml:
+        read_only = bool(toml["read_only"])
+        if env_read_only is not None and env_read_only != read_only:
+            raise ValueError(
+                f"read_only={read_only!r} conflicts with WOA_READ_ONLY="
+                f"{str(env.get('WOA_READ_ONLY') or '')!r}"
+            )
+    elif env_read_only is not None:
+        read_only = env_read_only
+    elif env_native_writes is not None:
+        read_only = not env_native_writes
     else:
-        mode = default_mode
-        options = expand_operation_mode(mode)
+        read_only = default_read_only
+
+    if env_native_writes is not None and env_native_writes == read_only:
+        raise ValueError(
+            f"WOA_READ_ONLY={str(read_only).lower()!r} conflicts with WOA_NATIVE_WRITES="
+            f"{str(env.get('WOA_NATIVE_WRITES') or '')!r}"
+        )
+    options = expand_write_policy(read_only=read_only)
 
     resolved: dict[str, object] = {
         "AGENT_OPENAI_BASE_URL": base_url,
         "AGENT_OPENAI_API_KEY": api_key,
         "AGENT_OPENAI_MODEL": model,
         "AGENT_MODEL_SELF_HOSTED": "true" if self_hosted else "false",
-        "WOA_MODE": mode,
+        "WOA_READ_ONLY": "true" if read_only else "false",
         "WOA_NATIVE_WRITES": "true" if options["native_writes"] else "false",
-        "mode_options": options,
+        "write_options": options,
     }
     if provider:
         resolved["AGENT_PROVIDER"] = provider
-    for key in ("daily_allowance_cny", "daily_total_cap_cny", "monthly_total_cap_cny", "max_sessions", "turn_timeout_s"):
+
+    float_env_map = {
+        "daily_allowance_cny": "WOA_DAILY_ALLOWANCE_CNY",
+        "daily_total_cap_cny": "WOA_DAILY_TOTAL_CAP_CNY",
+        "monthly_total_cap_cny": "WOA_MONTHLY_TOTAL_CAP_CNY",
+    }
+    for key, env_name in float_env_map.items():
+        env_val = _parse_optional_float_env(str(env.get(env_name) or ""), env_name)
         if key in toml:
+            if env_val is not None and env_val != float(toml[key]):  # type: ignore[arg-type]
+                raise ValueError(f"{key}={toml[key]!r} conflicts with {env_name}={env.get(env_name)!r}")
             resolved[key] = toml[key]
+        elif env_val is not None:
+            resolved[key] = env_val
+
+    int_env_map = {
+        "max_sessions": ("WOA_MAX_SESSIONS", 1, 100_000),
+        "turn_timeout_s": ("WOA_TURN_TIMEOUT_S", 1, 3_600),
+    }
+    for key, (env_name, low, high) in int_env_map.items():
+        env_int = _parse_optional_int_env(str(env.get(env_name) or ""), env_name, low, high)
+        if key in toml:
+            if env_int is not None and env_int != int(toml[key]):  # type: ignore[arg-type]
+                raise ValueError(f"{key}={toml[key]!r} conflicts with {env_name}={env.get(env_name)!r}")
+            resolved[key] = toml[key]
+        elif env_int is not None:
+            resolved[key] = env_int
+
     return resolved
 
 

@@ -114,7 +114,7 @@ def run_preflight(
             "model": "",
             "self_hosted": False,
             "auth_configured": False,
-            "mode": "",
+            "read_only": False,
             "pricing_source": "",
             "checks": checks,
             "probe": None,
@@ -139,7 +139,7 @@ def run_preflight(
             "model": "",
             "self_hosted": False,
             "auth_configured": False,
-            "mode": "",
+            "read_only": False,
             "pricing_source": "",
             "checks": checks,
             "probe": None,
@@ -151,7 +151,7 @@ def run_preflight(
     model = str(resolved["AGENT_OPENAI_MODEL"])
     self_hosted = resolved.get("AGENT_MODEL_SELF_HOSTED") == "true"
     auth_configured = bool(str(resolved.get("AGENT_OPENAI_API_KEY") or ""))
-    mode = str(resolved.get("WOA_MODE") or "")
+    read_only = resolved.get("WOA_READ_ONLY") == "true"
 
     try:
         price = price_for(model, self_hosted=self_hosted)
@@ -164,7 +164,7 @@ def run_preflight(
             "model": model,
             "self_hosted": self_hosted,
             "auth_configured": auth_configured,
-            "mode": mode,
+            "read_only": read_only,
             "pricing_source": "",
             "checks": checks,
             "probe": None,
@@ -184,7 +184,7 @@ def run_preflight(
             "model": model,
             "self_hosted": self_hosted,
             "auth_configured": auth_configured,
-            "mode": mode,
+            "read_only": read_only,
             "pricing_source": pricing_source,
             "checks": checks,
             "probe": None,
@@ -273,7 +273,7 @@ def run_preflight(
         "model": model,
         "self_hosted": self_hosted,
         "auth_configured": auth_configured,
-        "mode": mode,
+        "read_only": read_only,
         "pricing_source": pricing_source,
         "checks": checks,
         "probe": probe_report,
@@ -288,7 +288,7 @@ def _format_text(report: dict[str, object]) -> str:
         f"  model: {report['model'] or '(unset)'}",
         f"  self_hosted: {report['self_hosted']}",
         f"  auth_configured: {report['auth_configured']}",
-        f"  mode: {report['mode'] or '(unset)'}",
+        f"  read_only: {report['read_only']}",
     ]
     checks = report.get("checks") or {}
     if isinstance(checks, dict):

@@ -68,7 +68,7 @@ from .turn import yudao_turn_config
 from ..rules.ui_source import UiSource
 
 _MODEL_ENV_KEYS = ("AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY", "AGENT_OPENAI_MODEL",
-                   "AGENT_PROVIDER")
+                   "AGENT_PROVIDER", "AGENT_MODEL_SELF_HOSTED")
 _MAX_BODY = 4096
 
 
@@ -105,23 +105,21 @@ def native_write_options(environment) -> dict:
     return {"native_writes": value == "true"}
 
 
-def mode_write_options(environment, *, default_mode: str = "read-only") -> dict:
-    """Expand `WOA_MODE` or legacy `WOA_NATIVE_WRITES` into explicit host write switches."""
-    from web_operation_agent.modeling.client import expand_operation_mode
+def write_policy_options(environment, *, default_read_only: bool = False) -> dict:
+    """Expand `WOA_READ_ONLY` (or legacy `WOA_NATIVE_WRITES`) into explicit host switches."""
+    from web_operation_agent.modeling.client import _parse_optional_bool_env, expand_write_policy
 
-    mode = str(environment.get("WOA_MODE") or "").strip()
-    has_native = "WOA_NATIVE_WRITES" in environment and str(environment.get("WOA_NATIVE_WRITES") or "").strip() != ""
-    if not mode:
-        if has_native:
-            enabled = native_write_options(environment)["native_writes"]
-            return expand_operation_mode("verified-operate" if enabled else "read-only")
-        return expand_operation_mode(default_mode)
-    options = expand_operation_mode(mode)
-    if has_native:
-        enabled = native_write_options(environment)["native_writes"]
-        if enabled != bool(options["native_writes"]):
-            raise ValueError(f"WOA_MODE={mode!r} conflicts with WOA_NATIVE_WRITES")
-    return options
+    env_read_only = _parse_optional_bool_env(str(environment.get("WOA_READ_ONLY") or ""), "WOA_READ_ONLY")
+    env_native = _parse_optional_bool_env(str(environment.get("WOA_NATIVE_WRITES") or ""), "WOA_NATIVE_WRITES")
+    if env_read_only is not None and env_native is not None and env_read_only == env_native:
+        raise ValueError("WOA_READ_ONLY conflicts with WOA_NATIVE_WRITES")
+    if env_read_only is not None:
+        read_only = env_read_only
+    elif env_native is not None:
+        read_only = not env_native
+    else:
+        read_only = default_read_only
+    return expand_write_policy(read_only=read_only)
 
 
 @dataclass(frozen=True)
@@ -1162,13 +1160,12 @@ def main(argv=None) -> int:
     ap.add_argument("--native-submit", action="store_true",
                     help="after a fresh approval press the native form or row control once under a permit that "
                          "releases only the card's requests; requires --native-writes and read-only-window")
-    ap.add_argument("--native-writes", action="store_true", default=native_write_options(os.environ)["native_writes"],
-                    help="enable reviewed typed Skill writes and approved native submission with actor-bound readback; "
-                         "ordinary browser submission remains disabled")
+    ap.add_argument("--native-writes", action="store_true", default=None,
+                    help="explicitly enable reviewed typed Skill writes and approved native submission")
+    ap.add_argument("--read-only", action="store_true", default=False,
+                    help="kill-switch: disable backend writes and native row submission (form prefill stays on unless --no-native-edit-prefill)")
     ap.add_argument("--config", type=Path, default=None,
-                    help="optional path to pagehelm.toml")
-    ap.add_argument("--mode", choices=("read-only", "assisted-draft", "verified-operate"), default=None,
-                    help="operation safety tier expanding into native write/prefill switches")
+                    help="optional path to legacy pagehelm.toml")
     ap.add_argument("--model", default=None)
     ap.add_argument("--max-sessions", type=int, default=YudaoHostConfig.max_sessions)
     ap.add_argument("--daily-allowance-cny", type=float,
@@ -1184,55 +1181,82 @@ def main(argv=None) -> int:
     if any(len(item) != 2 for item in commits):
         ap.error("--source-commit requires REPOSITORY=FULL_COMMIT")
     env = {k: os.environ[k] for k in _MODEL_ENV_KEYS if os.environ.get(k)}
+    raw_toml: dict[str, object] = {}
     toml_overrides: dict[str, object] = {}
-    native_writes = a.native_writes
     native_write_preparation = a.native_write_preparation
     native_submit = a.native_submit
     native_edit_prefill = a.native_edit_prefill
     if a.config is not None:
-        from web_operation_agent.modeling.client import expand_operation_mode, load_pagehelm_toml
+        from web_operation_agent.modeling.client import load_pagehelm_toml
         if not a.config.is_file():
             ap.error(f"config file not found: {a.config}")
         try:
-            toml_overrides = load_pagehelm_toml(a.config)
+            raw_toml = load_pagehelm_toml(a.config)
+            toml_overrides = dict(raw_toml)
         except Exception as exc:
             ap.error(str(exc))
-    has_provider_keys = any(
-        os.environ.get(k) for k in ("DEEPSEEK_API_KEY", "DASHSCOPE_API_KEY", "QWEN_API_KEY", "OPENAI_API_KEY")
+    default_read_only = (
+        a.read_only
+        or a.native_read_policy is None
+        or not native_edit_prefill
+        or a.native_write_preparation
+        or a.location_bindings
+        or a.native_page_admission != "read-only-window"
     )
-    if a.config is not None or has_provider_keys:
+    has_env_config = any(
+        os.environ.get(k) for k in (
+            "AGENT_PROVIDER", "AGENT_MODEL_SELF_HOSTED",
+            "DEEPSEEK_API_KEY", "DASHSCOPE_API_KEY", "QWEN_API_KEY", "OPENAI_API_KEY", "OLLAMA_API_KEY",
+            "WOA_READ_ONLY", "WOA_DAILY_ALLOWANCE_CNY", "WOA_DAILY_TOTAL_CAP_CNY", "WOA_MONTHLY_TOTAL_CAP_CNY",
+            "WOA_MAX_SESSIONS", "WOA_TURN_TIMEOUT_S",
+        )
+    )
+    if a.config is not None or has_env_config:
         from web_operation_agent.modeling.client import ProviderError, resolve_pagehelm_environment
         try:
             env_map = dict(os.environ)
-            if a.mode is not None:
-                env_map["WOA_MODE"] = a.mode
+            if a.read_only:
+                env_map["WOA_READ_ONLY"] = "true"
             resolved = resolve_pagehelm_environment(
                 root=a.config.parent if a.config else None,
                 env_values=env_map,
                 toml_path=a.config,
-                default_mode=a.mode or str(toml_overrides.get("mode") or "read-only"),
+                load_toml=(a.config is not None),
+                default_read_only=default_read_only,
             )
             env = {k: str(resolved[k]) for k in _MODEL_ENV_KEYS if resolved.get(k)}
             toml_overrides = resolved
-        except ValueError as exc:
+        except (ValueError, FileNotFoundError) as exc:
             ap.error(str(exc))
         except ProviderError as exc:
-            if not (a.config is not None and not has_provider_keys and not env.get("AGENT_OPENAI_API_KEY")):
+            keyless_toml = str(raw_toml.get("provider") or "").casefold() in {"ollama", "openai-compatible"}
+            if not (a.config is not None and not keyless_toml and not has_env_config and not env.get("AGENT_OPENAI_API_KEY")):
                 ap.error(str(exc))
-    effective_mode = a.mode or str(toml_overrides.get("mode") or toml_overrides.get("WOA_MODE") or os.environ.get("WOA_MODE") or "").strip()
-    if effective_mode:
-        from web_operation_agent.modeling.client import expand_operation_mode
-        try:
-            expanded = expand_operation_mode(effective_mode)
-        except ValueError as exc:
-            ap.error(str(exc))
-        raw_native_env = str(os.environ.get("WOA_NATIVE_WRITES") or "").strip().lower()
-        if raw_native_env in {"true", "false"} and (raw_native_env == "true") != bool(expanded["native_writes"]):
-            ap.error(f"mode {effective_mode!r} conflicts with WOA_NATIVE_WRITES={raw_native_env!r}")
-        native_writes = bool(expanded["native_writes"])
-        native_write_preparation = bool(expanded["native_write_preparation"])
-        native_submit = bool(expanded["native_submit"])
-        native_edit_prefill = bool(expanded["native_edit_prefill"])
+    from web_operation_agent.modeling.client import _parse_optional_bool_env
+    try:
+        env_ro = _parse_optional_bool_env(str(os.environ.get("WOA_READ_ONLY") or ""), "WOA_READ_ONLY")
+        env_nw = _parse_optional_bool_env(str(os.environ.get("WOA_NATIVE_WRITES") or ""), "WOA_NATIVE_WRITES")
+    except ValueError as exc:
+        ap.error(str(exc))
+    toml_ro = bool(raw_toml["read_only"]) if "read_only" in raw_toml else None
+    explicit_read_only = a.read_only or (env_ro is True) or (toml_ro is True) or (env_nw is False)
+    if a.native_writes and explicit_read_only:
+        ap.error("--native-writes conflicts with read-only configuration")
+    policy_env: dict[str, str] = dict(os.environ)
+    if toml_ro is not None and not str(policy_env.get("WOA_READ_ONLY") or "").strip():
+        policy_env["WOA_READ_ONLY"] = "true" if toml_ro else "false"
+    if a.read_only:
+        policy_env["WOA_READ_ONLY"] = "true"
+    try:
+        policy = write_policy_options(policy_env, default_read_only=default_read_only)
+    except ValueError as exc:
+        ap.error(str(exc))
+    if a.native_writes:
+        native_writes = True
+        native_submit = native_submit or (a.native_page_admission == "read-only-window")
+    else:
+        native_writes = bool(policy["native_writes"])
+        native_submit = bool(policy["native_submit"]) or native_submit
     try:
         config = YudaoHostConfig(
             api_base=a.api_base, public_origin=a.public_origin,
@@ -1269,13 +1293,20 @@ def main(argv=None) -> int:
         validate_native_deployment(config)
     except ValueError as exc:
         ap.error(str(exc))
-    if "AGENT_OPENAI_API_KEY" not in env:
+    allow_no_key = (
+        env.get("AGENT_MODEL_SELF_HOSTED") == "true"
+        or env.get("AGENT_PROVIDER") in {"ollama", "openai-compatible"}
+    )
+    if not env.get("AGENT_OPENAI_API_KEY") and not allow_no_key:
         raise SystemExit("AGENT_OPENAI_API_KEY is not set")
     # A model without a registered price cannot open a session: say so at start, once,
     # instead of answering every person with "unavailable".
     from web_operation_agent.modeling.spend import UnpricedModel, price_for
     try:
-        price_for(a.model or env.get("AGENT_OPENAI_MODEL", ""))
+        price_for(
+            a.model or env.get("AGENT_OPENAI_MODEL", ""),
+            self_hosted=(env.get("AGENT_MODEL_SELF_HOSTED") == "true"),
+        )
     except UnpricedModel as exc:
         raise SystemExit(str(exc)) from exc
     host = YudaoHost(config)

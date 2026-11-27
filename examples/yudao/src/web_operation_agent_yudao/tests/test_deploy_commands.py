@@ -38,6 +38,7 @@ class CloudReadonlyTests(unittest.TestCase):
         agent = compose.split("\n  agent:", 1)[1]
         args = json.loads(re.search(r"command:\s*(\[[\s\S]*?\])", agent).group(1))
         self.assertNotIn("--native-writes", args)
+        self.assertIn("--read-only", args)
         self.assertNotIn("--runtime-source", args)
         self.assertIn("--no-native-edit-prefill", args)
         self.assertIn("--source-root", args)

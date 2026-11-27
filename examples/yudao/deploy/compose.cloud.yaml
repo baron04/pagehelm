@@ -48,7 +48,7 @@ services:
               "--native-page-policy", "/opt/native-policy/pages.json",
               "--native-money-policy", "/opt/native-policy/verified-money.json",
               "--native-filter-semantics", "/opt/native-policy/filters.json",
-              "--no-native-edit-prefill"]
+              "--read-only", "--no-native-edit-prefill"]
     volumes:
       - agent-state:/var/lib/woa-yudao
       - ${YUDAO_CACHE}/native-policy:/opt/native-policy:ro

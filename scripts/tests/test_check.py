@@ -50,9 +50,7 @@ class SelectionTests(unittest.TestCase):
         self.assertIn('documentation site', lock_names)
         self.assertNotIn('wheel contents and isolated imports', lock_names)
         self.assertFalse(lock_plan['needs_frontend'])
-        toml_names, _ = self.names(['pagehelm.example.toml'])
-        self.assertEqual(toml_names, {'changed-file syntax/links'})
-        self.assertEqual(check.syntax(['pagehelm.example.toml', 'examples/yudao/deploy/deploy.example.toml']), 0)
+        self.assertEqual(check.syntax(['examples/yudao/deploy/deploy.example.toml']), 0)
 
     def test_unchanged_tree_has_no_checks(self):
         self.assertEqual(check.make_plan([])['checks'], [])

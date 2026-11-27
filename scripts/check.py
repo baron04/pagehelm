@@ -261,7 +261,7 @@ def make_plan(paths: list[str], profile: str = 'dev', reason: str = 'explicit pa
                                                     '-t', top], needs_python_packages=True)
     known = lambda f: (f.startswith((CORE, '.agents/', 'frontend/', 'examples/yudao/', 'testapps/contacts/', 'evals/', 'docs/', 'scripts/', '.github/'))
                        or f in {'AGENTS.md', '.gitignore', '.gitattributes', '.editorconfig', '.env.example',
-                                'LICENSE', 'SECURITY.md', 'pagehelm.example.toml', 'pyproject.toml',
+                                'LICENSE', 'SECURITY.md', 'pyproject.toml',
                                 'requirements.lock', 'sbom.json', 'THIRD_PARTY.md'}
                        or Path(f).suffix.lower() in {'.md', '.txt', '.rst'})
     if any(not known(f) for f in p) and not core:

@@ -961,7 +961,8 @@ class NativeCliTests(unittest.TestCase):
                 event.return_value.wait.side_effect = KeyboardInterrupt
                 self.assertEqual(0, native.main(args))
             self.assertTrue(host.config.warm_index)
-            self.assertFalse(host.config.native_writes)
+            self.assertTrue(host.config.native_writes)
+            self.assertTrue(host.config.native_edit_prefill)
             self.assertFalse(host.config.runtime_source)   # D3：用户态源码工具默认关闭
             host.server.start.assert_called_once()
             host._warm_api_docs.assert_called_once()
@@ -1016,7 +1017,7 @@ class NativeCliTests(unittest.TestCase):
                 "handlers": [{"kind": "navigation", "route": "/contacts", "controls": [],
                               "evidence": "synthetic", "sha256": "a"*64}]}))
             toml_path = root / "pagehelm.toml"
-            toml_path.write_text('provider = "deepseek"\nmode = "assisted-draft"\nturn_timeout_s = 75\n', encoding="utf-8")
+            toml_path.write_text('provider = "deepseek"\nread_only = true\nturn_timeout_s = 75\n', encoding="utf-8")
             host = Mock()
             host.server.base_url = "http://synthetic.invalid"
             def compose(config):
@@ -1037,7 +1038,7 @@ class NativeCliTests(unittest.TestCase):
             self.assertEqual(host.config.model_env["AGENT_OPENAI_MODEL"], "deepseek-flash")
             self.assertEqual(host.config.model_env["AGENT_OPENAI_BASE_URL"], "https://api.deepseek.com")
             self.assertFalse(host.config.native_writes)
-            self.assertTrue(host.config.native_write_preparation)
+            self.assertFalse(host.config.native_write_preparation)
             self.assertTrue(host.config.native_edit_prefill)
             self.assertEqual(host.config.turn_timeout_s, 75)
 
@@ -1054,16 +1055,14 @@ class NativeCliTests(unittest.TestCase):
             pages.write_text(json.dumps({"schema_version": 1, "release": "synthetic", "review": "synthetic",
                 "handlers": [{"kind": "navigation", "route": "/contacts", "controls": [],
                               "evidence": "synthetic", "sha256": "a"*64}]}))
-            toml_path = root / "pagehelm.toml"
-            toml_path.write_text('provider = "deepseek"\nmode = "read-only"\n', encoding="utf-8")
             base_args = ["--api-base", "http://synthetic.invalid", "--public-origin", "http://synthetic.invalid",
                          "--state-dir", directory, "--source-release", "synthetic",
                          "--native-read-policy", str(fence), "--native-page-policy", str(pages)]
             err1 = io.StringIO()
-            with patch.dict(native.os.environ, {"DEEPSEEK_API_KEY": "synthetic-key", "WOA_NATIVE_WRITES": "true"}, clear=True), \
+            with patch.dict(native.os.environ, {"DEEPSEEK_API_KEY": "synthetic-key", "WOA_READ_ONLY": "true", "WOA_NATIVE_WRITES": "true"}, clear=True), \
                     patch.object(native, "YudaoHost", side_effect=AssertionError("should not construct host")), \
                     contextlib.redirect_stderr(err1), self.assertRaises(SystemExit) as ex1:
-                native.main([*base_args, "--config", str(toml_path)])
+                native.main(base_args)
             self.assertEqual(ex1.exception.code, 2)
             self.assertIn("conflicts with WOA_NATIVE_WRITES", err1.getvalue())
 
@@ -1074,6 +1073,122 @@ class NativeCliTests(unittest.TestCase):
                 native.main(base_args)
             self.assertEqual(ex2.exception.code, 2)
             self.assertIn("multiple provider API keys", err2.getvalue())
+
+    def test_native_server_allows_self_hosted_ollama_without_api_key_or_price_entry(self):
+        from types import SimpleNamespace as NS
+        from unittest.mock import Mock
+        from web_operation_agent_yudao.host import native_server as native
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fence = root / "fence.json"
+            fence.write_text(json.dumps({"schema_version": 2, "release": "synthetic", "mode": "method-fence",
+                                         "writing_gets": [], "scan": {}}))
+            pages = root / "pages.json"
+            pages.write_text(json.dumps({"schema_version": 1, "release": "synthetic", "review": "synthetic",
+                "handlers": [{"kind": "navigation", "route": "/contacts", "controls": [],
+                              "evidence": "synthetic", "sha256": "a"*64}]}))
+            host = Mock()
+            host.server.base_url = "http://synthetic.invalid"
+            def compose(config):
+                host.config = config
+                return host
+            def thread(**kwargs):
+                return NS(start=lambda: kwargs["target"]())
+            args = ["--api-base", "http://synthetic.invalid", "--public-origin", "http://synthetic.invalid",
+                    "--state-dir", directory, "--source-release", "synthetic", "--native-read-policy", str(fence),
+                    "--native-page-policy", str(pages)]
+            env_vars = {
+                "AGENT_PROVIDER": "ollama",
+                "AGENT_OPENAI_MODEL": "qwen3:14b",
+                "WOA_READ_ONLY": "true",
+                "WOA_TURN_TIMEOUT_S": "80",
+            }
+            with patch.dict(native.os.environ, env_vars, clear=True), \
+                    patch("web_operation_agent.modeling.client.REPO_ROOT", root), \
+                    patch.object(native, "YudaoHost", side_effect=compose), \
+                    patch.object(native, "ThreadingHTTPServer"), \
+                    patch.object(native.threading, "Thread", side_effect=thread), \
+                    patch.object(native.threading, "Event") as event, patch.object(native.signal, "signal"):
+                event.return_value.wait.side_effect = KeyboardInterrupt
+                self.assertEqual(0, native.main(args))
+            self.assertEqual(host.config.model_env["AGENT_PROVIDER"], "ollama")
+            self.assertEqual(host.config.model_env["AGENT_OPENAI_BASE_URL"], "http://localhost:11434/v1")
+            self.assertEqual(host.config.model_env["AGENT_OPENAI_MODEL"], "qwen3:14b")
+            self.assertEqual(host.config.model_env["AGENT_MODEL_SELF_HOSTED"], "true")
+            self.assertEqual(host.config.turn_timeout_s, 80)
+            self.assertNotIn("AGENT_OPENAI_API_KEY", host.config.model_env)
+
+    def test_read_only_kill_switch_write_flags_and_no_implicit_toml(self):
+        import contextlib
+        import io
+        from types import SimpleNamespace as NS
+        from unittest.mock import Mock
+        from web_operation_agent_yudao.host import native_server as native
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fence = root / "fence.json"
+            fence.write_text(json.dumps({"schema_version": 2, "release": "synthetic", "mode": "method-fence",
+                                         "writing_gets": [], "scan": {}}))
+            pages = root / "pages.json"
+            pages.write_text(json.dumps({"schema_version": 1, "release": "synthetic", "review": "synthetic",
+                "handlers": [{"kind": "navigation", "route": "/contacts", "controls": [],
+                              "evidence": "synthetic", "sha256": "a"*64}]}))
+            base_args = ["--api-base", "http://synthetic.invalid", "--public-origin", "http://synthetic.invalid",
+                         "--state-dir", directory, "--source-release", "synthetic",
+                         "--native-read-policy", str(fence), "--native-page-policy", str(pages)]
+
+            # 1. --native-writes conflicts with WOA_READ_ONLY=true and pagehelm.toml read_only=true.
+            err_env = io.StringIO()
+            with patch.dict(native.os.environ, {"DEEPSEEK_API_KEY": "synthetic-key", "WOA_READ_ONLY": "true"}, clear=True), \
+                    patch.object(native, "YudaoHost", side_effect=AssertionError("should not construct host")), \
+                    contextlib.redirect_stderr(err_env), self.assertRaises(SystemExit) as ex_env:
+                native.main(base_args + ["--native-writes"])
+            self.assertEqual(ex_env.exception.code, 2)
+            self.assertIn("--native-writes conflicts with read-only", err_env.getvalue())
+
+            ro_toml = root / "ro.toml"
+            ro_toml.write_text('provider = "deepseek"\nread_only = true\n', encoding="utf-8")
+            err_toml = io.StringIO()
+            with patch.dict(native.os.environ, {"DEEPSEEK_API_KEY": "synthetic-key"}, clear=True), \
+                    patch.object(native, "YudaoHost", side_effect=AssertionError("should not construct host")), \
+                    contextlib.redirect_stderr(err_toml), self.assertRaises(SystemExit) as ex_toml:
+                native.main(base_args + ["--config", str(ro_toml), "--native-writes"])
+            self.assertEqual(ex_toml.exception.code, 2)
+            self.assertIn("--native-writes conflicts with read-only", err_toml.getvalue())
+
+            def run_and_capture(extra_args, env_vars):
+                host = Mock()
+                host.server.base_url = "http://synthetic.invalid"
+                def compose(config):
+                    host.config = config
+                    return host
+                def thread(**kwargs):
+                    return NS(start=lambda: kwargs["target"]())
+                with patch.dict(native.os.environ, env_vars, clear=True), \
+                        patch("web_operation_agent.modeling.client.REPO_ROOT", root), \
+                        patch.object(native, "YudaoHost", side_effect=compose), \
+                        patch.object(native, "ThreadingHTTPServer"), \
+                        patch.object(native.threading, "Thread", side_effect=thread), \
+                        patch.object(native.threading, "Event") as event, patch.object(native.signal, "signal"):
+                    event.return_value.wait.side_effect = KeyboardInterrupt
+                    self.assertEqual(0, native.main(base_args + extra_args))
+                return host.config
+
+            # 2. Omitting --config ignores REPO_ROOT/pagehelm.toml even when conflicting.
+            (root / "pagehelm.toml").write_text('provider = "deepseek"\nread_only = true\n', encoding="utf-8")
+            cfg_ollama = run_and_capture([], {"AGENT_PROVIDER": "ollama", "AGENT_OPENAI_MODEL": "qwen3:14b"})
+            self.assertEqual(cfg_ollama.model_env["AGENT_PROVIDER"], "ollama")
+            self.assertTrue(cfg_ollama.native_writes)
+
+            # 3. --no-native-edit-prefill keeps default_read_only=True even when DEEPSEEK_API_KEY triggers env resolution.
+            cfg_no_prefill = run_and_capture(["--no-native-edit-prefill"], {"DEEPSEEK_API_KEY": "synthetic-key"})
+            self.assertFalse(cfg_no_prefill.native_edit_prefill)
+            self.assertFalse(cfg_no_prefill.native_writes)
+
+            # 4. --native-write-preparation keeps default_read_only=True instead of colliding with native_writes=True.
+            cfg_prep = run_and_capture(["--native-write-preparation"], {"DEEPSEEK_API_KEY": "synthetic-key"})
+            self.assertTrue(cfg_prep.native_write_preparation)
+            self.assertFalse(cfg_prep.native_writes)
 
     def test_http_bootstrap_retries_transient_upstream_errors_only(self):
         import threading

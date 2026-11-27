@@ -49,30 +49,39 @@ class TheLocalEnvironmentTemplateIsSafeAndUseful(unittest.TestCase):
         self.assertEqual(len(self.values), len(pairs), "duplicate environment setting")
 
     def test_it_documents_the_minimum_model_configuration(self):
-        self.assertTrue(1 <= len(self.values) <= 3, "only 1-3 API key lines belong in .env.example")
-        self.assertTrue(all(key.endswith("_API_KEY") for key in self.values), self.values)
+        self.assertFalse((ROOT / "pagehelm.example.toml").exists(),
+                         "configuration belongs in a single .env.example template")
+        self.assertEqual(
+            set(self.values),
+            {"DEEPSEEK_API_KEY", "AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_MODEL"},
+        )
         self.assertFalse(any(self.values[name] for name in self.values),
                          "copying the template must not enable a live service")
         self.assertFalse(any(key.startswith("WOA_ODOO_") for key in self.values))
 
     def test_it_contains_neither_a_credential_nor_a_local_path(self):
-        for name in (".env.example", "pagehelm.example.toml"):
-            text = (ROOT / name).read_text(encoding="utf-8")
-            self.assertNotRegex(text, r"/(Users|home)/[^/]+/", name)
-            self.assertNotIn("odoo", text.casefold(), name)
+        text = (ROOT / ".env.example").read_text(encoding="utf-8")
+        self.assertNotRegex(text, r"/(Users|home)/[^/]+/", ".env.example")
+        self.assertNotIn("odoo", text.casefold(), ".env.example")
 
-    def test_pagehelm_toml_template_parses_cleanly_and_expands_safely(self):
-        import tomllib
-        from web_operation_agent.modeling.client import expand_operation_mode, load_pagehelm_toml
+    def test_single_env_template_resolves_cleanly_for_cloud_and_local_models(self):
+        from web_operation_agent.modeling.client import expand_write_policy, resolve_pagehelm_environment
 
-        toml_path = ROOT / "pagehelm.example.toml"
-        self.assertTrue(toml_path.is_file(), "pagehelm.example.toml is missing")
-        parsed = load_pagehelm_toml(toml_path)
-        self.assertIn(parsed.get("provider"), {"deepseek", "qwen", "openai"})
-        self.assertEqual(parsed.get("mode"), "verified-operate")
-        self.assertTrue(expand_operation_mode(str(parsed["mode"]))["native_writes"])
-        raw = tomllib.loads(toml_path.read_text(encoding="utf-8"))
-        self.assertEqual(raw, parsed)
+        cloud = resolve_pagehelm_environment(
+            env_values={**self.values, "DEEPSEEK_API_KEY": "synthetic-key"},
+        )
+        self.assertEqual(cloud["AGENT_PROVIDER"], "deepseek")
+        self.assertEqual(cloud["AGENT_OPENAI_BASE_URL"], "https://api.deepseek.com")
+        self.assertEqual(cloud["AGENT_OPENAI_MODEL"], "deepseek-flash")
+        self.assertEqual(cloud["WOA_READ_ONLY"], "false")
+        self.assertTrue(expand_write_policy(read_only=False)["native_writes"])
+        self.assertTrue(expand_write_policy(read_only=True)["native_edit_prefill"])
+
+        ollama = resolve_pagehelm_environment(
+            env_values={**self.values, "AGENT_PROVIDER": "ollama", "AGENT_OPENAI_MODEL": "qwen3:14b"},
+        )
+        self.assertEqual(ollama["AGENT_OPENAI_BASE_URL"], "http://localhost:11434/v1")
+        self.assertEqual(ollama["AGENT_MODEL_SELF_HOSTED"], "true")
 
 
 class _Copy:

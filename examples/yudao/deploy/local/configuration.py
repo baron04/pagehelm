@@ -217,16 +217,21 @@ def load_model_environment() -> dict:
     from web_operation_agent.modeling.client import resolve_pagehelm_environment
     from web_operation_agent.modeling.spend import UnpricedModel, price_for
     try:
-        resolved = resolve_pagehelm_environment(ROOT, default_mode="verified-operate")
+        resolved = resolve_pagehelm_environment(ROOT)
     except Exception as exc:
         raise LocalError(f"模型或配置文件无效：{exc}") from exc
     try:
-        price_for(resolved["AGENT_OPENAI_MODEL"])
+        price_for(
+            resolved["AGENT_OPENAI_MODEL"],
+            self_hosted=(resolved.get("AGENT_MODEL_SELF_HOSTED") == "true"),
+        )
     except UnpricedModel as exc:
-        raise LocalError("本机模型没有登记价格，无法启动费用核算；请使用已配置计价的模型。") from exc
+        raise LocalError(
+            "本机模型没有登记价格，无法启动费用核算；请使用已登记价格的模型，或在 .env 中设置 AGENT_MODEL_SELF_HOSTED=true（仅限私有/本地模型）。"
+        ) from exc
     keys = (
         "AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY", "AGENT_OPENAI_MODEL",
-        "AGENT_PROVIDER", "WOA_MODE", "WOA_NATIVE_WRITES",
+        "AGENT_PROVIDER", "AGENT_MODEL_SELF_HOSTED", "WOA_READ_ONLY", "WOA_NATIVE_WRITES",
     )
     out = {key: str(resolved[key]) for key in keys if resolved.get(key)}
     numeric = {

@@ -33,45 +33,28 @@ cfg = command.cfg
 
 
 class HostConfigurationTests(unittest.TestCase):
-    def test_normal_factory_has_the_product_admission_and_one_write_opt_in(self):
+    def test_normal_factory_enables_prefill_and_writes_by_default_with_read_only_kill_switch(self):
         settings = serve.Settings(1, "synthetic", "http://localhost:49111", state=Path("/tmp/synthetic-state"))
         base = {"AGENT_OPENAI_MODEL": "scripted/no-model"}
-        off = serve.host_config(settings, base)
-        self.assertEqual(off.native_page_admission, "read-only-window")
-        self.assertFalse(off.native_writes)
-        self.assertFalse(off.native_submit)
-        self.assertFalse(off.native_edit_prefill)
-        on = serve.host_config(settings, {**base, "WOA_NATIVE_WRITES": "true"})
-        self.assertTrue(on.native_writes)
-        self.assertTrue(on.native_submit)
-        self.assertTrue(on.native_edit_prefill)
-        self.assertEqual(on.native_page_admission, off.native_page_admission)
-        self.assertEqual(on.native_read_policy, off.native_read_policy)
+        default_on = serve.host_config(settings, base)
+        self.assertEqual(default_on.native_page_admission, "read-only-window")
+        self.assertTrue(default_on.native_writes)
+        self.assertTrue(default_on.native_submit)
+        self.assertTrue(default_on.native_edit_prefill)
+        readonly = serve.host_config(settings, {**base, "WOA_READ_ONLY": "true"})
+        self.assertFalse(readonly.native_writes)
+        self.assertFalse(readonly.native_submit)
+        self.assertFalse(readonly.native_write_preparation)
+        self.assertTrue(readonly.native_edit_prefill)
+        self.assertEqual(readonly.native_page_admission, default_on.native_page_admission)
+        self.assertEqual(readonly.native_read_policy, default_on.native_read_policy)
         for value in ("1", "yes", "invalid"):
             with self.subTest(value=value), self.assertRaises(ValueError):
-                serve.host_config(settings, {**base, "WOA_NATIVE_WRITES": value})
-
-    def test_host_config_supports_all_three_named_modes(self):
-        settings = serve.Settings(1, "synthetic", "http://localhost:49111", state=Path("/tmp/synthetic-state"))
-        base = {"AGENT_OPENAI_MODEL": "scripted/no-model"}
-        draft = serve.host_config(settings, {**base, "WOA_MODE": "assisted-draft"})
-        self.assertFalse(draft.native_writes)
-        self.assertFalse(draft.native_submit)
-        self.assertTrue(draft.native_write_preparation)
-        self.assertTrue(draft.native_edit_prefill)
-        readonly = serve.host_config(settings, {**base, "WOA_MODE": "read-only"})
-        self.assertFalse(readonly.native_writes)
-        self.assertFalse(readonly.native_write_preparation)
-        self.assertFalse(readonly.native_edit_prefill)
-        verified = serve.host_config(settings, {**base, "WOA_MODE": "verified-operate"})
-        self.assertTrue(verified.native_writes)
-        self.assertTrue(verified.native_submit)
-        self.assertFalse(verified.native_write_preparation)
-        self.assertTrue(verified.native_edit_prefill)
+                serve.host_config(settings, {**base, "WOA_READ_ONLY": value})
         with self.assertRaises(ValueError):
-            serve.host_config(settings, {**base, "WOA_MODE": "read-only", "WOA_NATIVE_WRITES": "true"})
+            serve.host_config(settings, {**base, "WOA_READ_ONLY": "true", "WOA_NATIVE_WRITES": "true"})
 
-    def test_local_launcher_defaults_native_writes_on_while_respecting_explicit_false(self):
+    def test_local_launcher_defaults_writes_on_while_respecting_read_only_kill_switch(self):
         base_env = {
             "AGENT_OPENAI_BASE_URL": "https://api.deepseek.com/v1",
             "AGENT_OPENAI_API_KEY": "synthetic-key",
@@ -79,10 +62,12 @@ class HostConfigurationTests(unittest.TestCase):
         }
         with patch("web_operation_agent.modeling.client.load_env", return_value=dict(base_env)):
             loaded = cfg.load_model_environment()
+        self.assertEqual(loaded["WOA_READ_ONLY"], "false")
         self.assertEqual(loaded["WOA_NATIVE_WRITES"], "true")
         with patch("web_operation_agent.modeling.client.load_env",
-                   return_value={**base_env, "WOA_NATIVE_WRITES": "false"}):
+                   return_value={**base_env, "WOA_READ_ONLY": "true"}):
             disabled = cfg.load_model_environment()
+        self.assertEqual(disabled["WOA_READ_ONLY"], "true")
         self.assertEqual(disabled["WOA_NATIVE_WRITES"], "false")
 
     def test_local_launcher_reads_pagehelm_toml_with_minimal_api_key_env(self):
@@ -90,7 +75,7 @@ class HostConfigurationTests(unittest.TestCase):
             root = Path(directory)
             (root / ".env").write_text("DEEPSEEK_API_KEY=synthetic-local-key\n", encoding="utf-8")
             (root / "pagehelm.toml").write_text(
-                'provider = "deepseek"\nmode = "assisted-draft"\nturn_timeout_s = 95\n',
+                'provider = "deepseek"\nread_only = true\nturn_timeout_s = 95\n',
                 encoding="utf-8",
             )
             with patch.object(cfg, "ROOT", root), \
@@ -99,9 +84,27 @@ class HostConfigurationTests(unittest.TestCase):
             self.assertEqual(loaded["AGENT_PROVIDER"], "deepseek")
             self.assertEqual(loaded["AGENT_OPENAI_BASE_URL"], "https://api.deepseek.com")
             self.assertEqual(loaded["AGENT_OPENAI_MODEL"], "deepseek-flash")
-            self.assertEqual(loaded["WOA_MODE"], "assisted-draft")
+            self.assertEqual(loaded["WOA_READ_ONLY"], "true")
             self.assertEqual(loaded["WOA_NATIVE_WRITES"], "false")
             self.assertEqual(loaded["WOA_TURN_TIMEOUT_S"], "95")
+
+    def test_local_launcher_supports_ollama_without_api_key_or_price_entry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".env").write_text(
+                "AGENT_PROVIDER=ollama\nAGENT_OPENAI_MODEL=qwen3:14b\nWOA_READ_ONLY=true\nWOA_TURN_TIMEOUT_S=85\n",
+                encoding="utf-8",
+            )
+            with patch.object(cfg, "ROOT", root), \
+                    patch("web_operation_agent.modeling.client.REPO_ROOT", root):
+                loaded = cfg.load_model_environment()
+            self.assertEqual(loaded["AGENT_PROVIDER"], "ollama")
+            self.assertEqual(loaded["AGENT_OPENAI_BASE_URL"], "http://localhost:11434/v1")
+            self.assertEqual(loaded["AGENT_OPENAI_MODEL"], "qwen3:14b")
+            self.assertEqual(loaded["AGENT_MODEL_SELF_HOSTED"], "true")
+            self.assertEqual(loaded["WOA_READ_ONLY"], "true")
+            self.assertEqual(loaded["WOA_TURN_TIMEOUT_S"], "85")
+            self.assertNotIn("AGENT_OPENAI_API_KEY", loaded)
 
 
 

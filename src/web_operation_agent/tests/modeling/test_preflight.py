@@ -50,11 +50,11 @@ class PreflightOfflineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             secret = "synthetic-secret-token-value-123456"
-            (root / ".env").write_text(f"DEEPSEEK_API_KEY={secret}\nWOA_MODE=read-only\n", encoding="utf-8")
+            (root / ".env").write_text(f"DEEPSEEK_API_KEY={secret}\nWOA_READ_ONLY=true\n", encoding="utf-8")
             report = run_preflight(root=root, env_path=root / ".env")
             self.assertTrue(report["ok"])
             self.assertTrue(report["auth_configured"])
-            self.assertEqual(report["mode"], "read-only")
+            self.assertTrue(report["read_only"])
             self.assertFalse(report["self_hosted"])
             self.assertIsNone(report["probe"])
             self.assertNotIn(secret, json.dumps(report))
@@ -162,7 +162,7 @@ class PreflightProbeTests(unittest.TestCase):
         self.assertEqual(seen_auth, [None])
         self.assertTrue(report["checks"]["endpoint_and_usage"]["ok"])
         self.assertTrue(report["checks"]["native_tool_calling"]["ok"])
-        self.assertEqual(report["mode"], "read-only")
+        self.assertFalse(report["read_only"])
         self.assertEqual(report["probe"]["estimated_cost_cny"], 0.0)
 
     def test_probe_diagnoses_missing_usage_missing_tool_call_and_401(self):

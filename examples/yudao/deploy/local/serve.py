@@ -219,7 +219,7 @@ def host_config(settings: Settings, env: dict) -> native.YudaoHostConfig:
         source_release=cfg.RELEASE, native_read_policy=cfg.POLICIES / "fence.json",
         native_page_policy=cfg.POLICIES / "pages.json",
         native_money_policy=cfg.POLICIES / "verified-money.json",
-        native_filter_semantics=cfg.POLICIES / "filters.json", **native.mode_write_options(env),
+        native_filter_semantics=cfg.POLICIES / "filters.json", **native.write_policy_options(env),
         local_dev_mode=True,
         model=env["AGENT_OPENAI_MODEL"], model_env=env,
         daily_allowance_cny=float(extra.pop("daily_allowance_cny", 20.0)),
@@ -230,7 +230,7 @@ def main():
     environment = int(os.environ["WOA_LOCAL_ENVIRONMENT"])
     keys = (
         "AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY", "AGENT_OPENAI_MODEL",
-        "AGENT_PROVIDER", "WOA_MODE", "WOA_NATIVE_WRITES",
+        "AGENT_PROVIDER", "AGENT_MODEL_SELF_HOSTED", "WOA_READ_ONLY", "WOA_NATIVE_WRITES",
         "WOA_DAILY_ALLOWANCE_CNY", "WOA_DAILY_TOTAL_CAP_CNY",
         "WOA_MONTHLY_TOTAL_CAP_CNY", "WOA_MAX_SESSIONS", "WOA_TURN_TIMEOUT_S",
     )
