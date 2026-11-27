@@ -26,8 +26,8 @@ from ..state.quota import SQLiteProviderQuota
 from .egress import DEFAULT_PROVIDER_EGRESS_POLICY, ProviderEgressPolicy
 from .provider import ProviderError, ProviderOutcome, ProviderRuntimeGuard
 from .reasoning import REASONING_FIELDS, request_options
-from .spend import (DEFAULT_LEDGER, PRICES, BudgetExhausted, SpendMeter, UnpricedModel,
-                    cost_with, price_for, reported_model_string)
+from .spend import (DEFAULT_LEDGER, PRICES, SELF_HOSTED_PRICE, BudgetExhausted, SpendMeter,
+                    UnpricedModel, cost_with, price_for, reported_model_string)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -47,21 +47,67 @@ def load_env(path: str | Path | None = None) -> dict:
     return out
 
 
+HOSTED_PROVIDERS = frozenset({"deepseek", "qwen", "openai"})
+_HOSTED_COMMERCIAL_DOMAINS = ("deepseek.com", "dashscope.aliyuncs.com", "openai.com")
+
+
+def _is_hosted_commercial_url(base_url: str) -> bool:
+    host = (urllib.parse.urlsplit(str(base_url or "").strip()).hostname or "").strip().lower()
+    if not host:
+        return False
+    return any(host == domain or host.endswith("." + domain) for domain in _HOSTED_COMMERCIAL_DOMAINS)
+
+
+def _validate_self_hosted(provider: str, base_url: str, self_hosted: bool) -> None:
+    if not self_hosted:
+        return
+    if provider.strip().casefold() in HOSTED_PROVIDERS:
+        raise ValueError(
+            "self_hosted cannot be true for hosted commercial providers; "
+            "use AGENT_PROVIDER=ollama or AGENT_PROVIDER=openai-compatible"
+        )
+    if _is_hosted_commercial_url(base_url):
+        raise ValueError(
+            "self_hosted cannot be true for hosted commercial API endpoints; "
+            "register the model price in policies/prices.json instead"
+        )
+
+
 PROVIDER_DEFAULTS: dict[str, dict[str, object]] = {
     "deepseek": {
         "base_url": "https://api.deepseek.com",
         "model": "deepseek-flash",
         "key_envs": ("DEEPSEEK_API_KEY", "AGENT_OPENAI_API_KEY"),
+        "require_api_key": True,
+        "default_self_hosted": False,
     },
     "qwen": {
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "model": "qwen3.8-flash",
         "key_envs": ("DASHSCOPE_API_KEY", "QWEN_API_KEY", "AGENT_OPENAI_API_KEY"),
+        "require_api_key": True,
+        "default_self_hosted": False,
     },
     "openai": {
         "base_url": "https://api.openai.com/v1",
         "model": "gpt-6.1-sol",
         "key_envs": ("OPENAI_API_KEY", "AGENT_OPENAI_API_KEY"),
+        "require_api_key": True,
+        "default_self_hosted": False,
+    },
+    "ollama": {
+        "base_url": "http://localhost:11434/v1",
+        "model": "",
+        "key_envs": ("OLLAMA_API_KEY", "AGENT_OPENAI_API_KEY"),
+        "require_api_key": False,
+        "default_self_hosted": True,
+    },
+    "openai-compatible": {
+        "base_url": "",
+        "model": "",
+        "key_envs": ("AGENT_OPENAI_API_KEY",),
+        "require_api_key": False,
+        "default_self_hosted": False,
     },
 }
 
@@ -70,6 +116,7 @@ _ALLOWED_TOML_KEYS = frozenset({
     "provider",
     "model",
     "base_url",
+    "self_hosted",
     "mode",
     "daily_allowance_cny",
     "daily_total_cap_cny",
@@ -153,6 +200,21 @@ def parse_pagehelm_toml(data: dict) -> dict[str, object]:
             parsed["base_url"] = _provider_base_url(base_url.strip())
         except ProviderError as exc:
             raise ValueError(str(exc)) from exc
+    if "self_hosted" in data:
+        self_hosted = data["self_hosted"]
+        if type(self_hosted) is not bool:
+            raise ValueError("self_hosted must be a boolean")
+        parsed["self_hosted"] = self_hosted
+    provider_spec = PROVIDER_DEFAULTS.get(str(parsed.get("provider") or "").casefold())
+    effective_self_hosted = (
+        bool(parsed["self_hosted"]) if "self_hosted" in parsed
+        else bool(provider_spec.get("default_self_hosted", False)) if provider_spec else False
+    )
+    _validate_self_hosted(
+        str(parsed.get("provider") or ""),
+        str(parsed.get("base_url") or ""),
+        effective_self_hosted,
+    )
     for key in ("daily_allowance_cny", "daily_total_cap_cny", "monthly_total_cap_cny"):
         if key in data:
             value = data[key]
@@ -177,6 +239,17 @@ def load_pagehelm_toml(path: str | Path) -> dict[str, object]:
     return parse_pagehelm_toml(raw)
 
 
+def _parse_optional_bool_env(raw: str, name: str) -> bool | None:
+    text = raw.strip().lower()
+    if not text:
+        return None
+    if text == "true":
+        return True
+    if text == "false":
+        return False
+    raise ValueError(f"{name} must be true or false")
+
+
 def _infer_provider_from_env(env: Mapping[str, str]) -> str:
     hits = [
         name for name, spec in PROVIDER_DEFAULTS.items()
@@ -199,25 +272,65 @@ def resolve_pagehelm_environment(
     expand_operation_mode(default_mode)
     base_root = Path(root) if root is not None else REPO_ROOT
     env = dict(env_values) if env_values is not None else load_env(base_root / ".env")
-    config_file = Path(toml_path) if toml_path is not None else (base_root / "pagehelm.toml")
-    toml = load_pagehelm_toml(config_file) if config_file.is_file() else {}
+    if toml_path is not None:
+        config_file = Path(toml_path)
+        if not config_file.is_file():
+            raise FileNotFoundError(f"config file not found: {config_file}")
+        toml = load_pagehelm_toml(config_file)
+    else:
+        config_file = base_root / "pagehelm.toml"
+        toml = load_pagehelm_toml(config_file) if config_file.is_file() else {}
 
-    provider = str(toml.get("provider") or env.get("AGENT_PROVIDER") or "").strip()
-    if not provider and not str(env.get("AGENT_OPENAI_BASE_URL") or "").strip():
+    raw_env_url = str(env.get("AGENT_OPENAI_BASE_URL") or "").strip()
+    raw_env_model = str(env.get("AGENT_OPENAI_MODEL") or "").strip()
+    raw_generic_key = str(env.get("AGENT_OPENAI_API_KEY") or "").strip()
+    raw_env_provider = str(env.get("AGENT_PROVIDER") or "").strip()
+    toml_provider = str(toml.get("provider") or "").strip()
+    if toml_provider and raw_env_provider and toml_provider.casefold() != raw_env_provider.casefold():
+        raise ValueError(f"provider={toml_provider!r} conflicts with AGENT_PROVIDER={raw_env_provider!r}")
+
+    provider = toml_provider or raw_env_provider
+    if not provider and not (raw_env_url and raw_generic_key):
         provider = _infer_provider_from_env(env)
+    provider_key = provider.casefold()
+    if provider_key in PROVIDER_DEFAULTS:
+        provider = provider_key
 
-    spec = PROVIDER_DEFAULTS.get(provider)
-    env_url = env.get("AGENT_OPENAI_BASE_URL") if "provider" not in toml else ""
-    env_model = env.get("AGENT_OPENAI_MODEL") if "provider" not in toml else ""
-    raw_base_url = str(toml.get("base_url") or (spec["base_url"] if (spec and "provider" in toml) else env_url) or (spec["base_url"] if spec else "")).strip()
-    raw_model = str(toml.get("model") or (spec["model"] if (spec and "provider" in toml) else env_model) or (spec["model"] if spec else "")).strip()
+    spec = PROVIDER_DEFAULTS.get(provider_key)
+    env_self_hosted = _parse_optional_bool_env(
+        str(env.get("AGENT_MODEL_SELF_HOSTED") or ""), "AGENT_MODEL_SELF_HOSTED"
+    )
+    if "self_hosted" in toml:
+        self_hosted = bool(toml["self_hosted"])
+        if env_self_hosted is not None and env_self_hosted != self_hosted:
+            raise ValueError(
+                f"self_hosted={self_hosted!r} conflicts with AGENT_MODEL_SELF_HOSTED="
+                f"{str(env.get('AGENT_MODEL_SELF_HOSTED') or '')!r}"
+            )
+    elif env_self_hosted is not None:
+        self_hosted = env_self_hosted
+    else:
+        self_hosted = bool(spec.get("default_self_hosted", False)) if spec else False
+
+    spec_url = str(spec["base_url"]) if spec else ""
+    spec_model = str(spec["model"]) if spec else ""
+    if "provider" in toml:
+        raw_base_url = str(toml.get("base_url") or spec_url or raw_env_url).strip()
+        raw_model = str(toml.get("model") or spec_model or raw_env_model).strip()
+    else:
+        raw_base_url = str(toml.get("base_url") or raw_env_url or spec_url).strip()
+        raw_model = str(toml.get("model") or raw_env_model or spec_model).strip()
+
+    _validate_self_hosted(provider, raw_base_url, self_hosted)
+
     key_candidates = spec["key_envs"] if spec else ("AGENT_OPENAI_API_KEY",)
     api_key = next((str(env.get(k) or "").strip() for k in key_candidates if str(env.get(k) or "").strip()), "")
+    require_api_key = bool(spec.get("require_api_key", True)) if spec is not None else (not self_hosted)
 
     missing = []
     if not raw_base_url:
         missing.append("provider/base_url (pagehelm.toml) or AGENT_OPENAI_BASE_URL")
-    if not api_key:
+    if require_api_key and not api_key:
         missing.append(f"{key_candidates[0]} or AGENT_OPENAI_API_KEY")
     if not raw_model:
         missing.append("model (pagehelm.toml) or AGENT_OPENAI_MODEL")
@@ -249,6 +362,7 @@ def resolve_pagehelm_environment(
         "AGENT_OPENAI_BASE_URL": base_url,
         "AGENT_OPENAI_API_KEY": api_key,
         "AGENT_OPENAI_MODEL": model,
+        "AGENT_MODEL_SELF_HOSTED": "true" if self_hosted else "false",
         "WOA_MODE": mode,
         "WOA_NATIVE_WRITES": "true" if options["native_writes"] else "false",
         "mode_options": options,
@@ -311,7 +425,7 @@ def _provider_base_url(value: str) -> str:
     if (not parsed.hostname or parsed.username is not None or parsed.password is not None
             or parsed.query or parsed.fragment):
         raise ProviderError("AGENT_OPENAI_BASE_URL must be an absolute provider base URL")
-    loopback = parsed.hostname.casefold() == "localhost"
+    loopback = parsed.hostname.casefold() in {"localhost", "host.docker.internal"}
     try:
         loopback = loopback or ipaddress.ip_address(parsed.hostname).is_loopback
     except ValueError:
@@ -396,6 +510,7 @@ class ChatModel(_ConcreteChatProvider):
     def __init__(self, meter: SpendMeter, *, env: dict | None = None, model: str | None = None,
                  max_completion_tokens: int = 2048, temperature: float = 0.0,
                  timeout: int = 180, provider: str | None = None,
+                 self_hosted: bool | None = None,
                  options: dict | None = None,
                  egress_policy: ProviderEgressPolicy | None = None,
                  runtime_guard: ProviderRuntimeGuard | None = None,
@@ -405,10 +520,25 @@ class ChatModel(_ConcreteChatProvider):
         raw_base = env.get("AGENT_OPENAI_BASE_URL") or ""
         self._key = env.get("AGENT_OPENAI_API_KEY") or ""
         self.model = model or env.get("AGENT_OPENAI_MODEL") or ""
+        env_provider = (provider or env.get("AGENT_PROVIDER") or "").strip()
+        provider_key = env_provider.casefold()
+        if self_hosted is None:
+            parsed_self_hosted = _parse_optional_bool_env(
+                str(env.get("AGENT_MODEL_SELF_HOSTED") or ""), "AGENT_MODEL_SELF_HOSTED"
+            )
+            if parsed_self_hosted is not None:
+                self.self_hosted = parsed_self_hosted
+            else:
+                self.self_hosted = (provider_key == "ollama")
+        elif type(self_hosted) is not bool:
+            raise TypeError("self_hosted must be a boolean or None")
+        else:
+            self.self_hosted = self_hosted
+        allow_no_key = self.self_hosted or provider_key in {"ollama", "openai-compatible"}
         # A label for the ledger, nothing more. It has no behavioural meaning -- the code path
         # is the same for every OpenAI-compatible endpoint -- and defaults to the host in the
         # base URL so switching providers needs no code change, only .env.
-        if not (raw_base and self._key and self.model):
+        if not (raw_base and self.model and (self._key or allow_no_key)):
             raise ProviderError(
                 "AGENT_OPENAI_BASE_URL / _API_KEY / _MODEL are not all set. "
                 "`AGENT_OPENAI_MODEL_PRO` was renamed to `AGENT_OPENAI_MODEL`: nothing "
@@ -421,7 +551,11 @@ class ChatModel(_ConcreteChatProvider):
                        for value in (raw_base, self._key, self.model))):
             raise ProviderError("provider endpoint, credential, and model must be safe strings")
         self.base = _provider_base_url(raw_base)
-        provider = provider or env.get("AGENT_PROVIDER") or _host_label(self.base)
+        try:
+            _validate_self_hosted(env_provider, self.base, self.self_hosted)
+        except ValueError as exc:
+            raise ProviderError(str(exc), code="provider_configuration") from exc
+        provider = env_provider or _host_label(self.base)
         if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
                 or not math.isfinite(timeout) or timeout <= 0):
             raise ValueError("provider timeout must be a positive finite number")
@@ -437,7 +571,7 @@ class ChatModel(_ConcreteChatProvider):
         self.shared_quota = shared_quota
         self.meter = meter
         # Fail now, loudly, rather than book a run at another model's rates.
-        meter.price = price_for(self.model)
+        meter.price = price_for(self.model, self_hosted=self.self_hosted)
         self.provider = provider
         self.max_completion_tokens = max_completion_tokens
         self.temperature = temperature
@@ -612,9 +746,10 @@ class ChatModel(_ConcreteChatProvider):
             request_id = uuid.uuid4().hex
             url = f"{self.base}/chat/completions"
             headers = {"content-type": "application/json",
-                       "authorization": f"Bearer {self._key}",
                        "user-agent": "web-operation-agent/0.3",
                        "x-woa-request-id": request_id}
+            if self._key:
+                headers["authorization"] = f"Bearer {self._key}"
             try:
                 if cancelled is None:
                     req = urllib.request.Request(

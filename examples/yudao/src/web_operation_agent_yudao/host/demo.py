@@ -41,7 +41,7 @@ from ..rules.repository import repository_source
 from .turn import yudao_turn_config
 
 _MODEL_ENV_KEYS = ("AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY", "AGENT_OPENAI_MODEL",
-                   "AGENT_PROVIDER")
+                   "AGENT_PROVIDER", "AGENT_MODEL_SELF_HOSTED")
 _OPERATE_CARD = 'section.woa-approval[data-kind="operate"]'
 _APPROVE_CONTROL = '[data-testid="woa-approve"]'
 _ADMIN_RENDERED = "() => !!document.querySelector('.el-breadcrumb__item, .v-tags-view__item.is-active')"

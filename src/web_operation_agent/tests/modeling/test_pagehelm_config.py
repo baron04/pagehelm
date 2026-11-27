@@ -151,12 +151,92 @@ class PageHelmConfigTests(unittest.TestCase):
 
         with self.assertRaises(ProviderError):
             resolve_pagehelm_environment(env_values={"AGENT_OPENAI_MODEL": "deepseek-flash"})
-        self.assertEqual(set(PROVIDER_DEFAULTS), {"deepseek", "qwen", "openai"})
+        self.assertEqual(
+            set(PROVIDER_DEFAULTS),
+            {"deepseek", "qwen", "openai", "ollama", "openai-compatible"},
+        )
         with tempfile.TemporaryDirectory() as directory:
             toml = Path(directory) / "pagehelm.toml"
             toml.write_text('api_key = "nope"\n', encoding="utf-8")
             with self.assertRaisesRegex(ValueError, r"\.env"):
                 load_pagehelm_toml(toml)
+
+    def test_ollama_and_openai_compatible_self_hosted_presets_and_bypass_guards(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".env").write_text("", encoding="utf-8")
+            (root / "pagehelm.toml").write_text(
+                'provider = "ollama"\nmodel = "qwen3:14b"\n',
+                encoding="utf-8",
+            )
+            resolved = resolve_pagehelm_environment(root)
+            self.assertEqual(resolved["AGENT_PROVIDER"], "ollama")
+            self.assertEqual(resolved["AGENT_OPENAI_BASE_URL"], "http://localhost:11434/v1")
+            self.assertEqual(resolved["AGENT_OPENAI_MODEL"], "qwen3:14b")
+            self.assertEqual(resolved["AGENT_OPENAI_API_KEY"], "")
+            self.assertEqual(resolved["AGENT_MODEL_SELF_HOSTED"], "true")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".env").write_text("", encoding="utf-8")
+            (root / "pagehelm.toml").write_text(
+                'provider = "openai-compatible"\n'
+                'base_url = "http://host.docker.internal:11434/v1"\n'
+                'model = "Qwen/Qwen3-32B"\n'
+                "self_hosted = true\n",
+                encoding="utf-8",
+            )
+            resolved = resolve_pagehelm_environment(root)
+            self.assertEqual(resolved["AGENT_PROVIDER"], "openai-compatible")
+            self.assertEqual(resolved["AGENT_OPENAI_BASE_URL"], "http://host.docker.internal:11434/v1")
+            self.assertEqual(resolved["AGENT_OPENAI_MODEL"], "Qwen/Qwen3-32B")
+            self.assertEqual(resolved["AGENT_OPENAI_API_KEY"], "")
+            self.assertEqual(resolved["AGENT_MODEL_SELF_HOSTED"], "true")
+
+        for bad_toml in (
+            {"provider": "deepseek", "self_hosted": True},
+            {"provider": "openai-compatible", "base_url": "https://api.openai.com/v1", "self_hosted": True},
+            {"provider": "ollama", "base_url": "https://api.deepseek.com"},
+            {"self_hosted": "yes"},
+        ):
+            with self.subTest(bad_toml=bad_toml), self.assertRaises(ValueError):
+                parse_pagehelm_toml(bad_toml)
+
+        for bad_env in (
+            {
+                "AGENT_PROVIDER": "DeepSeek",
+                "DEEPSEEK_API_KEY": "synthetic-key",
+                "AGENT_MODEL_SELF_HOSTED": "true",
+            },
+            {
+                "AGENT_PROVIDER": "ollama",
+                "AGENT_OPENAI_BASE_URL": "https://api.openai.com/v1",
+                "AGENT_OPENAI_MODEL": "gpt-6.1-sol",
+            },
+            {
+                "AGENT_OPENAI_BASE_URL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "AGENT_OPENAI_API_KEY": "synthetic-key",
+                "AGENT_OPENAI_MODEL": "qwen3.8-flash",
+                "AGENT_MODEL_SELF_HOSTED": "true",
+            },
+        ):
+            with self.subTest(bad_env=bad_env), self.assertRaisesRegex(ValueError, "self_hosted"):
+                resolve_pagehelm_environment(env_values=bad_env)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "pagehelm.toml").write_text('provider = "deepseek"\n', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "conflicts with AGENT_PROVIDER"):
+                resolve_pagehelm_environment(
+                    root,
+                    env_values={"AGENT_PROVIDER": "qwen", "DASHSCOPE_API_KEY": "synthetic-key"},
+                )
+            with self.assertRaises(FileNotFoundError):
+                resolve_pagehelm_environment(
+                    root,
+                    env_values={"DEEPSEEK_API_KEY": "synthetic-key"},
+                    toml_path=root / "missing.toml",
+                )
 
 
 if __name__ == "__main__":

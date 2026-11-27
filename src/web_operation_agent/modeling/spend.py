@@ -48,19 +48,30 @@ def reported_model_string(value: object) -> str | None:
 #: instead of guessing, and adding one requires an explicit dated price entry.
 PRICES = json.loads((Path(__file__).parents[1] / "policies" / "prices.json").read_text())
 
+SELF_HOSTED_PRICE: dict[str, object] = {
+    "input_per_m": 0.0,
+    "output_per_m": 0.0,
+    "cache_read_per_m": 0.0,
+    "currency": "CNY",
+    "taken": "self-hosted (explicit zero-cost reference pricing)",
+}
+
 
 class UnpricedModel(ProviderError):
     """A model was used that has no registered price. Never silently mis-cost a run."""
 
 
-def price_for(model: str) -> dict:
-    """The price table for a model, or a refusal naming what to add."""
+def price_for(model: str, *, self_hosted: bool = False) -> dict:
+    """The price table for a model, or an explicit refusal naming how to register or mark self-hosted."""
+    if self_hosted:
+        return dict(SELF_HOSTED_PRICE)
     if model in PRICES:
         return PRICES[model]
     raise UnpricedModel(
         f"no price registered for model {model!r}; add it to "
-        f"src/web_operation_agent/policies/prices.json with the date it was taken, or the "
-        f"ledger will under- or over-state what this run cost")
+        f"src/web_operation_agent/policies/prices.json with the date it was taken, "
+        f"or set AGENT_MODEL_SELF_HOSTED=true in .env "
+        f"for local/self-hosted models so the ledger does not mis-state paid spend")
 
 
 def cost_with(price: dict, i: int, o: int, c: int) -> float:

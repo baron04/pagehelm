@@ -47,11 +47,13 @@ class PriceAgreement(unittest.TestCase):
                 self.assertIn(field, entry, f"{model} is missing {field}")
 
     def test_an_unregistered_model_refuses_rather_than_guessing(self):
-        from web_operation_agent.modeling.client import UnpricedModel, price_for
+        from web_operation_agent.modeling.client import SELF_HOSTED_PRICE, UnpricedModel, price_for
         with self.assertRaises(UnpricedModel) as caught:
             price_for("some-model-nobody-registered")
         self.assertIn("prices.json", str(caught.exception),
                       "the refusal must say what to do about it")
+        self.assertIn("AGENT_MODEL_SELF_HOSTED", str(caught.exception))
+        self.assertEqual(price_for("qwen3:14b", self_hosted=True), SELF_HOSTED_PRICE)
 
     def test_the_cost_formula_uses_registered_price_fields(self):
         i, o, c = 12345, 678, 900
@@ -325,6 +327,81 @@ class TheClientIsNotTiedToOneProvider(unittest.TestCase):
         from web_operation_agent.modeling.client import PRICES
         chat = self._chat()
         self.assertEqual(chat.meter.price, PRICES["qwen3.8-flash"])
+
+    def test_self_hosted_chat_allows_empty_key_omits_auth_header_and_meters_zero_cost(self):
+        import io
+        import urllib.request
+        from web_operation_agent.modeling.client import ChatModel
+
+        captured_headers = {}
+
+        class _FakeResponse(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+        def fake_urlopen(req, timeout=None, context=None):
+            captured_headers.update({k.lower(): v for k, v in req.header_items()})
+            return _FakeResponse(json.dumps({
+                "usage": {"prompt_tokens": 120, "completion_tokens": 30},
+                "choices": [{"finish_reason": "stop", "message": {"content": "ok"}}],
+            }).encode("utf-8"))
+
+        with tempfile.TemporaryDirectory() as directory:
+            meter = SpendMeter(ledger=Path(directory) / "spend.jsonl", run_input_token_abort=100)
+            chat = ChatModel(
+                meter,
+                env={
+                    "AGENT_PROVIDER": "ollama",
+                    "AGENT_OPENAI_BASE_URL": "http://host.docker.internal:11434/v1",
+                    "AGENT_OPENAI_MODEL": "qwen3:14b",
+                    "AGENT_OPENAI_API_KEY": "",
+                    "AGENT_MODEL_SELF_HOSTED": "true",
+                },
+            )
+            with mock.patch.object(urllib.request, "urlopen", side_effect=fake_urlopen):
+                with self.assertRaises(BudgetExhausted) as exc:
+                    chat.complete([{"role": "user", "content": "hi"}], None, "r1")
+            self.assertEqual(exc.exception.kind, "token_budget")
+            self.assertNotIn("authorization", captured_headers)
+            report = meter.report()
+            self.assertEqual(report["input_tokens"], 120)
+            self.assertEqual(report["output_tokens"], 30)
+            self.assertEqual(report["cost_cny"], 0.0)
+
+    def test_direct_chat_model_rejects_self_hosted_on_commercial_hosts_and_defaults_ollama(self):
+        from web_operation_agent.modeling.client import ChatModel, ProviderError, SELF_HOSTED_PRICE
+
+        with tempfile.TemporaryDirectory() as directory:
+            for bad_env in (
+                {
+                    "AGENT_OPENAI_BASE_URL": "https://api.deepseek.com",
+                    "AGENT_OPENAI_API_KEY": "synthetic-key",
+                    "AGENT_OPENAI_MODEL": "deepseek-flash",
+                    "AGENT_MODEL_SELF_HOSTED": "true",
+                },
+                {
+                    "AGENT_PROVIDER": "ollama",
+                    "AGENT_OPENAI_BASE_URL": "https://api.openai.com/v1",
+                    "AGENT_OPENAI_MODEL": "gpt-6.1-sol",
+                },
+            ):
+                with self.subTest(bad_env=bad_env), self.assertRaises(ProviderError) as exc:
+                    ChatModel(SpendMeter(ledger=Path(directory) / "spend.jsonl"), env=bad_env)
+                self.assertEqual(exc.exception.code, "provider_configuration")
+
+            ollama_chat = ChatModel(
+                SpendMeter(ledger=Path(directory) / "spend-ollama.jsonl"),
+                env={
+                    "AGENT_PROVIDER": "ollama",
+                    "AGENT_OPENAI_BASE_URL": "http://localhost:11434/v1",
+                    "AGENT_OPENAI_MODEL": "qwen3:14b",
+                },
+            )
+            self.assertTrue(ollama_chat.self_hosted)
+            self.assertEqual(ollama_chat.meter.price, SELF_HOSTED_PRICE)
 
 
 class ProviderSignalsReachTheCaller(unittest.TestCase):
