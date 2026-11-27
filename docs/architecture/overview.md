@@ -70,7 +70,7 @@ Every tool receipt and settled page observation feeds back into the same server 
 | Responsibility | Server core | Browser Runtime | Notes |
 | --- | --- | --- | --- |
 | Prompts, model API keys, tool routing | Yes | No | Frontend bundles contain no model keys or planners |
-| Session auth and safety mode policy | Yes | No | Server locks `read-only` / `assisted-draft` / `verified-operate` |
+| Session auth and write policy | Yes | No | Server enforces declared write tools and `WOA_READ_ONLY` kill-switch |
 | Business entities and field semantics | Adapter + Skills | No | Generic frontend carries no app-specific models |
 | DOM snapshots and element collection | No | Yes | Bounded by `max_elements = 200` |
 | Panel states, copy, and progress keys | Yes (`panel_contract.json`) | Render only | Projected over v2 `/timeline` and `/events` |

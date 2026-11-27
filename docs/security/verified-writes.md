@@ -1,21 +1,20 @@
 ---
 title: Write Safety & Privacy
-description: Safety modes, the WritePipeline stages, client visibility gates, credential redaction, SourceTree allowlists, and CSP requirements.
+description: Write boundaries, WOA_READ_ONLY kill-switch, WritePipeline stages, client visibility gates, credential redaction, SourceTree allowlists, and CSP requirements.
 ---
 
-PageHelm disables all browser and backend mutations by default. When writes are enabled, every state change runs through `WritePipeline` (`src/web_operation_agent/business/write_pipeline.py`): build and validate a structured diff, obtain human confirmation on a visible approval card, verify no drift under a single-flight lock, dispatch at most once, and read back under the same actor.
+In PageHelm, write scope is defined explicitly by the write operations and Skills registered in your application adapter. Entities without declared write tools remain read-only (with form prefill handover); registered writes are enabled by default and always run through `WritePipeline` (`src/web_operation_agent/business/write_pipeline.py`): build and validate a structured diff, obtain human confirmation on a visible approval card, verify no drift under a single-flight lock, dispatch at most once, and read back under the same actor.
 
-## 1. Safety Modes
+## 1. Write Policy & Read-Only Kill-Switch (`WOA_READ_ONLY`)
 
-The server locks the active mode during composition and session binding; the browser cannot elevate permissions:
+Page form prefill is always enabled (undoable, skips passwords and uploads, never auto-submits). Backend mutations are restricted to adapter-declared write tools and can be switched off at any time on the server via `WOA_READ_ONLY=true`; the browser cannot override this setting:
 
-| Mode | Same-actor API / SQL reads | Navigation & filtering | Non-destructive form prefill (undoable) | Write proposal prep | Write dispatch & readback |
-| --- | --- | --- | --- | --- | --- |
-| `read-only` (prod default) | Allowed | Allowed | Off | Off | Off |
-| `assisted-draft` | Allowed | Allowed | Allowed (skips passwords & uploads) | Allowed | Off (never dispatches) |
-| `verified-operate` (local default) | Allowed | Allowed | Allowed | Allowed | Allowed (via `WritePipeline` with readback) |
+| Setting (`WOA_READ_ONLY`) | Same-actor API / SQL reads | Navigation & filtering | Form prefill (undoable, skips passwords & uploads) | Registered writes & readback |
+| --- | --- | --- | --- | --- |
+| Unset or `false` (default) | Allowed | Allowed | Allowed | Allowed (via `WritePipeline` confirmation & readback) |
+| `true` (kill-switch / read-only demo) | Allowed | Allowed | Allowed | Off (no backend write dispatch) |
 
-Prompts, Skill files, source excerpts, and prior session turns grant no write permission. Both deployment configuration and the application adapter must opt in explicitly.
+Prompts, Skill files, source excerpts, and prior session turns grant no write permission on their own. Every write binds to an adapter-declared typed operation and requires fresh human confirmation.
 
 ## 2. `WritePipeline` Stages
 
@@ -88,7 +87,7 @@ When source-assisted inspection is enabled, `SourceTree` (`src/web_operation_age
 
 Page DOM text, record notes, Skill Markdown, and free-form model output are all treated as untrusted data:
 
-- Untrusted content cannot mint an `approval_id`, alter safety mode, widen `SourceTree` globs, or bypass the single-flight lock.
+- Untrusted content cannot mint an `approval_id`, override `WOA_READ_ONLY`, widen `SourceTree` globs, or bypass the single-flight lock.
 - Approval card diffs are validated on the server via `validate_details` rather than accepting arbitrary client strings.
 - Unknown fields or out-of-bounds payloads raise typed `RemoteProtocolError` errors without falling back to exception-message matching.
 

@@ -23,34 +23,57 @@ python scripts/build_panel.py --install
 python scripts/build_runtime.py --skip-build
 ```
 
-## 二、配置密钥与运行模式
+## 二、配置模型与运行模式（`.env`）
 
-密钥与普通运行配置分别存放在 `.env` 和 `pagehelm.toml`（两者均已在 `.gitignore` 中忽略）：
+复制根目录下的 `.env.example`（`.env` 已在 `.gitignore` 中忽略，切勿提交到仓库）：
 
 ```bash
 cp .env.example .env
-cp pagehelm.example.toml pagehelm.toml
 ```
 
-在 `.env` 中仅填写所用模型服务商对应的 API Key：
+按实际使用的模型来源在 `.env` 中配置（完整字段与默认值见 [配置与通信协议](../reference/protocol-and-configuration.md)）：
 
 ```dotenv
-# 按实际使用的 provider 选择其一
+# 1) 官方云厂商：只填一行对应的 API Key 即可自动推导官方地址和默认模型
 DEEPSEEK_API_KEY=your-key-here
 # DASHSCOPE_API_KEY=your-key-here
 # OPENAI_API_KEY=your-key-here
+
+# 如需自定义地址或模型名，可直接填写覆盖：
+# AGENT_OPENAI_BASE_URL=https://api.deepseek.com
+# AGENT_OPENAI_MODEL=deepseek-chat
+
+# 可选：全局只读熔断开关（默认关闭；表单预填与适配器声明的写入默认可用，写前须人工确认）：
+# WOA_READ_ONLY=true
 ```
 
-在 `pagehelm.toml` 中指定模型提供方和安全模式（TOML 中禁止出现密钥字段，完整字段与默认值见 [配置与通信协议](../reference/protocol-and-configuration.md)）：
+托管云端模型必须在 `src/web_operation_agent/policies/prices.json` 中存在计价条目。（若项目目录下存在旧版 `pagehelm.toml`，系统仍保持向下兼容读取。）
 
-```toml
-provider = "deepseek"     # "deepseek" | "qwen" | "openai"
-mode = "verified-operate" # "read-only" | "assisted-draft" | "verified-operate"
-# daily_allowance_cny = 20.0
-# turn_timeout_s = 120
+### 私有化 / 本地模型（Ollama、vLLM、LM Studio）
+
+内网或本地离线推理无需填写云端 API Key 或登记 `prices.json`，直接在 `.env` 中配置即可：
+
+```dotenv
+# 本机 Ollama（默认连接 http://localhost:11434/v1，自动开启免计价表模式）
+AGENT_PROVIDER=ollama
+AGENT_OPENAI_MODEL=qwen3:14b
+# 若通过 `./local`（Docker 容器）访问宿主机上的 Ollama，请额外补充：
+# AGENT_OPENAI_BASE_URL=http://host.docker.internal:11434/v1
 ```
 
-未创建 `pagehelm.toml` 时，仍兼容原有 `AGENT_OPENAI_*` / `AGENT_PROVIDER` / `WOA_NATIVE_WRITES` 环境变量。所有使用的模型都必须在 `src/web_operation_agent/policies/prices.json` 中存在计价条目。
+如需连接企业内网 vLLM / LM Studio / 私有网关，可按如下配置并在启动前执行一次原生工具调用预检：
+
+```dotenv
+AGENT_PROVIDER=openai-compatible
+AGENT_OPENAI_BASE_URL=https://vllm.internal.example/v1
+AGENT_OPENAI_MODEL=Qwen/Qwen3-32B
+AGENT_MODEL_SELF_HOSTED=true
+# AGENT_OPENAI_API_KEY=your-internal-token
+```
+
+```bash
+.venv/bin/python -m web_operation_agent.modeling.preflight --probe
+```
 
 ## 三、启动本地参考环境（`./local`）
 
@@ -64,8 +87,8 @@ mode = "verified-operate" # "read-only" | "assisted-draft" | "verified-operate"
 常用操作命令：
 
 ```bash
-./local check             # 只读检查：Docker、缓存版本、pagehelm.toml、计价与策略
-./local                   # 启动或更新环境 1（本地未显式设 mode 时默认 verified-operate）
+./local check             # 只读检查：Docker、缓存版本、.env 配置、计价与策略
+./local                   # 启动或更新环境 1
 ./local --synthetic-clock # 将应用与 MySQL 时钟对齐合成数据基准日（2026-10-25T09:00:00+08:00）
 ./local status            # 核验业务接口、/readyz 与线上 assistant.js SHA-256
 ./local logs              # 查看助手日志（`./local logs app` 查看业务应用、MySQL 与 Redis 日志）

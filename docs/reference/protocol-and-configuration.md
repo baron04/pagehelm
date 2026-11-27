@@ -1,51 +1,49 @@
 ---
 title: Configuration & Protocol
-description: pagehelm.toml and .env validation rules, mode expansion, HTTP/SSE endpoints and JSON payloads, panel_contract.json v2, presentation.json, and system hard bounds.
+description: .env validation rules, write policy expansion, HTTP/SSE endpoints and JSON payloads, panel_contract.json v2, presentation.json, and system hard bounds.
 ---
 
 This reference covers PageHelm configuration rules, the HTTP/SSE transport protocol, `panel_contract.json` (`protocol: 2`), `presentation.json` UI constants, and system hard limits.
 
-## 1. Configuration (`pagehelm.toml` and `.env`)
+## 1. Configuration (`.env`)
 
-`resolve_pagehelm_environment()` keeps runtime settings separate from secrets. `parse_pagehelm_toml()` validates TOML via Python's stdlib `tomllib`, rejecting unknown keys, booleans masquerading as numbers, non-HTTPS remote URLs, and credential-like key names (`*api_key*`, `*secret*`, `*token*`, `*password*`).
-
-### `pagehelm.toml` Fields
-
-| Field | Type & constraint | Default & behavior |
-| --- | --- | --- |
-| `provider` | `"deepseek"` \| `"qwen"` \| `"openai"` | Expands official `base_url`, priced default `model`, and `.env` key lookup order |
-| `mode` | `"read-only"` \| `"assisted-draft"` \| `"verified-operate"` | `"verified-operate"` for `./local`; `"read-only"` for hosted deploys |
-| `model` | Non-empty string (`<= 120` chars), must exist in `policies/prices.json` | Derived from `provider` |
-| `base_url` | `https://...` (or loopback `http://localhost` / `127.0.0.1`), no userinfo or query | Derived from `provider` |
-| `daily_allowance_cny` | Finite float `> 0` and `<= 1,000,000` | Per-actor daily CNY cap (`5.0` hosted, `20.0` local) |
-| `daily_total_cap_cny` | Finite float `> 0` and `<= 1,000,000` | Process-wide daily atomic reserve cap (unset = disabled) |
-| `monthly_total_cap_cny` | Finite float `> 0` and `<= 1,000,000` | Process-wide monthly atomic reserve cap (unset = disabled) |
-| `max_sessions` | Integer `1..100,000` | Default `300` active sessions per host |
-| `turn_timeout_s` | Integer `1..3,600` | Wall-clock turn budget in seconds (default `120`, excluding approval wait) |
-
-### Provider Defaults
-
-| `provider` | Default `base_url` | Default `model` | `.env` key lookup order |
-| --- | --- | --- | --- |
-| `deepseek` | `https://api.deepseek.com` | `deepseek-flash` | `DEEPSEEK_API_KEY`, `AGENT_OPENAI_API_KEY` |
-| `qwen` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3.8-flash` | `DASHSCOPE_API_KEY`, `QWEN_API_KEY`, `AGENT_OPENAI_API_KEY` |
-| `openai` | `https://api.openai.com/v1` | `gpt-6.1-sol` | `OPENAI_API_KEY`, `AGENT_OPENAI_API_KEY` |
+`resolve_pagehelm_environment()` resolves model endpoints, safety modes, and host limits directly from `.env` (or process environment variables), enforcing numeric bounds, HTTPS remote URLs (loopback `http://localhost` / `127.0.0.1` / `host.docker.internal` permitted), and conflict checks. Legacy `pagehelm.toml` files remain supported if present or passed via `--config` (credentials remain forbidden in TOML).
 
 ### `.env` Variables
 
-| Variable | Purpose |
-| --- | --- |
-| `DEEPSEEK_API_KEY`, `DASHSCOPE_API_KEY` / `QWEN_API_KEY`, `OPENAI_API_KEY` | Matched automatically according to `provider` in `pagehelm.toml` |
-| `AGENT_OPENAI_BASE_URL`, `AGENT_OPENAI_API_KEY`, `AGENT_OPENAI_MODEL`, `AGENT_PROVIDER` | Explicit overrides or legacy configuration without `pagehelm.toml` |
-| `WOA_MODE`, `WOA_NATIVE_WRITES` | Environment overrides (startup fails if conflicting with `pagehelm.toml`) |
+| Variable | Type & constraint | Default & behavior |
+| --- | --- | --- |
+| `DEEPSEEK_API_KEY`, `DASHSCOPE_API_KEY` / `QWEN_API_KEY`, `OPENAI_API_KEY`, `OLLAMA_API_KEY` | Secret string | Setting a single provider key automatically infers `AGENT_PROVIDER`, official `base_url`, and default `model` |
+| `AGENT_PROVIDER` | `"deepseek"` \| `"qwen"` \| `"openai"` \| `"ollama"` \| `"openai-compatible"` | Selects a built-in provider preset explicitly (used for local Ollama or custom gateways) |
+| `AGENT_OPENAI_BASE_URL` | `https://...` (or loopback `http://localhost` / `127.0.0.1` / `host.docker.internal`), no userinfo or query | Overrides preset `base_url` (required explicitly for `"openai-compatible"`) |
+| `AGENT_OPENAI_MODEL` | Non-empty string (`<= 120` chars), must exist in `policies/prices.json` unless self-hosted | Overrides preset `model` (required explicitly for `"ollama"` and `"openai-compatible"`) |
+| `AGENT_OPENAI_API_KEY` | Secret string | Generic OpenAI-compatible API key (optional for `"ollama"` and self-hosted endpoints) |
+| `AGENT_MODEL_SELF_HOSTED` | `"true"` \| `"false"`; rejected for `"deepseek"`, `"qwen"`, `"openai"` | `"true"` for `"ollama"`, `"false"` otherwise; uses explicit zero-cost reference pricing instead of `policies/prices.json` |
+| `WOA_READ_ONLY` | `"true"` \| `"false"` | Optional kill-switch: defaults to `"false"` (form prefill and adapter-registered writes enabled); set `"true"` to disable all backend writes (conflicts with `WOA_NATIVE_WRITES` fail at startup) |
+| `WOA_DAILY_ALLOWANCE_CNY` | Finite float `> 0` and `<= 1,000,000` | Per-actor daily CNY cap (`5.0` hosted, `20.0` local) |
+| `WOA_DAILY_TOTAL_CAP_CNY` | Finite float `> 0` and `<= 1,000,000` | Process-wide daily atomic reserve cap (unset = disabled) |
+| `WOA_MONTHLY_TOTAL_CAP_CNY` | Finite float `> 0` and `<= 1,000,000` | Process-wide monthly atomic reserve cap (unset = disabled) |
+| `WOA_MAX_SESSIONS` | Integer `1..100,000` | Default `300` active sessions per host |
+| `WOA_TURN_TIMEOUT_S` | Integer `1..3,600` | Wall-clock turn budget in seconds (default `120`, excluding approval wait) |
 
-### Safety Mode Expansion (`expand_operation_mode`)
+### `AGENT_PROVIDER` Defaults
 
-| `mode` | `native_page_admission` | `native_writes` | `native_submit` | `native_write_preparation` | `native_edit_prefill` |
-| --- | --- | --- | --- | --- | --- |
-| `read-only` | `read-only-window` | `false` | `false` | `false` | `false` |
-| `assisted-draft` | `read-only-window` | `false` | `false` | `true` | `true` |
-| `verified-operate` | `read-only-window` | `true` | `true` | `false` | `true` |
+| `AGENT_PROVIDER` | Default `AGENT_OPENAI_BASE_URL` | Default `AGENT_OPENAI_MODEL` | `.env` key lookup order | API key / Self-hosted |
+| --- | --- | --- | --- | --- |
+| `deepseek` | `https://api.deepseek.com` | `deepseek-flash` | `DEEPSEEK_API_KEY`, `AGENT_OPENAI_API_KEY` | Required / `false` |
+| `qwen` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3.8-flash` | `DASHSCOPE_API_KEY`, `QWEN_API_KEY`, `AGENT_OPENAI_API_KEY` | Required / `false` |
+| `openai` | `https://api.openai.com/v1` | `gpt-6.1-sol` | `OPENAI_API_KEY`, `AGENT_OPENAI_API_KEY` | Required / `false` |
+| `ollama` | `http://localhost:11434/v1` | None (set `AGENT_OPENAI_MODEL`) | `OLLAMA_API_KEY`, `AGENT_OPENAI_API_KEY` | Optional / `true` |
+| `openai-compatible` | None (set `AGENT_OPENAI_BASE_URL`) | None (set `AGENT_OPENAI_MODEL`) | `AGENT_OPENAI_API_KEY` | Optional / `false` |
+
+Run `.venv/bin/python -m web_operation_agent.modeling.preflight --probe` to validate config resolution, pricing/self-hosted status, usage accounting, and native tool calling without altering the real spend ledger.
+
+### Write Policy Expansion (`expand_write_policy`)
+
+| `WOA_READ_ONLY` | `native_page_admission` | `native_writes` | `native_submit` | `native_edit_prefill` |
+| --- | --- | --- | --- | --- |
+| `false` (default) | `read-only-window` | `true` | `true` | `true` |
+| `true` (read-only kill-switch) | `read-only-window` | `false` | `false` | `true` |
 
 ## 2. Gateway HTTP and SSE Endpoints
 

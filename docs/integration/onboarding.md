@@ -106,7 +106,7 @@ To clarify domain terminology across modules or disambiguate same-name records b
 
 ## 5. Opt-In Verified Writes (`WritePipeline`)
 
-Keep production defaults fail-closed (`mode = "read-only"`, `allow_mutations=False`). When enabling writes after read & isolation tests pass, wire one of three declarative contracts—all enforced by `WritePipeline` ([Write Safety & Privacy](../security/verified-writes.md)) and [Skills & Typed Writes](./skills-and-writes.md):
+Register write operations only for entities you want the assistant to modify; set `WOA_READ_ONLY=true` on the server whenever you want a global read-only kill-switch. Every write contract is enforced by `WritePipeline` ([Write Safety & Privacy](../security/verified-writes.md)) and [Skills & Typed Writes](./skills-and-writes.md):
 
 1. **Symmetric flat convention updates (`convention_updates=True` & `StatusToggleSpec`):** Automatically generates `update_record` and two-state `toggle_record_status` for scalar non-secret fields on `EntitySpec`s that declare `convention_update=True`.
 2. **Typed write operations (`TypedWriteSpec` + `SKILL.md` / `agents/woa.toml`):** Declares `normalizer`, `precondition_check`, `dispatch_fn`, and same-actor `readback_fn`; raises `BusinessMutationIndeterminate` without automatic retry if dispatch outcome is lost or readback disagrees.

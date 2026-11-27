@@ -1,51 +1,49 @@
 ---
 title: 配置与通信协议
-description: pagehelm.toml 与 .env 校验规则、模式展开、HTTP/SSE 端点与载荷示例、panel_contract.json v2、presentation.json 与硬性上限。
+description: .env 配置校验规则、写入策略展开、HTTP/SSE 端点与载荷示例、panel_contract.json v2、presentation.json 与硬性上限。
 ---
 
 本页汇总 PageHelm 的配置规范、HTTP/SSE 传输协议、`panel_contract.json`（`protocol: 2`）、`presentation.json` 界面常数，以及系统硬性运行上限。
 
-## 一、配置规范（`pagehelm.toml` 与 `.env`）
+## 一、配置规范（`.env`）
 
-`resolve_pagehelm_environment()` 将普通配置与密钥隔离。`parse_pagehelm_toml()` 基于 Python 标准库 `tomllib` 做强类型检查，拒绝未知字段、布尔冒充数字、非 HTTPS 远程地址，以及任何类似凭据的键名（`*api_key*`、`*secret*`、`*token*`、`*password*`）。
+`resolve_pagehelm_environment()` 统一从 `.env`（或进程环境变量）解析模型参数、安全模式与宿主配额，并对数值边界、远程 HTTPS 地址（本机支持 `http://localhost` / `127.0.0.1` / `host.docker.internal`）及冲突开关做强校验。若项目目录或 `--config` 指定了存量 `pagehelm.toml`，系统仍保持兼容校验（TOML 中禁止出现密钥字段）。
 
-### `pagehelm.toml` 字段
+### `.env` 配置项
 
-| 字段 | 类型与约束 | 默认值与行为 |
+| 变量名 | 类型与约束 | 默认值与行为 |
 | --- | --- | --- |
-| `provider` | `"deepseek"` \| `"qwen"` \| `"openai"` | 自动展开对应 `base_url`、已登记计价的默认 `model` 与 `.env` 密钥查找顺序 |
-| `mode` | `"read-only"` \| `"assisted-draft"` \| `"verified-operate"` | `./local` 默认 `"verified-operate"`；云端默认 `"read-only"` |
-| `model` | 非空字符串（`<= 120` 字符），须已登记在 `policies/prices.json` | 随 `provider` 取默认值 |
-| `base_url` | `https://...`（或本地开发 `http://localhost` / `127.0.0.1`），禁带账号或 query | 随 `provider` 取对应官方端点 |
-| `daily_allowance_cny` | 有限正数 `> 0` 且 `<= 1,000,000` | 单用户每日 CNY 上限（云端默认 `5.0`，`./local` 默认 `20.0`） |
-| `daily_total_cap_cny` | 有限正数 `> 0` 且 `<= 1,000,000` | 全进程每日原子预留上限（未设不启用） |
-| `monthly_total_cap_cny` | 有限正数 `> 0` 且 `<= 1,000,000` | 全进程每月原子预留上限（未设不启用） |
-| `max_sessions` | 整数 `1..100,000` | 单宿主默认 `300` 个活跃会话 |
-| `turn_timeout_s` | 整数 `1..3,600` | 单回合执行墙钟上限（默认 `120` 秒，不含人工等待审批时间） |
+| `DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY` / `QWEN_API_KEY`、`OPENAI_API_KEY`、`OLLAMA_API_KEY` | 字符串密钥 | 只填单个厂商密钥时自动推导 `AGENT_PROVIDER`、官方 `base_url` 与默认 `model` |
+| `AGENT_PROVIDER` | `"deepseek"` \| `"qwen"` \| `"openai"` \| `"ollama"` \| `"openai-compatible"` | 显式指定模型预设（连接本机 Ollama 或私有兼容网关时使用） |
+| `AGENT_OPENAI_BASE_URL` | `https://...`（或本机 `http://localhost` / `127.0.0.1` / `host.docker.internal`），禁带账号或 query | 覆盖预设 `base_url`（`"openai-compatible"` 须显式指定） |
+| `AGENT_OPENAI_MODEL` | 非空字符串（`<= 120` 字符）；非自托管时须登记在 `policies/prices.json` | 覆盖预设 `model`（`"ollama"` 与 `"openai-compatible"` 须显式指定） |
+| `AGENT_OPENAI_API_KEY` | 字符串密钥 | 通用 OpenAI 兼容端点密钥（`"ollama"` 与自托管端点可留空） |
+| `AGENT_MODEL_SELF_HOSTED` | `"true"` \| `"false"`；托管商业厂商禁止设为 `"true"` | `"ollama"` 默认 `"true"`，其余默认 `"false"`；启用后按零成本参考计价，免登记 `policies/prices.json` |
+| `WOA_READ_ONLY` | `"true"` \| `"false"` | 可选熔断开关：默认 `"false"`（表单预填与适配器已注册写操作默认可用）；设为 `"true"` 时关闭全部后台写入（与 `WOA_NATIVE_WRITES` 冲突时拒绝启动） |
+| `WOA_DAILY_ALLOWANCE_CNY` | 有限正数 `> 0` 且 `<= 1,000,000` | 单用户每日 CNY 上限（线上默认 `5.0`，`./local` 默认 `20.0`） |
+| `WOA_DAILY_TOTAL_CAP_CNY` | 有限正数 `> 0` 且 `<= 1,000,000` | 全进程每日原子预留上限（未设不启用） |
+| `WOA_MONTHLY_TOTAL_CAP_CNY` | 有限正数 `> 0` 且 `<= 1,000,000` | 全进程每月原子预留上限（未设不启用） |
+| `WOA_MAX_SESSIONS` | 整数 `1..100,000` | 单宿主默认 `300` 个活跃会话 |
+| `WOA_TURN_TIMEOUT_S` | 整数 `1..3,600` | 单回合执行墙钟上限（默认 `120` 秒，不含人工等待审批时间） |
 
-### `provider` 默认展开表
+### `AGENT_PROVIDER` 默认展开表
 
-| `provider` | 默认 `base_url` | 默认 `model` | `.env` 密钥查找顺序 |
-| --- | --- | --- | --- |
-| `deepseek` | `https://api.deepseek.com` | `deepseek-flash` | `DEEPSEEK_API_KEY`、`AGENT_OPENAI_API_KEY` |
-| `qwen` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3.8-flash` | `DASHSCOPE_API_KEY`、`QWEN_API_KEY`、`AGENT_OPENAI_API_KEY` |
-| `openai` | `https://api.openai.com/v1` | `gpt-6.1-sol` | `OPENAI_API_KEY`、`AGENT_OPENAI_API_KEY` |
+| `AGENT_PROVIDER` | 默认 `AGENT_OPENAI_BASE_URL` | 默认 `AGENT_OPENAI_MODEL` | `.env` 密钥查找顺序 | 密钥 / 自托管默认 |
+| --- | --- | --- | --- | --- |
+| `deepseek` | `https://api.deepseek.com` | `deepseek-flash` | `DEEPSEEK_API_KEY`、`AGENT_OPENAI_API_KEY` | 必填 / `false` |
+| `qwen` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3.8-flash` | `DASHSCOPE_API_KEY`、`QWEN_API_KEY`、`AGENT_OPENAI_API_KEY` | 必填 / `false` |
+| `openai` | `https://api.openai.com/v1` | `gpt-6.1-sol` | `OPENAI_API_KEY`、`AGENT_OPENAI_API_KEY` | 必填 / `false` |
+| `ollama` | `http://localhost:11434/v1` | 无（需设 `AGENT_OPENAI_MODEL`） | `OLLAMA_API_KEY`、`AGENT_OPENAI_API_KEY` | 可选 / `true` |
+| `openai-compatible` | 无（需设 `AGENT_OPENAI_BASE_URL`） | 无（需设 `AGENT_OPENAI_MODEL`） | `AGENT_OPENAI_API_KEY` | 可选 / `false` |
 
-### `.env` 环境变量
+可通过 `.venv/bin/python -m web_operation_agent.modeling.preflight --probe` 在不污染正式费用账本的前提下，一次性校验配置解析、计价/自托管标记、`usage` 回传与原生工具调用兼容性。
 
-| 变量名 | 用途 |
-| --- | --- |
-| `DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY` / `QWEN_API_KEY`、`OPENAI_API_KEY` | 按 `pagehelm.toml` 中的 `provider` 自动匹配 |
-| `AGENT_OPENAI_BASE_URL`、`AGENT_OPENAI_API_KEY`、`AGENT_OPENAI_MODEL`、`AGENT_PROVIDER` | 显式覆盖或未启用 `pagehelm.toml` 时的兼容写法 |
-| `WOA_MODE`、`WOA_NATIVE_WRITES` | 环境变量覆盖（与 `pagehelm.toml` 冲突时拒绝启动） |
+### 写入策略展开（`expand_write_policy`）
 
-### 安全模式展开（`expand_operation_mode`）
-
-| `mode` | `native_page_admission` | `native_writes` | `native_submit` | `native_write_preparation` | `native_edit_prefill` |
-| --- | --- | --- | --- | --- | --- |
-| `read-only` | `read-only-window` | `false` | `false` | `false` | `false` |
-| `assisted-draft` | `read-only-window` | `false` | `false` | `true` | `true` |
-| `verified-operate` | `read-only-window` | `true` | `true` | `false` | `true` |
+| `WOA_READ_ONLY` | `native_page_admission` | `native_writes` | `native_submit` | `native_edit_prefill` |
+| --- | --- | --- | --- | --- |
+| `false`（默认） | `read-only-window` | `true` | `true` | `true` |
+| `true`（只读熔断） | `read-only-window` | `false` | `false` | `true` |
 
 ## 二、网关 HTTP 与 SSE 端点
 

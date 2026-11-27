@@ -1,0 +1,269 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="656" viewBox="0 0 1040 656" role="img" aria-labelledby="title desc">
+  <title id="title">How PageHelm works</title>
+  <desc id="desc">Three parts: your app's page in the browser, the PageHelm server, and your system. For data questions, the server reads your APIs as the signed-in user and computes the answer, which appears in the panel. For page actions, the server sends one step at a time and the page carries it out. For changes, the user confirms on a card first; the change then runs once and is read back to verify.</desc>
+
+  <defs>
+    <style>
+      /* Fonts: system fonts only, so GitHub and other hosts need no web fonts */
+      svg { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", Roboto, "Helvetica Neue", Arial, sans-serif; }
+
+      /* Text styles */
+      .h1         { font-size: 28px; font-weight: 700; fill: #0F172A; }
+      .lead       { font-size: 15px; fill: #64748B; }
+      .box-title  { font-size: 15px; font-weight: 600; fill: #0F172A; }
+      .box-sub    { font-size: 13px; fill: #64748B; }
+      .col-title  { font-size: 17px; font-weight: 700; fill: #0F172A; }
+      .col-sub    { font-size: 12.5px; fill: #64748B; }
+      .card-title { font-size: 16px; font-weight: 600; fill: #0F172A; }
+      .card-body  { font-size: 14px; fill: #475569; }
+      .note       { font-size: 13px; fill: #475569; }
+      .chip-text  { font-size: 12px; font-weight: 600; fill: #1D4ED8; text-anchor: middle; }
+      .pill-text  { font-size: 13px; font-weight: 700; }
+      .num        { font-size: 11px; font-weight: 700; fill: #FFFFFF; text-anchor: middle; }
+
+      /* Backgrounds and containers */
+      .canvas     { fill: #F8FAFC; stroke: #E2E8F0; }
+      .panel      { fill: #FFFFFF; stroke: #E2E8F0; }
+      .panel-core { fill: #F5F9FF; stroke: #BFDBFE; }
+      .card       { fill: #FFFFFF; stroke: #E2E8F0; }
+      .divider    { stroke: #EDF1F6; }
+      .chip       { fill: #FFFFFF; stroke: #BFDBFE; }
+      .soft       { fill: #F1F5F9; }
+
+      /* Brand color: PageHelm */
+      .brand-fill   { fill: #2563EB; }
+      .brand-tint   { fill: #DBEAFE; }
+      .brand-stroke { stroke: #2563EB; }
+
+      /* Three paths: 1 query data, 2 operate the page, 3 change data */
+      .read-fill  { fill: #7C3AED; }  .read-stroke  { stroke: #7C3AED; }  .read-tint  { fill: #EDE9FE; }  .read-text  { fill: #6D28D9; }
+      .act-fill   { fill: #059669; }  .act-stroke   { stroke: #059669; }  .act-tint   { fill: #D1FAE5; }  .act-text   { fill: #047857; }
+      .write-fill { fill: #EA580C; }  .write-stroke { stroke: #EA580C; }  .write-tint { fill: #FFEDD5; }  .write-text { fill: #C2410C; }
+
+      /* Lines and icons */
+      .ink-fill   { fill: #475569; }
+      .ink-stroke { stroke: #475569; }
+      .flow       { fill: none; stroke-width: 2; stroke-linecap: round; }
+      .dashed     { stroke-dasharray: 4 4; }
+      .icon       { fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+
+    <!-- Arrowheads -->
+    <marker id="ah-read" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="read-fill" d="M1 1 L9 5 L1 9 Z"/></marker>
+    <marker id="ah-act" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="act-fill" d="M1 1 L9 5 L1 9 Z"/></marker>
+    <marker id="ah-write" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="write-fill" d="M1 1 L9 5 L1 9 Z"/></marker>
+    <marker id="ah-brand" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="brand-fill" d="M1 1 L9 5 L1 9 Z"/></marker>
+    <marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="ink-fill" d="M1 1 L9 5 L1 9 Z"/></marker>
+
+    <!-- Shadow -->
+    <filter id="shadow" x="-8%" y="-8%" width="116%" height="124%" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="7" result="blur"/>
+      <feOffset in="blur" dy="4" result="offset"/>
+      <feComponentTransfer in="offset" result="soft"><feFuncA type="linear" slope="0.07"/></feComponentTransfer>
+      <feMerge><feMergeNode in="soft"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+    <!-- Dot texture -->
+    <pattern id="dots" width="20" height="20" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1" fill="#E3E8EF"/></pattern>
+  </defs>
+
+  <!-- ===== Background ===== -->
+  <rect class="canvas" x="0.5" y="0.5" width="1039" height="655" rx="24"/>
+  <rect x="0.5" y="0.5" width="1039" height="655" rx="24" fill="url(#dots)"/>
+
+  <!-- ===== Title ===== -->
+  <rect class="brand-fill" x="36" y="40" width="40" height="40" rx="12"/>
+  <g class="icon" stroke="#FFFFFF" transform="translate(56 60)">
+    <circle r="7"/><circle r="2.4"/>
+    <path d="M2.4 0 L11 0 M1.7 1.7 L7.78 7.78 M0 2.4 L0 11 M-1.7 1.7 L-7.78 7.78 M-2.4 0 L-11 0 M-1.7 -1.7 L-7.78 -7.78 M0 -2.4 L0 -11 M1.7 -1.7 L7.78 -7.78"/>
+  </g>
+  <text class="h1" x="90" y="58">How PageHelm works</text>
+  <text class="lead" x="90" y="83">Data via APIs · Actions on the page · Changes only after confirmation</text>
+
+  <!-- ===== Top row: user, LLM, safe defaults ===== -->
+  <g filter="url(#shadow)">
+    <rect class="panel" x="36" y="104" width="248" height="60" rx="14"/>
+    <rect class="panel" x="396" y="104" width="248" height="60" rx="14"/>
+    <rect class="panel" x="756" y="104" width="248" height="60" rx="14"/>
+  </g>
+
+  <!-- User -->
+  <circle class="soft" cx="66" cy="134" r="17"/>
+  <g class="icon ink-stroke" transform="translate(66 134)">
+    <circle cx="0" cy="-3.5" r="3.6"/>
+    <path d="M-6.5 7 C-6.5 2.8 -3.4 0.8 0 0.8 C3.4 0.8 6.5 2.8 6.5 7"/>
+  </g>
+  <text class="box-title" x="94" y="129">User</text>
+  <text class="box-sub" x="94" y="150">Asks in plain language</text>
+
+  <!-- LLM -->
+  <circle class="brand-tint" cx="426" cy="134" r="17"/>
+  <path class="brand-fill" transform="translate(426 134)" d="M0 -9 C0.9 -3.6 3.6 -0.9 9 0 C3.6 0.9 0.9 3.6 0 9 C-0.9 3.6 -3.6 0.9 -9 0 C-3.6 -0.9 -0.9 -3.6 0 -9 Z"/>
+  <text class="box-title" x="454" y="129">LLM</text>
+  <text class="box-sub" x="454" y="150">Cloud or self-hosted</text>
+
+  <!-- Safe defaults -->
+  <g transform="translate(778 116.5)">
+    <circle class="brand-tint" r="7"/><path class="icon brand-stroke" d="M-3.2 0.2 L-1 2.4 L3.4 -2.2"/>
+  </g>
+  <text class="note" x="794" y="121">Confirm before writing</text>
+  <g transform="translate(778 133.5)">
+    <circle class="brand-tint" r="7"/><path class="icon brand-stroke" d="M-3.2 0.2 L-1 2.4 L3.4 -2.2"/>
+  </g>
+  <text class="note" x="794" y="138">No keys in the browser</text>
+  <g transform="translate(778 150.5)">
+    <circle class="brand-tint" r="7"/><path class="icon brand-stroke" d="M-3.2 0.2 L-1 2.4 L3.4 -2.2"/>
+  </g>
+  <text class="note" x="794" y="155">Can run fully on-premises</text>
+
+  <!-- Connectors: user to page, LLM to server -->
+  <line class="flow ink-stroke" x1="160" y1="168" x2="160" y2="201" marker-end="url(#ah-ink)"/>
+  <line class="flow brand-stroke" x1="520" y1="168" x2="520" y2="201" marker-start="url(#ah-brand)" marker-end="url(#ah-brand)"/>
+
+  <!-- ===== Three columns ===== -->
+  <g filter="url(#shadow)">
+    <rect class="panel" x="36" y="204" width="248" height="424" rx="18"/>
+    <rect class="panel-core" x="396" y="204" width="248" height="424" rx="18"/>
+    <rect class="panel" x="756" y="204" width="248" height="424" rx="18"/>
+  </g>
+
+  <!-- Column header: your app's page -->
+  <rect class="soft" x="52" y="219" width="30" height="30" rx="9"/>
+  <g class="icon ink-stroke" transform="translate(67 234)">
+    <rect x="-8" y="-6.5" width="16" height="13" rx="2.5"/>
+    <path d="M-8 -2 L8 -2"/>
+  </g>
+  <text class="col-title" x="92" y="232">Your app's page</text>
+  <text class="col-sub" x="92" y="252">Panel embedded in your page</text>
+
+  <!-- Column header: PageHelm server -->
+  <rect class="brand-tint" x="412" y="219" width="30" height="30" rx="9"/>
+  <g class="icon brand-stroke" transform="translate(427 234) scale(0.78)">
+    <circle r="7"/><circle r="2.4"/>
+    <path d="M2.4 0 L11 0 M1.7 1.7 L7.78 7.78 M0 2.4 L0 11 M-1.7 1.7 L-7.78 7.78 M-2.4 0 L-11 0 M-1.7 -1.7 L-7.78 -7.78 M0 -2.4 L0 -11 M1.7 -1.7 L7.78 -7.78"/>
+  </g>
+  <text class="col-title" x="452" y="232">PageHelm server</text>
+  <text class="col-sub" x="452" y="252">Plans, computes and guards</text>
+
+  <!-- Column header: your system -->
+  <rect class="soft" x="772" y="219" width="30" height="30" rx="9"/>
+  <g class="icon ink-stroke" transform="translate(787 234)">
+    <ellipse cx="0" cy="-4.6" rx="6.5" ry="2.4"/>
+    <path d="M-6.5 -4.6 L-6.5 4.6 C-6.5 6 -3.6 7 0 7 C3.6 7 6.5 6 6.5 4.6 L6.5 -4.6"/>
+    <path d="M-6.5 0 C-6.5 1.4 -3.6 2.4 0 2.4 C3.6 2.4 6.5 1.4 6.5 0"/>
+  </g>
+  <text class="col-title" x="812" y="232">Your system</text>
+  <text class="col-sub" x="812" y="252">Adapter + your APIs &amp; DB</text>
+
+  <!-- Dividers -->
+  <line class="divider" x1="52" y1="266" x2="268" y2="266"/>
+  <line class="divider" x1="412" y1="266" x2="628" y2="266"/>
+  <line class="divider" x1="772" y1="266" x2="988" y2="266"/>
+
+  <!-- ===== Cards, row 1: query data ===== -->
+  <rect class="card" x="50" y="278" width="220" height="90" rx="12"/>
+  <rect class="read-fill" x="62" y="295" width="4" height="62" rx="2"/>
+  <text class="card-title" x="76" y="310">Answer &amp; table</text>
+  <text class="card-body" x="76" y="334">States the answer, then</text>
+  <text class="card-body" x="76" y="354">lists a sortable table</text>
+
+  <rect class="card" x="410" y="278" width="220" height="90" rx="12"/>
+  <rect class="read-fill" x="422" y="295" width="4" height="62" rx="2"/>
+  <text class="card-title" x="436" y="310">Read &amp; compute</text>
+  <text class="card-body" x="436" y="334">Fetches needed records,</text>
+  <text class="card-body" x="436" y="354">aggregates &amp; joins</text>
+
+  <rect class="card" x="770" y="278" width="220" height="90" rx="12"/>
+  <rect class="read-fill" x="782" y="295" width="4" height="62" rx="2"/>
+  <text class="card-title" x="796" y="310">Read via APIs</text>
+  <text class="card-body" x="796" y="334">As the signed-in user,</text>
+  <text class="card-body" x="796" y="354">reads lists and records</text>
+
+  <!-- ===== Cards, row 2: operate the page ===== -->
+  <rect class="card" x="50" y="380" width="220" height="90" rx="12"/>
+  <rect class="act-fill" x="62" y="397" width="4" height="62" rx="2"/>
+  <text class="card-title" x="76" y="412">Page actions</text>
+  <text class="card-body" x="76" y="436">Navigate, switch tabs,</text>
+  <text class="card-body" x="76" y="456">filter, fill, highlight</text>
+
+  <rect class="card" x="410" y="380" width="220" height="90" rx="12"/>
+  <rect class="act-fill" x="422" y="397" width="4" height="62" rx="2"/>
+  <text class="card-title" x="436" y="412">Plan the next step</text>
+  <text class="card-body" x="436" y="436">Reads the page and data,</text>
+  <text class="card-body" x="436" y="456">sends one step at a time</text>
+
+  <rect class="card" x="770" y="380" width="220" height="90" rx="12"/>
+  <rect class="act-fill" x="782" y="397" width="4" height="62" rx="2"/>
+  <text class="card-title" x="796" y="412">Data &amp; page index</text>
+  <text class="card-body" x="796" y="436">Entities, pages &amp; forms,</text>
+  <text class="card-body" x="796" y="456">or generated from OpenAPI</text>
+
+  <!-- ===== Cards, row 3: change data ===== -->
+  <rect class="card" x="50" y="482" width="220" height="90" rx="12"/>
+  <rect class="write-fill" x="62" y="499" width="4" height="62" rx="2"/>
+  <text class="card-title" x="76" y="514">Confirmation card</text>
+  <text class="card-body" x="76" y="538">Shows old and new values</text>
+  <text class="card-body" x="76" y="558">for the user to confirm</text>
+
+  <rect class="card" x="410" y="482" width="220" height="90" rx="12"/>
+  <rect class="write-fill" x="422" y="499" width="4" height="62" rx="2"/>
+  <text class="card-title" x="436" y="514">Change guard</text>
+  <text class="card-body" x="436" y="538">Re-checks, then runs once;</text>
+  <text class="card-body" x="436" y="558">reads back to verify</text>
+
+  <rect class="card" x="770" y="482" width="220" height="90" rx="12"/>
+  <rect class="write-fill" x="782" y="499" width="4" height="62" rx="2"/>
+  <text class="card-title" x="796" y="514">Write operations</text>
+  <text class="card-body" x="796" y="538">Only the writes you</text>
+  <text class="card-body" x="796" y="558">declare are available</text>
+
+  <!-- ===== Column footers ===== -->
+  <g class="icon ink-stroke" transform="translate(64 600)">
+    <path d="M-7 0 C-4.5 -4.5 4.5 -4.5 7 0 C4.5 4.5 -4.5 4.5 -7 0 Z"/><circle r="1.9"/>
+  </g>
+  <text class="note" x="78" y="605">Runs in view, stop anytime</text>
+
+  <rect class="chip" x="416" y="590" width="64" height="24" rx="12"/>
+  <text class="chip-text" x="448" y="606">Guards</text>
+  <rect class="chip" x="488" y="590" width="64" height="24" rx="12"/>
+  <text class="chip-text" x="520" y="606">Audit</text>
+  <rect class="chip" x="560" y="590" width="64" height="24" rx="12"/>
+  <text class="chip-text" x="592" y="606">Budgets</text>
+
+  <g class="icon ink-stroke" transform="translate(784 600)">
+    <path d="M0 -7 L6 -4.5 L6 0.5 C6 4 3.4 6.4 0 7.5 C-3.4 6.4 -6 4 -6 0.5 L-6 -4.5 Z"/>
+  </g>
+  <text class="note" x="798" y="605">Existing permissions apply</text>
+
+  <!-- ===== Lines: page to server ===== -->
+  <line class="flow read-stroke" x1="408" y1="323" x2="272" y2="323" marker-end="url(#ah-read)"/>
+  <line class="flow act-stroke" x1="272" y1="425" x2="408" y2="425" marker-start="url(#ah-act)" marker-end="url(#ah-act)"/>
+  <line class="flow write-stroke" x1="272" y1="527" x2="408" y2="527" marker-start="url(#ah-write)" marker-end="url(#ah-write)"/>
+
+  <rect class="read-tint" x="300" y="310" width="80" height="26" rx="13"/>
+  <circle class="read-fill" cx="315" cy="323" r="8"/>
+  <text class="num" x="315" y="327">1</text>
+  <text class="pill-text read-text" x="328" y="327.5">Query</text>
+
+  <rect class="act-tint" x="293.5" y="412" width="93" height="26" rx="13"/>
+  <circle class="act-fill" cx="308.5" cy="425" r="8"/>
+  <text class="num" x="308.5" y="429">2</text>
+  <text class="pill-text act-text" x="321.5" y="429.5">Operate</text>
+
+  <rect class="write-tint" x="296" y="514" width="88" height="26" rx="13"/>
+  <circle class="write-fill" cx="311" cy="527" r="8"/>
+  <text class="num" x="311" y="531">3</text>
+  <text class="pill-text write-text" x="324" y="531.5">Change</text>
+
+  <!-- ===== Lines: server to your system ===== -->
+  <line class="flow read-stroke" x1="632" y1="323" x2="768" y2="323" marker-start="url(#ah-read)" marker-end="url(#ah-read)"/>
+  <line class="flow act-stroke dashed" x1="768" y1="425" x2="632" y2="425" marker-end="url(#ah-act)"/>
+  <line class="flow write-stroke" x1="632" y1="527" x2="768" y2="527" marker-start="url(#ah-write)" marker-end="url(#ah-write)"/>
+
+  <circle class="read-fill" cx="700" cy="323" r="10"/>
+  <text class="num" x="700" y="327">1</text>
+  <circle class="act-fill" cx="700" cy="425" r="10"/>
+  <text class="num" x="700" y="429">2</text>
+  <circle class="write-fill" cx="700" cy="527" r="10"/>
+  <text class="num" x="700" y="531">3</text>
+</svg>

@@ -16,7 +16,7 @@ Default rollout target is **read-only end-to-end (`allow_mutations=False`)** unl
 - **Same-origin mount required.** Serve the gateway (`/woa-agent/*`) and bootstrap endpoint (`/woa-agent-boot/bootstrap`) on the host application's origin. If cross-origin, fix reverse-proxy routing first—do not weaken origin checks.
 - **Keep core neutral.** Never place app names, routes, fixture paths, single-app declarative wrappers, or business logic inside `src/web_operation_agent/` (core houses `ApplicationPorts`, `TurnTables`, `WritePipeline`, and `CompiledWrites`). Verify with [scripts/check_core_boundary.py](../../../scripts/check_core_boundary.py).
 - **Never fake capabilities.** `DeclarativeGoalPort` / `DeclarativeModelGoalPort` must declare only capabilities actually implemented on the backend/UI.
-- **Writes default off (`mode = "read-only"`, `allow_mutations=False`).** Every opt-in mutation must go through `WritePipeline` with fresh visible approval bound to the exact target and effect, consumed once, `claimed()` persisted before external dispatch, never retried after `claimed` or timeout (`BusinessMutationIndeterminate`), and verified via same-actor readback.
+- **Explicit write declarations (`allow_mutations=False` for read-only rollouts; `WOA_READ_ONLY=true` global kill-switch).** Every declared mutation must go through `WritePipeline` with fresh visible approval bound to the exact target and effect, consumed once, `claimed()` persisted before external dispatch, never retried after `claimed` or timeout (`BusinessMutationIndeterminate`), and verified via same-actor readback.
 
 ## 2. Step 0: Read-Only Host Preflight
 

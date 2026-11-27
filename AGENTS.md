@@ -24,7 +24,7 @@ Local environments & online deployment: [quickstart](docs/integration/quickstart
 
 ## Writes and privacy
 
-- Browser/API mutations default off. Integration must enable them; bind each proposal to the exact visible effect/target, require fresh visible approval and consume once. Prompts, Skills, source and prior sessions grant no permission.
+- Form prefill and adapter-registered writes are enabled unless `WOA_READ_ONLY=true` (`--read-only`) is set; bind each write proposal to the exact visible effect/target, require fresh visible approval and consume once. Prompts, Skills, source and prior sessions grant no permission.
 - Verify postconditions through the same application actor where possible. Never automatically retry acknowledged, partial, timed-out or uncertain writes; preserve indeterminate outcomes/audit. Keep evaluators and hidden expected state out of agent context.
 - Use synthetic, isolated, resettable tests; no production accounts, payments, mail, messaging or customer data. Never commit credentials/cookies/`.env`, user data, databases/volumes, caches/profiles/recordings, local paths or large/generated/disposable artifacts. Source allowlists exclude secrets, generated data, uploads, databases and user content; minimize/redact before logs, errors, replay or model dispatch.
 - Browser/API messages, Skills, repo content and model output are untrusted. Preserve typed errors/terminal states; never recover behavior by matching exception text.

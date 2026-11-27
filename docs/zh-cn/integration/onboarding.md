@@ -106,7 +106,7 @@ profile = build_declarative_profile(adapter, goal_port, enable_sql=True, time_zo
 
 ## 五、按需挂载核验写入（`WritePipeline`）
 
-生产配置默认保持只读（`mode = "read-only"`、`allow_mutations=False`）。只有在只读查询与身份/租户隔离验证全部通过后，再显式开启 `WritePipeline` 保护的写入能力（完整安全门禁见 [写入安全与隐私边界](../security/verified-writes.md) 与 [Skill 与类型化写入](./skills-and-writes.md)）：
+接入方按需声明写入能力；需要临时关闭所有后台写入时，可在服务端设置 `WOA_READ_ONLY=true`。所有写操作均由 `WritePipeline` 统一保护（完整安全门禁见 [写入安全与隐私边界](../security/verified-writes.md) 与 [Skill 与类型化写入](./skills-and-writes.md)）：
 
 1. **对称平铺约定更新（`convention_updates=True` + `StatusToggleSpec`）**：针对声明 `convention_update=True` 的实体，自动派生 `update_record` 与两态可逆 `toggle_record_status`，自动过滤敏感字段。
 2. **类型化写操作（`TypedWriteSpec` + `SKILL.md` / `agents/woa.toml`）**：声明 `normalizer`、`precondition_check`、`dispatch_fn` 与同账号 `readback_fn`；派发超时或回读不一致时立即抛出 `BusinessMutationIndeterminate`，绝不自动重试。

@@ -11,7 +11,7 @@ hero:
 
 - **Same-actor data reads:** List counts, conditioned aggregates, and multi-table joins run on the server under the signed-in user's identity rather than scraping paginated UI screens or holding user cookies on the server.
 - **Same-origin UI actions:** Navigation, filtering, and undoable form prefill run inside the user's live browser tab; password and file upload controls are always left for human input.
-- **Guarded state mutations:** Production defaults to `read-only`. When writes are enabled, changes require human confirmation on a visible approval card, single-use dispatch, and same-actor readback; timed-out or disconnected writes stay `INDETERMINATE` and are never retried automatically.
+- **Guarded state mutations:** Writes are restricted to operations declared by your adapter (with an optional `WOA_READ_ONLY=true` kill-switch). Every write requires human confirmation on a visible approval card, single-use dispatch, and same-actor readback; timed-out or disconnected writes stay `INDETERMINATE` and are never retried automatically.
 
 ## Reading Paths
 

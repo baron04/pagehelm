@@ -2,104 +2,101 @@
 
 [English](README.md)
 
-**PageHelm**（核心包 `web_operation_agent`）是一个面向第一方企业 Web 应用的嵌入式 AI 操作框架。
+**PageHelm** 是一个面向第一方 Web 应用的页面操作 AI Agent。
 
-企业后台通常同时面临四个难题：页面路由动辄上百个、行级数据权限严格、跨数百行数据的统计与筛选难以靠浏览器翻页完成、业务写入一旦误操作或超时重试代价极高。PageHelm 通过**同源嵌入 + 双轨执行 + 服务端治理**的架构，让现有 ERP、CRM、财务或运营后台在不推翻重写的前提下，直接获得受控的 AI 查数、界面协同与核验写入能力：
+把 PageHelm 接入你的 Web 应用后，让用户直接用自然语言完成页面操作，比如查数据、找页面、筛列表、填表单或修改记录。用户不再需要手动一层层点开页面、配置筛选条件或手动录入字段，只要把目标说清楚，助手会自动规划步骤并执行过程。
 
-- **查数快且不越权**：统计、排序和多表关联在服务端沿用当前登录人身份执行，不需要把用户 Cookie 交给服务端托管，也不依赖无头浏览器逐页爬取 DOM。
-- **真页面协同且可撤销**：直接在用户当前标签页内打开目标页面、切换筛选、展开业务弹窗并预填表单，提供一键撤销并将密码、上传等受限控件交回人工输入。
-- **改数必须过核验关**：生产默认只读（`read-only`）；开启写入后，每笔变更必须经由差异审批卡确认、单次消费锁、派发前复读与同账号回读核验，派发后超时或断连记为未决态（`INDETERMINATE`），不自动重试。
+## 试试这样问
+
+以下示例来自内置的芋道后台演示：
+
+| 你可以这样说 | 助手会这样做 |
+| --- | --- |
+| 「CRM 联系人一共有多少个？」 | 按当前账号的权限统计，直接给出数字 |
+| 「现在拼团中的团有哪些？」 | 先给出结论，再在面板里列出可排序的明细表 |
+| 「打开合同管理页面」 | 直接跳转到合同管理页面 |
+| 「帮我新建一个系统用户，昵称林晓峰，手机 13800000001」 | 打开新增弹窗填好已知字段，列出还缺的必填项，密码留给用户输入 |
+| 「把启岳嘉成的手机号改成 13900000002」 | 弹出修改确认卡片，列出新旧值；用户确认后执行一次，并读回核对 |
 
 ---
 
 ## 界面预览
 
-以下画面均基于仓库内置合成测试环境（`examples/yudao`）实时截取：
-
-| 同源嵌入与快捷入口 | 同账号查数与 `<DataTable>` |
+| 助手面板与快捷入口 | 数据查询与表格展示 |
 | :---: | :---: |
-| ![同源嵌入面板](docs/assets/overview.png) | ![同账号查数与表格](docs/assets/datatable.png) |
-| 单脚本挂入现有业务后台，Shadow DOM 隔离宿主样式，支持悬浮与并排双视图。 | 沿用当前登录人权限查询业务数据，经单轮内存 SQL 汇总并在面板内直接渲染可排序 `<DataTable>`，无需切换当前页面。 |
-| **弹窗导航与可撤销表单预填** | **差异审批卡与回读核验** |
-| ![弹窗预填与引导交接](docs/assets/form-prefill.png) | ![写入差异审批卡](docs/assets/write-approval.png) |
-| 自动打开业务弹窗、预填字段并连线标出提交按钮，保留一键撤销；密码和文件上传控件交由人工填写。 | 修改前清晰展示目标记录、旧值 → 新值差异及未改动字段，经人工确认后单次派发并同账号回读核验。 |
+| ![嵌入式助手面板](docs/assets/overview.png) | ![业务数据查询与表格展示](docs/assets/datatable.png) |
+| 提供查数据、找功能和页面操作的入口。 | 无需离开当前页面，即可按账号权限查询数据 |
+| **表单预填与提交引导** | **修改前确认卡片** |
+| ![弹窗预填与按钮引导](docs/assets/form-prefill.png) | ![写入差异确认卡片](docs/assets/write-approval.png) |
+| 打开目标页面的弹窗并填好已知字段，列出还缺的必填项，用连线标出「确定」按钮，由用户点击。 | 修改数据前展示目标记录、字段的新旧值 |
 
 ---
 
-## 核心能力
+## 主要功能
 
-- **同账号服务端读取 + 确定性计算**：通过 `ApplicationPorts` 与当前登录人身份绑定执行只读接口查询；支持并发预取与主线程按序提交、`Decimal` 精确汇总（`read_summary`）、单轮进程内只读 SQLite（`TurnTables`，`SELECT`/`WITH` 白名单）以及零转抄交互式 `<DataTable>` 渲染。
-- **真实标签页 DOM 操作与交接**：`PageController` 提供有界快照（单帧最多 200 个交互元素、弹窗优先采集）与去噪稳定监测（`PageSettleWatch`）；表单预填返回精确的已填/原值/跳过/受限字段回执，支持面板内一键撤销（`undoFormFill`）与视觉引导人工提交。
-- **六阶段 `WritePipeline` 写安全治理**：统一收口类型化写入 Skill、对称平铺约定更新（`ConventionWritePort`）与原生表单提交（`SubmitPort`）——依次完成提案差异校验、防遮挡可见审批（覆盖率 `>= 0.9`、连续露出 `>= 400ms`、`event.isTrusted`）、单飞并发锁、派发前漂移复读、至多派发一次与同账号回读核验。
-- **声明式接入底座与业务口径消歧**：通过服务端 `IdentityResolver`、OpenAPI（`entities_from_openapi`）或 `EntitySpec` / `PageSpec` / `FormSpec`、前端组件 Preset 与 `DeclarativeSessionHost` 快速接入；支持 `domain_playbooks/*.md` 口径消歧与可点选 `need_input` 胶囊。
-- **生产级隔离、预算与可观测**：Web Locks 解决“复制标签页”会话串线；URL 与出站请求执行多层递归解码脱敏（`AuditedChat`）；提供单轮 / 按日 / 全局三层预算护栏、SQLite WAL 在线一致性备份与 `INDETERMINATE` 人工对账工具，以及无正文泄露的 OTLP 遥测与 `TurnTrace` 回放。
+- **数据查询**：按当前账号的权限调用后台接口查询数据，支持条件筛选、排序、汇总计算和多表关联。结果直接显示在助手面板中，全程不用离开当前页面。
+- **页面操作**：支持自动路由跳转、切换tab、定位记录、点击按钮等操作。
+- **表单预填**：打开新建或编辑表单后自动填入已知字段，可一键撤销；缺少必填项时会先追问，密码和文件上传留给用户自己填写。助手只填写、不提交：它会标出保存按钮，由用户点击保存，之后再读回数据核对保存结果。
+- **数据修改**：开启写入后，可以新建记录、修改字段、切换状态，或执行列表中的行操作。执行前，面板会先给出修改前后的对比，用户确认后才执行，且只执行一次；完成后读回数据核对结果。
 
----
+## 核心优势
 
-## 为什么选择同源双轨架构
+- **安全可控**：全程沿用当前账号权限；表单只预填不代交，数据修改只开放接入方声明的操作且须先经人工确认，全程留痕可审计，支持一键切换只读。
+- **查数快，不受页面分页限制**：查询与统计直接走服务端接口，无需在页面上逐页翻找，响应更快，也不受前端单页条数限制。
+- **核心框架与具体业务解耦**：直接复用宿主系统原有的账号体系、数据权限和校验规则，不需要改造现有业务后端。支持渐进式接入，可以先上线只读查询和页面导航，跑稳后再按需补齐业务说明、表单预填和挑选高频操作封装为 Skill 接入写入。
 
-| 对比维度 | 纯 API 对话 / RAG | 外部无头浏览器 / RPA | 低代码工作流画布 | **PageHelm（同源双轨）** |
-| --- | --- | --- | --- | --- |
-| 真实界面定位与表单预填 | 不支持 | 纯视觉/DOM 慢速试错，无法交回当前页 | 不支持 | 同源语义 DOM + 弹窗预填与一键撤销 |
-| 数百至数千行列表统计 | 依赖现成聚合接口 | 逐页翻 DOM 耗时长且易漏页 | 节点内存与超时受限 | 同账号接口 + 进程内只读 SQL + `<DataTable>` |
-| 身份与行级数据权限 | 常见全局服务密钥 | 服务端托管用户 Cookie（合规高危） | 静态共享凭据 | 浏览器同源会话绑定，按当前登录人执行 |
-| 写入安全与防重复机制 | 依赖各工具自行实现 | 易误触页面原生保存/删除钮 | 超时重跑存在重复写入风险 | 六阶段单次审批 `WritePipeline` + 未决态锁死 |
+## 与其他方案对比
 
----
-
-## 系统架构与安全模式
-
-```text
-第一方业务标签页（assistant.js + Shadow DOM 面板 + PageController）
-                        ^ 脱敏页面观测 / 动作回执 / 一次性审批决定
-                        v
-应用无关服务端核心（Executor · TurnHarness · WritePipeline · SQLite 账本）
-                        ^ ApplicationPorts & GoalData 显式能力契约
-                        v
-业务应用适配器（身份反查 · 路由校验 · 同账号读取 · 核验写入 · Domain Playbooks）
-```
-
-| 安全模式（`mode`） | 同账号读取与导航 | 表单预填（可撤销） | 写入提案准备 | 写入派发与回读核验 |
-| --- | --- | --- | --- | --- |
-| `read-only`（生产默认） | 允许 | 关闭 | 关闭 | 关闭 |
-| `assisted-draft` | 允许 | 允许（跳过密码与上传控件） | 允许 | 关闭（不派发） |
-| `verified-operate`（本地默认） | 允许 | 允许 | 允许 | 获批后至多派发一次并强制回读 |
+| | 问答式 AI 助手 | 通用浏览器 Agent | PageHelm |
+| --- | --- | --- | --- |
+| 在哪里工作 | 独立的聊天窗口 | 独立的浏览器或浏览器插件 | 嵌在业务系统页面里，用户无需安装 |
+| 操作页面 | 只给建议，由用户自己点 | 看截图或页面结构，逐步点击 | 知道系统有哪些页面，直接跳转并在当前页面操作 |
+| 统计大量数据 | 多基于文档回答，难以统计实时数据 | 在页面上逐页翻看，慢且容易漏 | 调用接口读取完整数据，由程序计算 |
+| 修改数据 | 通常不支持 | 直接点击页面上的提交按钮 | 先展示新旧值，用户确认后只执行一次，再读回核对 |
+| 接入成本 | 接入文档或接口 | 无需接入 | 服务端写一层适配，页面引入一个脚本 |
 
 ---
 
-## 快速体验与渐进接入
+## 系统架构
 
-### 1. 运行内置参考示例（`examples/yudao`）
+![PageHelm 系统架构图](docs/assets/architecture-zh-cn.svg)
 
-需预先安装 **Python 3.13**、**Node.js (>=22)** 与 **Docker Compose 2.30+**，并按[参考应用缓存说明](examples/yudao/deploy/README.md)准备好 `.q0-cache/yudao/`。
+表单预填与接入方注册的写入操作默认可用（写前均须人工确认）；如需纯只读运行，可在 `.env` 中设置 `WOA_READ_ONLY=true`（详见[写入安全与隐私边界](docs/zh-cn/security/verified-writes.md)）。
+
+---
+
+## 快速体验与接入
+
+### 1. 运行内置示例（`examples/yudao`）
+
+示例基于开源后台系统芋道（ruoyi-vue-pro）。运行前需安装 **Python 3.13**、**Node.js (>=22)** 与 **Docker Compose 2.30+**，并按[参考应用缓存说明](examples/yudao/deploy/README.md)准备好 `.q0-cache/yudao/`。
 
 ```bash
-# 1) 初始化虚拟环境并构建前端面板与 Runtime
+# 1) 创建虚拟环境，构建助手面板和浏览器端脚本
 python3.13 -m venv .venv && . .venv/bin/activate
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 python -m pip install --editable ".[browser]"
 python -m pip install --no-deps --editable examples/yudao
 python scripts/build_panel.py --install && python scripts/build_runtime.py --skip-build
 
-# 2) 配置模型 API Key（1–3 行）与运行模式
+# 2) 复制配置文件，在 .env 中填写模型 API Key
 cp .env.example .env
-cp pagehelm.example.toml pagehelm.toml
 
-# 3) 启动本地合成环境（默认 http://localhost:40001）
+# 3) 启动本地演示环境（默认 http://localhost:40001）
 ./local --synthetic-clock
 ```
 
-日常改动检查可通过 `.venv/bin/python scripts/check.py --plan && .venv/bin/python scripts/check.py` 执行（不调用付费模型）。
+修改代码后，可运行 `.venv/bin/python scripts/check.py --plan && .venv/bin/python scripts/check.py` 做检查（不会调用付费模型）。
 
-### 2. 接入自己的 Web 应用（声明式接入原型）
+### 2. 接入自己的 Web 应用
 
-核心层 `web_operation_agent` 提供应用无关的端口契约（`ApplicationPorts`、`WritePipeline`、`CompiledWrites`）与内置 `TurnTables` SQL 引擎（`execution/turn_tables.py`）；`testapps/contacts/declarative/` 展示了面向 REST/HTML 后台的三项声明式输入装配方式（按双应用验证原则暂置于 `testapps/contacts/` 下，待第二个异构适配器验证后再上浮核心）：
+接入工作在服务端完成，核心代码与具体应用无关。`testapps/contacts/` 提供了一套声明式接入的参考实现（目前仍是原型），主要包括以下几部分：
 
-| 层次 | 宿主输入 | 解锁能力 | 仓内参考 |
+| 接入内容 | 需要提供 | 获得的能力 | 参考 |
 | --- | --- | --- | --- |
-| **服务端身份** | `IdentityResolver` / `HttpWhoamiIdentityPort` | 可信 Cookie/Token 反查 `ResolvedActor`，失效拒绝 | [`declarative.py`](testapps/contacts/declarative/declarative.py) |
-| **元数据与只读能力** | `entities_from_openapi` 或 `EntitySpec` / `PageSpec` / `FormSpec` | 同账号查询、内置 `TurnTables` 内存 SQL 与 `<DataTable>` 输出 | [应用声明式接入指南](docs/zh-cn/integration/onboarding.md) |
-| **前端 Preset 与宿主** | `assistant.js` + `FRONTEND_PRESETS` + `DeclarativeSessionHost` | Shadow DOM 面板、有界 DOM 操控与会话/预算持久化宿主 | [`testapps/contacts/adapter.py`](testapps/contacts/adapter.py) |
-| **可选核验写入** | `TypedWriteSpec`、`convention_updates`、`CompiledWrites`、`SubmitSpec` | `WritePipeline` 单次可见审批、四类编译写入与可撤销预填 | [写入安全与隐私边界](docs/zh-cn/security/verified-writes.md) |
+| **用户身份** | 在服务端根据 Cookie 或 Token 识别当前用户 | 以该用户的身份查询和操作，无法识别时拒绝 | [`declarative.py`](testapps/contacts/declarative/declarative.py) |
+| **数据与页面** | OpenAPI 文档，或实体、页面、表单的声明 | 按账号权限查询数据，在面板中以表格展示 | [应用声明式接入指南](docs/zh-cn/integration/onboarding.md) |
+| **前端** | 与业务系统同源部署，页面引入 `assistant.js`，选择组件库预设（Element Plus 或普通 HTML） | 助手面板、页面操作、会话与用量记录 | [`testapps/contacts/adapter.py`](testapps/contacts/adapter.py) |
+| **写入（可选）** | 声明允许的写操作：新建、字段更新、状态切换、列表行操作 | 用户确认后执行一次并核对，表单预填可撤销 | [写入安全与隐私边界](docs/zh-cn/security/verified-writes.md) |
 
 ---
 
@@ -109,5 +106,4 @@ cp pagehelm.example.toml pagehelm.toml
 - **架构与执行**：[架构总览](docs/zh-cn/architecture/overview.md) · [执行引擎与浏览器运行时](docs/zh-cn/architecture/execution-and-runtime.md)
 - **安全与运维**：[写入安全与隐私边界](docs/zh-cn/security/verified-writes.md) · [部署、运维与排障](docs/zh-cn/security/operations-and-observability.md)
 - **参考手册**：[配置与通信协议](docs/zh-cn/reference/protocol-and-configuration.md) · [内置工具、能力与自检](docs/zh-cn/reference/tools-and-capabilities.md)
-- **文档站（`frontend/docs/`）**：由 `docs/` 经 Astro Starlight 构建，并同步生成 `/llms.txt` 与 `/llms-full.txt`。
-- **安全与许可**：建议先在隔离、可重置的合成测试环境中验证，再按需开启写入能力。[SECURITY](SECURITY.md) · [LICENSE](LICENSE) · [THIRD_PARTY](THIRD_PARTY.md)
+- **使用须知与许可**：项目处于 Alpha 阶段，请先在隔离、可重置的测试环境中验证，再按需开启写入。[SECURITY](SECURITY.md) · [LICENSE](LICENSE) · [THIRD_PARTY](THIRD_PARTY.md)

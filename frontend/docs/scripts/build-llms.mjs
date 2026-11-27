@@ -61,7 +61,7 @@ const indexLines = [
   '',
   '## Key Invariants',
   '',
-  '- **Default read-only:** Mutations default off (`read-only`); `assisted-draft` enables undoable form prefill without dispatching writes; `verified-operate` routes writes through `WritePipeline`.',
+  '- **Explicit write boundaries:** Page form prefill and adapter-declared write tools/Skills run unless `WOA_READ_ONLY=true` is set; every write routes through `WritePipeline`.',
   '- **Single-consume approvals:** Visible approval cards enforce `event.isTrusted`, visibility ratio and dwell gates, pre-dispatch re-read, same-actor readback, and never auto-retry `INDETERMINATE` writes.',
   '- **Neutral core:** Model keys, Skill files, and policies remain on the server; the browser Runtime holds no credentials or multi-step plans.',
   '',

@@ -23,34 +23,57 @@ python scripts/build_panel.py --install
 python scripts/build_runtime.py --skip-build
 ```
 
-## 2. Configure Credentials and Mode
+## 2. Configure Model and Mode (`.env`)
 
-Secrets and non-secret runtime settings live in separate git-ignored files (`.env` and `pagehelm.toml`):
+Copy `.env.example` at the repository root (`.env` is git-ignored; never commit credentials):
 
 ```bash
 cp .env.example .env
-cp pagehelm.example.toml pagehelm.toml
 ```
 
-Add only the API key for your chosen provider in `.env`:
+Configure your model source in `.env` (see [Configuration & Protocol](../reference/protocol-and-configuration.md) for all variables and defaults):
 
 ```dotenv
-# Uncomment the key matching your provider
+# 1) Cloud provider: set one API key to derive official base_url & default model automatically
 DEEPSEEK_API_KEY=your-key-here
 # DASHSCOPE_API_KEY=your-key-here
 # OPENAI_API_KEY=your-key-here
+
+# Optional: override host (base_url) or model name explicitly:
+# AGENT_OPENAI_BASE_URL=https://api.deepseek.com
+# AGENT_OPENAI_MODEL=deepseek-chat
+
+# Optional: global read-only kill-switch (form prefill and adapter-registered writes are enabled by default):
+# WOA_READ_ONLY=true
 ```
 
-Set `provider` and `mode` in `pagehelm.toml` (secret keys are rejected in TOML; see [Configuration & Protocol](../reference/protocol-and-configuration.md) for all fields and provider defaults):
+Every hosted cloud model must have a pricing entry in `src/web_operation_agent/policies/prices.json`. (Legacy `pagehelm.toml` files remain supported if present.)
 
-```toml
-provider = "deepseek"     # "deepseek" | "qwen" | "openai"
-mode = "verified-operate" # "read-only" | "assisted-draft" | "verified-operate"
-# daily_allowance_cny = 20.0
-# turn_timeout_s = 120
+### Local / Private Models (Ollama, vLLM, LM Studio)
+
+For on-premise or offline inference without cloud API keys or `prices.json` entries, configure `.env` directly:
+
+```dotenv
+# Local Ollama (defaults to http://localhost:11434/v1 with self-hosted zero-cost pricing)
+AGENT_PROVIDER=ollama
+AGENT_OPENAI_MODEL=qwen3:14b
+# When running `./local` (Docker) against an Ollama server on the host machine, also set:
+# AGENT_OPENAI_BASE_URL=http://host.docker.internal:11434/v1
 ```
 
-When `pagehelm.toml` is absent, legacy `AGENT_OPENAI_*`, `AGENT_PROVIDER`, and `WOA_NATIVE_WRITES` environment variables remain supported. Every model used must have a pricing entry in `src/web_operation_agent/policies/prices.json`.
+Or connect a private OpenAI-compatible gateway (e.g., vLLM / LM Studio) and run the synthetic tool-calling preflight before launch:
+
+```dotenv
+AGENT_PROVIDER=openai-compatible
+AGENT_OPENAI_BASE_URL=https://vllm.internal.example/v1
+AGENT_OPENAI_MODEL=Qwen/Qwen3-32B
+AGENT_MODEL_SELF_HOSTED=true
+# AGENT_OPENAI_API_KEY=your-internal-token
+```
+
+```bash
+.venv/bin/python -m web_operation_agent.modeling.preflight --probe
+```
 
 ## 3. Start the Local Reference Environment (`./local`)
 
@@ -64,8 +87,8 @@ Two isolated Docker Compose instances are available and can run side by side:
 Common commands:
 
 ```bash
-./local check             # Read-only preflight: Docker, cache pins, pagehelm.toml, pricing, policies
-./local                   # Start or update env 1 (defaults to verified-operate locally)
+./local check             # Read-only preflight: Docker, cache pins, .env config, pricing, policies
+./local                   # Start or update env 1
 ./local --synthetic-clock # Align app and MySQL clocks to synthetic baseline (2026-10-25T09:00:00+08:00)
 ./local status            # Verify API, /readyz, and live assistant.js SHA-256
 ./local logs              # Tail assistant logs (`./local logs app` for app, MySQL, and Redis)

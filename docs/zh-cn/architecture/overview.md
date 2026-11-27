@@ -70,7 +70,7 @@ PageHelm 由三层组成：**第一方浏览器 Runtime**（`assistant.js`）、
 | 职责项 | 服务端核心 | 浏览器 Runtime | 说明 |
 | --- | --- | --- | --- |
 | 模型提示词、API Key 与工具路由 | 是 | 否 | 前端产物不含模型密钥或规划器 |
-| 会话鉴权与安全模式裁决 | 是 | 否 | 服务端锁定 `read-only` / `assisted-draft` / `verified-operate` |
+| 会话鉴权与写入策略裁决 | 是 | 否 | 服务端锁定已注册写能力与 `WOA_READ_ONLY` 只读开关 |
 | 业务实体与字段语义 | 适配器 + Skill | 否 | 通用前端不硬编码业务模型 |
 | DOM 快照与交互元素采集 | 否 | 是 | 受 `max_elements = 200` 上限约束 |
 | 面板状态、文案与进度键名 | 是（`panel_contract.json`） | 仅渲染 | 通过 v2 `/timeline` 与 `/events` 下发 |
